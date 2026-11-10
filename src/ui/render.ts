@@ -1,19 +1,21 @@
-import { GOALS, HUB_TILES, MAP_H, MAP_W, ZONES, zoneAt } from '../content/map';
+import { GOALS, HUB_TILES, MAP_H, MAP_W, ZONES, zoneAt, type Zone } from '../content/map';
 import { MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { BELT_SPEED, DX, DY, isMachine, portDir, type Ent, type World } from '../engine/world';
+import { BELT_SPEED, DX, DY, inflow, isMachine, portDir, type Dir, type Ent, type World } from '../engine/world';
 
 export interface Camera { x: number; y: number; z: number }
+export interface View { tool: string; selected: Ent | null }
 
-// 夜の臨海コンビナート。暗い地面に、装置の灯りと物質の色だけが浮かぶ
+// 夜の入り江。苔色の大地に水と霧がにじみ、装置の灯りと物質の色が浮かぶ
 const C = {
-  void: '#070a10', land: ['#161c27', '#181f2b', '#141a24'], speck: 'rgba(160,180,210,0.10)',
-  seaDeep: '#0a2536', seaShore: '#12405a', wave: '150,215,240', foam: 'rgba(190,235,250,0.30)',
-  plateau: ['#23284a', '#262b50', '#21264a'], wind: '190,200,255', zoneEdge: 'rgba(170,180,255,0.35)',
-  track: '#222b38', rail: '#3d4a5c', chevron: 'rgba(150,170,195,0.55)',
-  plate: '#10151d', ink: '#eef2f6', dim: '#8d99ab', lamp: '#ffc857', lampInk: '#2a1c05', steel: '#b9c4d2',
+  void: '#0a100d', land: '#1a2620', moss: ['#20322a', '#263223', '#1c2c25', '#2a3222'],
+  sand: '#4a4632', shallow: '#1f5b63', deep: '#0d3442', wave: '170,225,230',
+  mist: '#3d4160', mistHi: '#565b82', wind: '205,210,255',
+  ochre: '#5b5320', crust: '#c2ad3c', fume: '235,215,90',
+  bank: '#0c1310', track: '#26342d', flow: 'rgba(190,215,200,0.5)',
+  body: '#111a16', ink: '#f3efe4', dim: '#98a69c', lamp: '#f4c063', lampInk: '#2a1c05', steel: '#c3ccc5',
 };
-const FONT_UI = '"Zen Kaku Gothic New", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif';
+const FONT_UI = '"Zen Maru Gothic", "Hiragino Maru Gothic ProN", "Hiragino Sans", system-ui, sans-serif';
 const FONT_MONO = '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace';
 
 const hash = (x: number, y: number) => {
@@ -21,8 +23,64 @@ const hash = (x: number, y: number) => {
   return n - Math.floor(n);
 };
 
+// ---- 地形は一度だけ描いて使い回す。マス目ではなく、にじんだ塊を重ねて形を作る ----
+const TS = 28;
+let terrain: HTMLCanvasElement | null = null;
+function buildTerrain(): HTMLCanvasElement {
+  const pad = 3;
+  const cv = document.createElement('canvas');
+  cv.width = (MAP_W + pad * 2) * TS;
+  cv.height = (MAP_H + pad * 2) * TS;
+  const g = cv.getContext('2d')!;
+  g.fillStyle = C.void;
+  g.fillRect(0, 0, cv.width, cv.height);
+  const soft = (tx: number, ty: number, r: number, color: string, a = 1) => {
+    const x = (tx + pad) * TS, y = (ty + pad) * TS, rad = g.createRadialGradient(x, y, 0, x, y, r * TS);
+    g.globalAlpha = a;
+    rad.addColorStop(0, color);
+    rad.addColorStop(0.3, color);
+    rad.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = rad;
+    g.fillRect(x - r * TS, y - r * TS, 2 * r * TS, 2 * r * TS);
+    g.globalAlpha = 1;
+  };
+  // 陸
+  for (let y = -1; y <= MAP_H; y++) for (let x = -1; x <= MAP_W; x++) soft(x + 0.5, y + 0.5, 2.2, C.land, 0.7);
+  for (let i = 0; i < 160; i++) soft(hash(i, 1) * MAP_W, hash(i, 2) * MAP_H, 2 + hash(i, 3) * 3, C.moss[i % 4], 0.35);
+  // 資源地：外側の帯から順に重ねる
+  const bands: Record<Zone, [string, number, number][]> = {
+    sea: [[C.sand, 2.1, 0.8], [C.shallow, 1.8, 0.8], [C.deep, 2.0, 0.8]],
+    air: [[C.mist, 2.0, 0.7], [C.mistHi, 1.7, 0.35]],
+    sulfur: [[C.ochre, 2.0, 0.75], [C.crust, 1.5, 0.4]],
+  };
+  for (let b = 0; b < 3; b++) {
+    // 海は地図の左端の外まで続いている
+    const zoneOf = (x: number, y: number) => (x < 0 ? 'sea' as Zone : zoneAt(x, Math.min(MAP_H - 1, Math.max(0, y))));
+    for (let y = -2; y < MAP_H + 2; y++) for (let x = -3; x < MAP_W; x++) {
+      const zn = zoneOf(x, y);
+      if (!zn || !bands[zn][b]) continue;
+      const inner = zoneOf(x - 1, y) === zn && zoneOf(x + 1, y) === zn && zoneOf(x, y - 1) === zn && zoneOf(x, y + 1) === zn;
+      if (b === bands[zn].length - 1 && !inner) continue;
+      const [color, r, a] = bands[zn][b];
+      soft(x + 0.5 + (hash(x, y) - 0.5) * 0.4, y + 0.5 + (hash(y, x) - 0.5) * 0.4, r, color, a);
+    }
+  }
+  // 草と小石
+  for (let i = 0; i < 900; i++) {
+    const x = hash(i, 7) * MAP_W, y = hash(i, 8) * MAP_H;
+    if (zoneAt(Math.floor(x), Math.floor(y))) continue;
+    g.fillStyle = i % 3 ? 'rgba(120,160,120,0.16)' : 'rgba(200,200,170,0.10)';
+    g.beginPath();
+    g.ellipse((x + pad) * TS, (y + pad) * TS, 1 + hash(i, 9) * 1.6, 0.8 + hash(i, 10), hash(i, 11) * 3, 0, Math.PI * 2);
+    g.fill();
+  }
+  (cv as unknown as { pad: number }).pad = pad;
+  return cv;
+}
+
 interface Particle { x: number; y: number; vx: number; vy: number; age: number; life: number; color: string; text?: string; r: number }
 const particles: Particle[] = [];
+const born = new WeakMap<Ent, number>();
 
 function spawn(w: World) {
   for (const f of w.fx.splice(0)) {
@@ -39,62 +97,75 @@ function spawn(w: World) {
   if (particles.length > 400) particles.splice(0, particles.length - 400);
 }
 
-export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: World, cam: Camera, t: number, dt: number) {
+/** ベルト1マスぶんの道筋。横から入るときは弧になる */
+function beltCurve(e: Ent, inDir: Dir) {
+  return { ax: -DX[inDir] * 0.5, ay: -DY[inDir] * 0.5, bx: DX[e.dir] * 0.5, by: DY[e.dir] * 0.5 };
+}
+function onCurve(c: ReturnType<typeof beltCurve>, p: number): [number, number] {
+  const q = 1 - p; // 制御点はマスの中心
+  return [q * q * c.ax + p * p * c.bx, q * q * c.ay + p * p * c.by];
+}
+
+export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: World, cam: Camera, t: number, dt: number, view: View) {
   const z = cam.z;
   const sx = (x: number) => (x - cam.x) * z + cw / 2;
   const sy = (y: number) => (y - cam.y) * z + ch / 2;
   spawn(w);
+  terrain ??= buildTerrain();
+  const pad = (terrain as unknown as { pad: number }).pad;
 
   ctx.fillStyle = C.void;
   ctx.fillRect(0, 0, cw, ch);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(terrain, sx(-pad), sy(-pad), (MAP_W + pad * 2) * z, (MAP_H + pad * 2) * z);
 
   const x0 = Math.max(0, Math.floor(cam.x - cw / 2 / z)), x1 = Math.min(MAP_W - 1, Math.ceil(cam.x + cw / 2 / z));
   const y0 = Math.max(0, Math.floor(cam.y - ch / 2 / z)), y1 = Math.min(MAP_H - 1, Math.ceil(cam.y + ch / 2 / z));
   const inView = (e: Ent) => e.x >= x0 - 2 && e.x <= x1 + 2 && e.y >= y0 - 2 && e.y <= y1 + 2;
-  const detail = z >= 30;
 
-  // ---- 地面 ----
-  for (let y = y0; y <= y1; y++) {
-    for (let x = x0; x <= x1; x++) {
-      const zone = zoneAt(x, y), hsh = hash(x, y);
-      const px = Math.floor(sx(x)), py = Math.floor(sy(y)), s = Math.ceil(z) + 1;
-      if (zone === 'sea') {
-        ctx.fillStyle = zoneAt(x + 2, y) === 'sea' ? C.seaDeep : C.seaShore;
-        ctx.fillRect(px, py, s, s);
-        const a = 0.1 + 0.16 * (0.5 + 0.5 * Math.sin(t * 1.1 + hsh * 6.28 + x * 0.6));
-        ctx.strokeStyle = `rgba(${C.wave},${a})`;
-        ctx.lineWidth = Math.max(1, z * 0.04);
-        ctx.beginPath();
-        const wy = py + z * (0.3 + 0.4 * hsh), wx = px + z * (0.15 + 0.1 * Math.sin(t * 0.7 + hsh * 9));
-        ctx.moveTo(wx, wy);
-        ctx.quadraticCurveTo(wx + z * 0.2, wy - z * 0.1, wx + z * 0.4, wy);
-        ctx.stroke();
-        if (zoneAt(x + 1, y) !== 'sea') { ctx.fillStyle = C.foam; ctx.fillRect(px + s - Math.max(2, z * 0.07), py, Math.max(2, z * 0.07), s); }
-      } else if (zone === 'air') {
-        ctx.fillStyle = C.plateau[Math.floor(hsh * 3)];
-        ctx.fillRect(px, py, s, s);
-        const ph = (t * 0.35 + hsh * 3) % 1;
-        ctx.strokeStyle = `rgba(${C.wind},${0.22 * Math.sin(ph * Math.PI)})`;
-        ctx.lineWidth = Math.max(1, z * 0.03);
-        ctx.beginPath();
-        const wy = py + z * (0.2 + 0.6 * hsh);
-        ctx.moveTo(px + z * ph, wy);
-        ctx.lineTo(px + z * (ph + 0.45), wy);
-        ctx.stroke();
-        ctx.fillStyle = C.zoneEdge;
-        const b = Math.max(1.5, z * 0.04);
-        if (zoneAt(x - 1, y) !== 'air') ctx.fillRect(px, py, b, s);
-        if (zoneAt(x + 1, y) !== 'air') ctx.fillRect(px + s - b, py, b, s);
-        if (zoneAt(x, y - 1) !== 'air') ctx.fillRect(px, py, s, b);
-        if (zoneAt(x, y + 1) !== 'air') ctx.fillRect(px, py + s - b, s, b);
-      } else {
-        ctx.fillStyle = C.land[Math.floor(hsh * 3)];
-        ctx.fillRect(px, py, s, s);
-        if (detail && hsh > 0.72) {
-          ctx.fillStyle = C.speck;
-          ctx.fillRect(px + z * hash(y, x) * 0.8, py + z * hash(x + 7, y) * 0.8, Math.max(1.5, z * 0.05), Math.max(1.5, z * 0.05));
-        }
-      }
+  // ---- 水・風・噴気の動き ----
+  ctx.lineCap = 'round';
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const zn = zoneAt(x, y);
+    if (!zn) continue;
+    const h = hash(x, y), px = sx(x), py = sy(y);
+    if (zn === 'sea') {
+      ctx.strokeStyle = `rgba(${C.wave},${0.06 + 0.16 * (0.5 + 0.5 * Math.sin(t * 1.1 + h * 6.28 + x * 0.6))})`;
+      ctx.lineWidth = Math.max(1, z * 0.04);
+      const wy = py + z * (0.25 + 0.5 * h), wx = px + z * (0.15 + 0.12 * Math.sin(t * 0.7 + h * 9));
+      ctx.beginPath();
+      ctx.moveTo(wx, wy);
+      ctx.quadraticCurveTo(wx + z * 0.22, wy - z * 0.12, wx + z * 0.45, wy);
+      ctx.stroke();
+    } else if (zn === 'air') {
+      const ph = (t * 0.3 + h * 3) % 1;
+      ctx.strokeStyle = `rgba(${C.wind},${0.2 * Math.sin(ph * Math.PI)})`;
+      ctx.lineWidth = Math.max(1, z * 0.035);
+      const wy = py + z * (0.2 + 0.6 * h), wx = px + z * ph;
+      ctx.beginPath();
+      ctx.moveTo(wx, wy);
+      ctx.quadraticCurveTo(wx + z * 0.3, wy - z * 0.12, wx + z * 0.6, wy + z * 0.04);
+      ctx.stroke();
+    } else {
+      const ph = (t * 0.25 + h * 5) % 1;
+      ctx.fillStyle = `rgba(${C.fume},${0.2 * Math.sin(ph * Math.PI)})`;
+      ctx.beginPath();
+      ctx.arc(px + z * (0.2 + 0.6 * h), py + z * (0.8 - ph * 0.7), z * (0.05 + ph * 0.09), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // ---- 置ける場所の手がかり（道具を持っているときだけ） ----
+  const building = view.tool !== 'pan';
+  if (building && z >= 26) {
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const zn = zoneAt(x, y);
+      if (view.tool === 'extractor' ? !zn : false) continue;
+      const strong = view.tool === 'extractor';
+      ctx.fillStyle = strong ? `rgba(244,192,99,${0.5 + 0.25 * Math.sin(t * 3 + x + y)})` : 'rgba(230,240,230,0.10)';
+      ctx.beginPath();
+      ctx.arc(sx(x + 0.5), sy(y + 0.5), strong ? z * 0.09 : Math.max(1, z * 0.03), 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 
@@ -108,10 +179,10 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.fillRect(sx(gx) - r * z, sy(gy) - r * z, 2 * r * z, 2 * r * z);
   };
   const [hx, hy] = HUB_TILES[0];
-  glow(hx + 1, hy + 1, 4.2, '255,190,90', 0.16 + 0.03 * Math.sin(t * 2));
+  glow(hx + 1, hy + 1, 4.4, '255,196,110', 0.17 + 0.03 * Math.sin(t * 2));
   for (const e of w.ents.values()) {
     if (!inView(e) || e.kind === 'belt' || e.kind === 'hub') continue;
-    if (e.busy) glow(e.x + 0.5, e.y + 0.5, 1.5, '255,210,150', 0.14);
+    if (e.busy) glow(e.x + 0.5, e.y + 0.5, 1.6, '255,214,160', 0.15);
     else if (e.kind === 'vent') glow(e.x + 0.5, e.y + 0.5, 1.1, '255,140,70', 0.1 + 0.04 * Math.sin(t * 9 + e.x));
   }
   ctx.globalCompositeOperation = 'source-over';
@@ -119,59 +190,92 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   // ---- 資源地の名札 ----
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
+  ctx.shadowColor = 'rgba(0,0,0,0.7)';
+  ctx.shadowBlur = 6;
   for (const zn of Object.values(ZONES)) {
     const [lx, ly] = zn.labelAt;
-    ctx.font = `700 ${Math.max(11, z * 0.34)}px ${FONT_UI}`;
-    ctx.fillStyle = 'rgba(225,232,245,0.8)';
+    ctx.font = `700 ${Math.max(12, z * 0.36)}px ${FONT_UI}`;
+    ctx.fillStyle = 'rgba(243,239,228,0.88)';
     ctx.fillText(zn.name, sx(lx), sy(ly));
     ctx.font = `400 ${Math.max(10, z * 0.24)}px ${FONT_UI}`;
-    ctx.fillStyle = C.dim;
-    ctx.fillText(`${sub(zn.resource).name}（${zn.form}）`, sx(lx), sy(ly) + Math.max(13, z * 0.32));
+    ctx.fillStyle = 'rgba(243,239,228,0.6)';
+    ctx.fillText(`${sub(zn.resource).name}・${zn.form}`, sx(lx), sy(ly) + Math.max(13, z * 0.32));
   }
+  ctx.shadowBlur = 0;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // ---- ベルト ----
-  for (const e of w.ents.values()) {
-    if (e.kind !== 'belt' || !inView(e)) continue;
+  // ---- 画面の外にある資源地への道しるべ ----
+  for (const zn of Object.values(ZONES)) {
+    const tx = sx(zn.labelAt[0] + 1.5), ty = sy(zn.labelAt[1]);
+    const mx = 70, top = 150, bottom = ch - 170;
+    if (tx >= 0 && tx <= cw && ty >= 0 && ty <= ch) continue;
+    const px = Math.min(cw - mx, Math.max(mx, tx)), py = Math.min(bottom, Math.max(top, ty));
+    const ang = Math.atan2(ty - py, tx - px);
+    ctx.font = `700 13px ${FONT_UI}`;
+    const wd = ctx.measureText(zn.name).width + 26;
+    ctx.fillStyle = 'rgba(20,29,24,0.88)';
+    rr(ctx, px - wd / 2, py - 15, wd, 30, 15);
+    ctx.fill();
+    ctx.fillStyle = C.ink;
+    ctx.fillText(zn.name, px, py + 1);
+    ctx.fillStyle = C.lamp;
     ctx.save();
-    ctx.translate(sx(e.x + 0.5), sy(e.y + 0.5));
-    ctx.rotate((e.dir * Math.PI) / 2);
-    ctx.fillStyle = C.track;
-    ctx.fillRect(-z / 2, -z * 0.36, z, z * 0.72);
-    ctx.fillStyle = C.rail;
-    ctx.fillRect(-z / 2, -z * 0.4, z, z * 0.05);
-    ctx.fillRect(-z / 2, z * 0.35, z, z * 0.05);
-    ctx.beginPath();
-    ctx.rect(-z / 2, -z * 0.35, z, z * 0.7);
-    ctx.clip();
-    ctx.strokeStyle = C.chevron;
-    ctx.lineWidth = Math.max(1.5, z * 0.05);
-    for (let k = 0; k < 2; k++) {
-      const o = (((t * BELT_SPEED * 0.5 + k / 2) % 1) - 0.5) * z;
-      ctx.beginPath();
-      ctx.moveTo(o - z * 0.1, -z * 0.16);
-      ctx.lineTo(o + z * 0.06, 0);
-      ctx.lineTo(o - z * 0.1, z * 0.16);
-      ctx.stroke();
-    }
+    ctx.translate(px + Math.cos(ang) * (wd / 2 + 10), py + Math.sin(ang) * 26);
+    ctx.rotate(ang);
+    ctx.beginPath(); ctx.moveTo(7, 0); ctx.lineTo(-5, -6); ctx.lineTo(-5, 6); ctx.closePath(); ctx.fill();
     ctx.restore();
   }
 
-  // ---- ベルト上の物質 ----
+  // ---- ベルト：ひと続きの管として描く ----
+  const belts: { e: Ent; c: ReturnType<typeof beltCurve> }[] = [];
   for (const e of w.ents.values()) {
-    if (e.kind !== 'belt' || !e.item || !inView(e)) continue;
-    const p = e.item.p - 0.5;
-    token(ctx, sx(e.x + 0.5 + DX[e.dir] * p), sy(e.y + 0.5 + DY[e.dir] * p), z, e.item.s);
+    if (e.kind !== 'belt' || !inView(e)) continue;
+    belts.push({ e, c: beltCurve(e, inflow(w, e.x, e.y, e.dir) ?? e.dir) });
+  }
+  const trace = (b: (typeof belts)[number]) => {
+    const cx = sx(b.e.x + 0.5), cy = sy(b.e.y + 0.5);
+    ctx.beginPath();
+    ctx.moveTo(cx + b.c.ax * z, cy + b.c.ay * z);
+    ctx.quadraticCurveTo(cx, cy, cx + b.c.bx * z, cy + b.c.by * z);
+  };
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = C.bank; ctx.lineWidth = z * 0.74;
+  for (const b of belts) { trace(b); ctx.stroke(); }
+  ctx.strokeStyle = C.track; ctx.lineWidth = z * 0.6;
+  for (const b of belts) { trace(b); ctx.stroke(); }
+  ctx.lineCap = 'butt';
+  ctx.strokeStyle = C.flow; ctx.lineWidth = Math.max(1.5, z * 0.07);
+  ctx.setLineDash([z * 0.1, z * 0.4]);
+  ctx.lineDashOffset = -t * BELT_SPEED * z * 0.5;
+  for (const b of belts) { trace(b); ctx.stroke(); }
+  ctx.setLineDash([]);
+  for (const b of belts) {
+    if (!b.e.item) continue;
+    const [ox, oy] = onCurve(b.c, b.e.item.p);
+    token(ctx, sx(b.e.x + 0.5 + ox), sy(b.e.y + 0.5 + oy), z, b.e.item.s);
   }
 
   // ---- 装置 ----
   for (const e of w.ents.values()) {
     if (e.kind === 'belt' || e.kind === 'hub' || !inView(e)) continue;
-    machine(ctx, sx(e.x + 0.5), sy(e.y + 0.5), z, e, t);
+    if (!born.has(e)) born.set(e, t);
+    const age = t - born.get(e)!;
+    const pop = age < 0.28 ? 0.6 + 0.4 * (1 - Math.pow(1 - age / 0.28, 3)) + 0.12 * Math.sin((age / 0.28) * Math.PI) : 1;
+    machine(ctx, sx(e.x + 0.5), sy(e.y + 0.5), z * pop, z, e, t);
   }
 
   hub(ctx, sx(hx), sy(hy), z, w, t);
+
+  // ---- 選択の輪 ----
+  if (view.selected && view.selected.kind !== 'hub') {
+    const e = view.selected;
+    ctx.strokeStyle = `rgba(244,192,99,${0.7 + 0.3 * Math.sin(t * 5)})`;
+    ctx.lineWidth = Math.max(2, z * 0.06);
+    ctx.beginPath();
+    ctx.arc(sx(e.x + 0.5), sy(e.y + 0.5), z * (0.6 + 0.02 * Math.sin(t * 5)), 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
   // ---- 粒子 ----
   for (let i = particles.length - 1; i >= 0; i--) {
@@ -196,14 +300,14 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
 
   // ---- 周辺減光 ----
   const v = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.35, cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
-  v.addColorStop(0, 'rgba(4,6,10,0)');
-  v.addColorStop(1, 'rgba(4,6,10,0.55)');
+  v.addColorStop(0, 'rgba(6,10,8,0)');
+  v.addColorStop(1, 'rgba(6,10,8,0.5)');
   ctx.fillStyle = v;
   ctx.fillRect(0, 0, cw, ch);
 }
 
 function token(ctx: CanvasRenderingContext2D, x: number, y: number, z: number, s: string) {
-  const su = sub(s), r = z * 0.26;
+  const su = sub(s), r = z * 0.25;
   ctx.fillStyle = su.color;
   ctx.beginPath();
   if (su.state === 'solid') {
@@ -226,34 +330,32 @@ function token(ctx: CanvasRenderingContext2D, x: number, y: number, z: number, s
   ctx.fill();
   if (z >= 34) {
     const tx = label(s);
-    ctx.fillStyle = '#0c1118';
-    ctx.font = `600 ${z * (tx.length > 3 ? 0.15 : 0.2)}px ${tx === su.name ? FONT_UI : FONT_MONO}`;
+    ctx.fillStyle = '#0c1410';
+    ctx.font = `600 ${z * (tx.length > 4 ? 0.12 : tx.length > 3 ? 0.15 : 0.19)}px ${tx === su.name ? FONT_UI : FONT_MONO}`;
     ctx.fillText(tx, x, y + z * 0.03);
   }
 }
 
-function machine(ctx: CanvasRenderingContext2D, cx: number, cy: number, z: number, e: Ent, t: number) {
+function machine(ctx: CanvasRenderingContext2D, cx: number, cy: number, u: number, z: number, e: Ent, t: number) {
   const info = MACHINES[e.kind as keyof typeof MACHINES];
-  const u = z; // 1マス
   const unset = isMachine(e.kind) && !e.recipe;
-  // 台座
-  ctx.fillStyle = 'rgba(0,0,0,0.35)';
-  rr(ctx, cx - u * 0.44, cy - u * 0.4, u * 0.9, u * 0.9, u * 0.14);
-  ctx.fill();
-  ctx.fillStyle = C.plate;
-  rr(ctx, cx - u * 0.46, cy - u * 0.46, u * 0.92, u * 0.92, u * 0.14);
-  ctx.fill();
+  const disc = (x: number, y: number, r: number) => { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); };
+  // 土台は角のない円盤
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath(); ctx.ellipse(cx, cy + u * 0.08, u * 0.46, u * 0.42, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = C.body;
+  disc(cx, cy, u * 0.45); ctx.fill();
   ctx.strokeStyle = info.color;
-  ctx.lineWidth = Math.max(1.5, u * 0.045);
+  ctx.lineWidth = Math.max(1.5, u * 0.05);
   ctx.stroke();
 
   const busy = !!e.busy;
   switch (e.kind) {
     case 'extractor': {
       ctx.fillStyle = info.color;
-      ctx.beginPath(); ctx.arc(cx, cy, u * 0.3, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = C.plate;
-      ctx.beginPath(); ctx.arc(cx, cy, u * 0.23, 0, Math.PI * 2); ctx.fill();
+      disc(cx, cy, u * 0.3); ctx.fill();
+      ctx.fillStyle = C.body;
+      disc(cx, cy, u * 0.23); ctx.fill();
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(t * 3 + e.x);
@@ -266,68 +368,59 @@ function machine(ctx: CanvasRenderingContext2D, cx: number, cy: number, z: numbe
       break;
     }
     case 'separator': {
-      // 棚段のある塔
       ctx.fillStyle = info.color;
-      rr(ctx, cx - u * 0.15, cy - u * 0.36, u * 0.3, u * 0.72, u * 0.12);
+      rr(ctx, cx - u * 0.14, cy - u * 0.34, u * 0.28, u * 0.68, u * 0.14);
       ctx.fill();
       for (let i = 0; i < 4; i++) {
-        const ty = cy + u * (0.2 - i * 0.14);
         const lit = busy && Math.floor(((e.prog || 0) * 8) % 4) === i;
-        ctx.fillStyle = lit ? C.lamp : 'rgba(10,14,22,0.55)';
-        ctx.fillRect(cx - u * 0.11, ty, u * 0.22, u * 0.035);
+        ctx.fillStyle = lit ? C.lamp : 'rgba(10,16,12,0.55)';
+        rr(ctx, cx - u * 0.1, cy + u * (0.19 - i * 0.13), u * 0.2, u * 0.04, u * 0.02);
+        ctx.fill();
       }
-      ctx.fillStyle = C.steel;
-      ctx.fillRect(cx + u * 0.15, cy - u * 0.24, u * 0.14, u * 0.04);
-      ctx.fillRect(cx + u * 0.15, cy + u * 0.16, u * 0.14, u * 0.04);
       break;
     }
     case 'electrolyzer': {
-      ctx.fillStyle = 'rgba(70,200,190,0.25)';
-      rr(ctx, cx - u * 0.33, cy - u * 0.12, u * 0.66, u * 0.44, u * 0.06);
+      ctx.fillStyle = 'rgba(80,205,190,0.28)';
+      rr(ctx, cx - u * 0.29, cy - u * 0.08, u * 0.58, u * 0.36, u * 0.14);
       ctx.fill();
-      ctx.strokeStyle = info.color;
-      ctx.lineWidth = Math.max(1.5, u * 0.04);
-      ctx.stroke();
-      ctx.fillStyle = C.steel;
-      ctx.fillRect(cx - u * 0.19, cy - u * 0.3, u * 0.07, u * 0.52);
-      ctx.fillStyle = '#56606e';
-      ctx.fillRect(cx + u * 0.12, cy - u * 0.3, u * 0.07, u * 0.52);
+      ctx.lineCap = 'round';
+      ctx.lineWidth = u * 0.07;
+      ctx.strokeStyle = C.steel;
+      ctx.beginPath(); ctx.moveTo(cx - u * 0.14, cy - u * 0.24); ctx.lineTo(cx - u * 0.14, cy + u * 0.18); ctx.stroke();
+      ctx.strokeStyle = '#6a766f';
+      ctx.beginPath(); ctx.moveTo(cx + u * 0.14, cy - u * 0.24); ctx.lineTo(cx + u * 0.14, cy + u * 0.18); ctx.stroke();
       ctx.fillStyle = C.ink;
-      ctx.font = `700 ${u * 0.16}px ${FONT_MONO}`;
-      ctx.fillText('−', cx - u * 0.155, cy - u * 0.36);
-      ctx.fillText('+', cx + u * 0.155, cy - u * 0.36);
+      ctx.font = `700 ${u * 0.15}px ${FONT_MONO}`;
+      ctx.fillText('−', cx - u * 0.14, cy - u * 0.33);
+      ctx.fillText('+', cx + u * 0.14, cy - u * 0.33);
       if (busy) {
-        ctx.fillStyle = 'rgba(230,250,255,0.8)';
+        ctx.fillStyle = 'rgba(235,252,250,0.85)';
         for (let i = 0; i < 6; i++) {
           const ph = (t * 1.4 + i * 0.37) % 1;
-          const bx = cx + (i % 2 ? 0.2 : -0.11) * u + Math.sin(i * 9 + t * 4) * u * 0.02;
-          ctx.beginPath(); ctx.arc(bx, cy + u * (0.26 - ph * 0.34), u * 0.022, 0, Math.PI * 2); ctx.fill();
+          disc(cx + (i % 2 ? 0.2 : -0.08) * u + Math.sin(i * 9 + t * 4) * u * 0.02, cy + u * (0.22 - ph * 0.28), u * 0.022);
+          ctx.fill();
         }
       }
       break;
     }
     case 'reactor': {
       ctx.fillStyle = info.color;
-      ctx.beginPath(); ctx.arc(cx, cy, u * 0.33, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = 'rgba(0,0,0,0.3)';
-      for (let i = 0; i < 8; i++) {
-        ctx.beginPath(); ctx.arc(cx + Math.cos((i * Math.PI) / 4) * u * 0.27, cy + Math.sin((i * Math.PI) / 4) * u * 0.27, u * 0.022, 0, Math.PI * 2); ctx.fill();
-      }
+      disc(cx, cy, u * 0.33); ctx.fill();
       const k = busy ? 0.75 + 0.25 * Math.sin(t * 8) : 0.18;
-      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, u * 0.2);
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, u * 0.21);
       g.addColorStop(0, `rgba(255,236,170,${k})`);
       g.addColorStop(1, `rgba(255,150,60,${k * 0.35})`);
-      ctx.fillStyle = C.plate;
-      ctx.beginPath(); ctx.arc(cx, cy, u * 0.19, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = C.body;
+      disc(cx, cy, u * 0.21); ctx.fill();
       ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(cx, cy, u * 0.19, 0, Math.PI * 2); ctx.fill();
+      disc(cx, cy, u * 0.21); ctx.fill();
       break;
     }
     case 'vent': {
       ctx.fillStyle = info.color;
-      ctx.beginPath(); ctx.arc(cx, cy + u * 0.06, u * 0.22, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = C.plate;
-      ctx.beginPath(); ctx.arc(cx, cy + u * 0.06, u * 0.13, 0, Math.PI * 2); ctx.fill();
+      disc(cx, cy + u * 0.06, u * 0.22); ctx.fill();
+      ctx.fillStyle = C.body;
+      disc(cx, cy + u * 0.06, u * 0.13); ctx.fill();
       const f = 0.2 + 0.06 * Math.sin(t * 11 + e.x * 3) + 0.03 * Math.sin(t * 23);
       ctx.fillStyle = '#ff8a3c';
       ctx.beginPath();
@@ -343,95 +436,88 @@ function machine(ctx: CanvasRenderingContext2D, cx: number, cy: number, z: numbe
     }
   }
 
-  // 名前の札
-  if (z >= 34) {
+  if (z >= 34 && !unset) {
     ctx.fillStyle = info.color;
-    rr(ctx, cx - u * 0.46, cy - u * 0.46, u * 0.26, u * 0.26, u * 0.07);
-    ctx.fill();
+    disc(cx - u * 0.31, cy - u * 0.31, u * 0.13); ctx.fill();
     ctx.fillStyle = C.ink;
-    ctx.font = `700 ${u * 0.17}px ${FONT_UI}`;
-    ctx.fillText(info.glyph, cx - u * 0.33, cy - u * 0.32);
+    ctx.font = `700 ${u * 0.16}px ${FONT_UI}`;
+    ctx.fillText(info.glyph, cx - u * 0.31, cy - u * 0.3);
   }
 
-  // 出口
+  // 出口は外へ向く小さな芽
   const port = (d: number, color: string, text?: string) => {
-    const px = cx + DX[d] * u * 0.46, py = cy + DY[d] * u * 0.46;
     ctx.save();
-    ctx.translate(px, py);
+    ctx.translate(cx + DX[d] * u * 0.45, cy + DY[d] * u * 0.45);
     ctx.rotate((d * Math.PI) / 2);
     ctx.fillStyle = color;
-    ctx.strokeStyle = C.plate;
+    ctx.strokeStyle = C.body;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(u * 0.1, 0);
-    ctx.lineTo(-u * 0.07, -u * 0.13);
-    ctx.lineTo(-u * 0.07, u * 0.13);
-    ctx.closePath();
+    ctx.moveTo(u * 0.13, 0);
+    ctx.quadraticCurveTo(0, -u * 0.16, -u * 0.07, -u * 0.1);
+    ctx.quadraticCurveTo(-u * 0.02, 0, -u * 0.07, u * 0.1);
+    ctx.quadraticCurveTo(0, u * 0.16, u * 0.13, 0);
     ctx.fill();
     ctx.stroke();
     ctx.restore();
-    if (text && z >= 46) {
-      ctx.font = `600 ${u * 0.15}px ${FONT_MONO}`;
+    if (text && z >= 48) {
+      ctx.font = `600 ${u * 0.14}px ${FONT_MONO}`;
       ctx.fillStyle = C.ink;
-      ctx.fillText(text, cx + DX[d] * u * 0.25 + (DY[d] ? u * 0.24 : 0), cy + DY[d] * u * 0.3 + (DX[d] ? u * 0.24 : 0));
+      ctx.fillText(text, cx + DX[d] * u * 0.2 + (DY[d] ? u * 0.25 : 0), cy + DY[d] * u * 0.27 + (DX[d] ? u * 0.27 : 0));
     }
   };
   if (e.kind === 'extractor') port(e.dir, C.ink);
   else if (e.outOrder) e.outOrder.forEach((s, i) => port(portDir(e.dir, i), sub(s).color, label(s)));
+  else if (unset) port(e.dir, C.dim);
 
   if (unset) {
-    const a = 0.55 + 0.45 * Math.sin(t * 5);
-    ctx.strokeStyle = `rgba(255,200,87,${a})`;
+    ctx.strokeStyle = `rgba(244,192,99,${0.55 + 0.45 * Math.sin(t * 5)})`;
     ctx.lineWidth = Math.max(2, u * 0.06);
     ctx.setLineDash([u * 0.14, u * 0.1]);
-    rr(ctx, cx - u * 0.46, cy - u * 0.46, u * 0.92, u * 0.92, u * 0.14);
-    ctx.stroke();
+    disc(cx, cy, u * 0.45); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = C.lamp;
-    ctx.beginPath(); ctx.arc(cx + u * 0.3, cy - u * 0.3, u * 0.15, 0, Math.PI * 2); ctx.fill();
+    disc(cx + u * 0.3, cy - u * 0.3, u * 0.15); ctx.fill();
     ctx.fillStyle = C.lampInk;
     ctx.font = `700 ${u * 0.2}px ${FONT_UI}`;
     ctx.fillText('?', cx + u * 0.3, cy - u * 0.29);
   }
   if (busy) {
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(cx - u * 0.34, cy + u * 0.37, u * 0.68, u * 0.05);
-    ctx.fillStyle = C.lamp;
-    ctx.fillRect(cx - u * 0.34, cy + u * 0.37, u * 0.68 * (e.prog || 0), u * 0.05);
+    ctx.strokeStyle = C.lamp;
+    ctx.lineWidth = Math.max(2, u * 0.05);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(cx, cy, u * 0.39, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (e.prog || 0));
+    ctx.stroke();
   }
 }
 
 function hub(ctx: CanvasRenderingContext2D, px: number, py: number, z: number, w: World, t: number) {
   const s = z * 2, m = z * 0.06;
   ctx.fillStyle = 'rgba(0,0,0,0.4)';
-  rr(ctx, px + m, py + m * 2, s - 2 * m, s - 2 * m, z * 0.2);
+  rr(ctx, px + m, py + m * 2.5, s - 2 * m, s - 2 * m, z * 0.6);
   ctx.fill();
   const g = ctx.createLinearGradient(px, py, px, py + s);
-  g.addColorStop(0, '#f0b54a');
-  g.addColorStop(1, '#b8791f');
+  g.addColorStop(0, '#f2bd62');
+  g.addColorStop(1, '#b97f2a');
   ctx.fillStyle = g;
-  rr(ctx, px + m, py + m, s - 2 * m, s - 2 * m, z * 0.2);
+  rr(ctx, px + m, py + m, s - 2 * m, s - 2 * m, z * 0.6);
   ctx.fill();
-  // 表示盤
-  ctx.fillStyle = '#17120a';
-  rr(ctx, px + z * 0.2, py + z * 0.36, s - z * 0.4, s - z * 0.62, z * 0.1);
+  ctx.fillStyle = '#1a140a';
+  rr(ctx, px + z * 0.24, py + z * 0.42, s - z * 0.48, s - z * 0.74, z * 0.34);
   ctx.fill();
   ctx.fillStyle = C.lampInk;
   ctx.font = `700 ${z * 0.2}px ${FONT_UI}`;
-  ctx.fillText('納 品 所', px + s / 2, py + z * 0.23);
+  ctx.fillText('納品所', px + s / 2, py + z * 0.27);
   const goal = GOALS[w.goal];
-  ctx.fillStyle = `rgba(255,208,110,${0.85 + 0.15 * Math.sin(t * 3)})`;
-  ctx.font = `600 ${z * 0.5}px ${FONT_MONO}`;
-  ctx.fillText(goal ? label(goal.s) : '完了', px + s / 2, py + z * 0.86);
+  const tx = goal ? label(goal.s) : '完了';
+  ctx.fillStyle = `rgba(255,214,130,${0.85 + 0.15 * Math.sin(t * 3)})`;
+  ctx.font = `600 ${z * (tx.length > 4 ? 0.34 : 0.46)}px ${FONT_MONO}`;
+  ctx.fillText(tx, px + s / 2, py + z * 0.9);
   if (goal) {
-    ctx.font = `500 ${z * 0.24}px ${FONT_MONO}`;
+    ctx.font = `500 ${z * 0.22}px ${FONT_MONO}`;
     ctx.fillStyle = '#c99a45';
-    ctx.fillText(`${w.count} / ${goal.n}`, px + s / 2, py + z * 1.38);
-  }
-  // 四隅の警告灯
-  for (const [ox, oy] of [[0.16, 0.16], [1.84, 0.16], [0.16, 1.84], [1.84, 1.84]]) {
-    ctx.fillStyle = `rgba(255,245,210,${0.5 + 0.5 * Math.sin(t * 4 + ox * 3 + oy)})`;
-    ctx.beginPath(); ctx.arc(px + ox * z, py + oy * z, z * 0.045, 0, Math.PI * 2); ctx.fill();
+    ctx.fillText(`${w.count} / ${goal.n}`, px + s / 2, py + z * 1.36);
   }
 }
 

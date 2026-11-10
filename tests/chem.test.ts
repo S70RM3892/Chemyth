@@ -3,7 +3,8 @@ import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula'
 import { CONDITIONS, RECIPES } from '../src/content/recipes';
 import { sub, SUBSTANCES } from '../src/content/substances';
 import { GOALS, HUB_TILES } from '../src/content/map';
-import { at, configure, judge, newWorld, place, step } from '../src/engine/world';
+import { at, autoDir, configure, judge, newWorld, place, step } from '../src/engine/world';
+import { zoneAt } from '../src/content/map';
 
 describe('化学式', () => {
   it('括弧と下付き数字を読める', () => {
@@ -112,5 +113,35 @@ describe('工場の動作', () => {
     const r = judge('separator', { reactants: [['seawater', 1]], products: [['H2O', 1], ['NaCl', 1]], condition: '分留' });
     expect(r.ok ? 'ok' : r.part).toBe('condition');
     expect(judge('separator', { reactants: [['air', 1]], products: [['O2', 1], ['N2', 1]], condition: '分留' }).ok).toBe(true);
+  });
+
+  it('資源地が地図上にあり、納品所と重ならない', () => {
+    const seen = new Set<string>();
+    for (let y = 0; y < 26; y++) for (let x = 0; x < 42; x++) { const z = zoneAt(x, y); if (z) seen.add(z); }
+    expect([...seen].sort()).toEqual(['air', 'sea', 'sulfur']);
+    for (const [x, y] of HUB_TILES) expect(zoneAt(x, y)).toBeNull();
+    expect(zoneAt(1, 5)).toBe('sea');
+    expect(zoneAt(31, 6)).toBe('air');
+    expect(zoneAt(32, 20)).toBe('sulfur');
+  });
+
+  it('置く向きは流れ込みに合わせる', () => {
+    const w = newWorld();
+    place(w, 'belt', 10, 10, 1);
+    expect(autoDir(w, 'reactor', 10, 11)).toBe(1);
+    expect(autoDir(w, 'reactor', 5, 12)).toBe(0);
+    expect(autoDir(w, 'reactor', 30, 12)).toBe(2);
+  });
+
+  it('オストワルト法の3段階をまとめると NH3 + 2O2 → HNO3 + H2O', () => {
+    const w = newWorld();
+    w.goal = 3;
+    place(w, 'reactor', hx - 1, hy, 0);
+    const e = at(w, hx - 1, hy)!;
+    configure(e, RECIPES.find((r) => r.id === 'ostwald-3')!, ['HNO3', 'NO']);
+    place(w, 'vent', hx - 1, hy + 1, 0);
+    e.inBuf = { NO2: 3, H2O: 1 };
+    run(w, 4);
+    expect(w.delivered.HNO3).toBe(2);
   });
 });

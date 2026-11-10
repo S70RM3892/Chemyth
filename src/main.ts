@@ -1,24 +1,23 @@
-import { GOALS, MAP_H, MAP_W, ZONES, zoneAt } from './content/map';
+import { GOALS, HUB_TILES, MAP_H, MAP_W, ZONES, zoneAt } from './content/map';
 import { MACHINES } from './content/machines';
 import { recipeById, CONDITIONS } from './content/recipes';
 import { label, sub } from './content/substances';
-import { at, deserialize, isMachine, key, newWorld, place, remove, serialize, step, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { at, autoDir, deserialize, isMachine, key, newWorld, place, remove, serialize, step, type Dir, type Ent, type Kind, type World } from './engine/world';
 import { about, diagram, equation, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
-import { attachInput } from './ui/input';
+import { attachInput, Z_MIN } from './ui/input';
 import { draw, type Camera } from './ui/render';
 
 type Placeable = Exclude<Kind, 'hub'>;
-type Tool = 'pan' | 'rotate' | 'erase' | Placeable;
+type Tool = 'pan' | 'erase' | Placeable;
 type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir };
 const SAVE_KEY = 'chemyth-save-v1';
 const SESSION_LIMIT_MS = 25 * 60 * 1000;
 
 const TOOLS: { id: Tool; glyph: string; name: string; tip: string; color?: string }[] = [
-  { id: 'pan', glyph: '✥', name: '見る', tip: '1本指で地図を動かす。装置や資源地をタップすると説明と設定が開く。2本指で拡大縮小。' },
+  { id: 'pan', glyph: '☝', name: '見る', tip: 'タップで選ぶ。装置やベルトから指を引くとベルトが伸びる。何もない所を引くと地図が動く。' },
   ...(['belt', 'extractor', 'separator', 'electrolyzer', 'reactor', 'vent'] as Placeable[]).map((id) => ({ id, glyph: MACHINES[id].glyph, name: MACHINES[id].name, tip: MACHINES[id].tip, color: MACHINES[id].color })),
-  { id: 'rotate', glyph: '↻', name: '回す', tip: '置いたものをタップすると、向きが時計回りに変わる。' },
-  { id: 'erase', glyph: '✕', name: '消す', tip: '置いたものをタップするか、なぞると消える。間違えたら「元に戻す」。', color: '#b0453f' },
+  { id: 'erase', glyph: '✕', name: '消す', tip: 'タップするか、なぞると消える。間違えたら右上の「元に戻す」。', color: '#b0453f' },
 ];
 
 interface Hot { data?: { save?: string }; snapshot?(f: () => unknown): void; ready?(f: (d: { save?: string }) => void): void }
@@ -36,7 +35,11 @@ function start(data: { save?: string }) {
   let beltDir: Dir = 0;
   const cv = $<HTMLCanvasElement>('cv');
   const ctx = cv.getContext('2d')!;
-  const cam: Camera = { x: MAP_W / 2, y: MAP_H / 2, z: 52 };
+  const [hubX, hubY] = HUB_TILES[0];
+  const cam: Camera = { x: hubX + 1, y: hubY + 1, z: 52 };
+  /** なめらかに移動する先。null なら動かさない */
+  let camTo: Camera | null = null;
+  let selected: Ent | null = null;
   let cw = 0, ch = 0;
 
   const save = () => { try { localStorage.setItem(SAVE_KEY, serialize(world)); } catch { /* 同上 */ } };
@@ -50,8 +53,9 @@ function start(data: { save?: string }) {
   };
   new ResizeObserver(resize).observe(cv);
   resize();
-  // 地図全体が入る倍率から始める。作業するときは2本指で拡大する
-  cam.z = Math.max(20, Math.min(52, cw / (MAP_W + 1)));
+  // 指で押しやすい大きさから始める。全体は右上の「全体」で見る
+  cam.z = Math.max(40, Math.min(54, cw / 24));
+  const fitZoom = () => Math.max(Z_MIN, Math.min(cw / (MAP_W + 1), (ch - 150) / (MAP_H + 1)));
 
   // ---- トースト ----
   const toastEl = $('toast');
@@ -79,6 +83,7 @@ function start(data: { save?: string }) {
   const doErase = (x: number, y: number): boolean => {
     const e = at(world, x, y);
     if (!e || e.kind === 'hub') return false;
+    if (selected === e) selected = null;
     record({ t: 'del', ent: e });
     return remove(world, x, y);
   };
@@ -92,6 +97,7 @@ function start(data: { save?: string }) {
     group = null;
     $<HTMLButtonElement>('b-undo').disabled = undo.length === 0;
     if (!g) return;
+    selected = null;
     for (const op of g.reverse()) {
       if (op.t === 'add') remove(world, op.x, op.y);
       else if (op.t === 'del') { if (!at(world, op.ent.x, op.ent.y)) world.ents.set(key(op.ent.x, op.ent.y), op.ent); }
@@ -102,7 +108,7 @@ function start(data: { save?: string }) {
 
   // ---- モーダル ----
   const modal = $('modal'), sheet = $('sheet');
-  const closeModal = () => { modal.hidden = true; sheet.replaceChildren(); save(); };
+  const closeModal = () => { modal.hidden = true; sheet.replaceChildren(); selected = null; save(); };
   const showSheet = (...nodes: (Node | string | null)[]) => { sheet.replaceChildren(...nodes.filter((n): n is Node | string => n !== null)); modal.hidden = false; };
   modal.addEventListener('pointerdown', (ev) => { if (ev.target === modal) closeModal(); });
   const closeBtn = () => h('button', { class: 'ghost', type: 'button', id: 'sheet-close', onclick: closeModal }, '閉じる');
@@ -149,11 +155,11 @@ function start(data: { save?: string }) {
     h('p', {}, '資源地から原料を採り、装置で分離・反応させ、中央の納品所へ運ぶ。装置は、反応を自分で正しく書けたときだけ動く。'),
     h('ol', { class: 'steps' },
       h('li', {}, h('b', {}, '採る'), '下の道具から「採取機」を選び、海か大気採取地をタップ。出てくるのは天然のままの混合物。'),
-      h('li', {}, h('b', {}, 'つなぐ'), '「ベルト」を選んでなぞる。なぞった向きに流れる。'),
-      h('li', {}, h('b', {}, '設定する'), '装置を置くと設定が開く。原料、生成物の化学式、係数、条件を自分で入れる。'),
+      h('li', {}, h('b', {}, 'つなぐ'), '装置から指を引くとベルトが伸びる。なぞった向きに流れ、角は自然に曲がる。'),
+      h('li', {}, h('b', {}, '設定する'), '装置を置くと設定が開く。原料、生成物の化学式、係数、条件を自分で決める。向きは流れに合わせて自動で決まる。'),
       h('li', {}, h('b', {}, '納める'), 'ベルトを納品所までつなぐ。要らない副生成物は「廃棄口」へ。出口が詰まると装置は止まる。'),
     ),
-    h('p', { class: 'muted' }, '置いたものは「消す」でタップかなぞって消せる。間違えたら右上の「元に戻す」。わからない装置は「見る」でタップすると説明が出る。'),
+    h('p', { class: 'muted' }, '置いたものをタップすると、その場に「設定・回す・消す」が出る。間違えたら右上の「元に戻す」。資源地をタップすると、何がどんな形で採れるかが出る。'),
     first ? h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'start', onclick: closeModal }, '始める')) : null,
   );
 
@@ -187,7 +193,7 @@ function start(data: { save?: string }) {
   const showReset = () => showSheet(
     h('header', {}, h('h2', {}, '最初からやり直す'), closeBtn()),
     h('p', {}, '工場、納品の進み具合、間違いの記録がすべて消える。元には戻せない。'),
-    h('div', { class: 'row' }, h('button', { class: 'danger', type: 'button', id: 'reset-yes', onclick: () => { world = newWorld(); undo.length = 0; save(); closeModal(); toast('最初からやり直した'); } }, '消してやり直す')),
+    h('div', { class: 'row' }, h('button', { class: 'danger', type: 'button', id: 'reset-yes', onclick: () => { world = newWorld(); undo.length = 0; selected = null; save(); closeModal(); toast('最初からやり直した'); } }, '消してやり直す')),
   );
 
   $('b-help').onclick = () => showHelp();
@@ -211,35 +217,58 @@ function start(data: { save?: string }) {
   }
   buttons.get('pan')!.click();
 
+  // ---- 選んだものの上に出る操作 ----
+  const act = $('act');
+  const actOpen = $<HTMLButtonElement>('act-open'), actTurn = $<HTMLButtonElement>('act-turn'), actErase = $<HTMLButtonElement>('act-erase');
+  actOpen.onclick = () => { if (selected) inspect(selected); };
+  actTurn.onclick = () => { if (selected) sheetActions.rotate(selected); };
+  actErase.onclick = () => { if (selected) sheetActions.erase(selected); };
+  const placeAct = () => {
+    if (!selected || !modal.hidden) { act.hidden = true; return; }
+    const hub = selected.kind === 'hub';
+    actOpen.textContent = isMachine(selected.kind) ? '設定' : '説明';
+    actTurn.hidden = actErase.hidden = hub;
+    act.hidden = false;
+    const ax = (selected.x + (hub ? 1 : 0.5) - cam.x) * cam.z + cw / 2;
+    const ay = (selected.y - cam.y) * cam.z + ch / 2 - 14;
+    act.style.transform = `translate(${Math.round(Math.min(cw - 110, Math.max(110, ax)))}px, ${Math.round(Math.max(64, ay))}px) translate(-50%, -100%)`;
+  };
+
+  $('b-fit').onclick = () => {
+    const fit = fitZoom();
+    const wide = cam.z > fit * 1.15;
+    camTo = wide ? { x: MAP_W / 2, y: MAP_H / 2 + 1.5, z: fit } : { x: hubX + 1, y: hubY + 1, z: Math.max(40, Math.min(54, cw / 24)) };
+    $('b-fit').textContent = wide ? '近く' : '全体';
+  };
+
   // ---- 地図の操作 ----
-  attachInput(cv, cam, {
-    begin: () => { group = null; },
-    pans: () => tool !== 'belt' && tool !== 'erase',
+  const pullsBelt = (x: number, y: number) => { const e = at(world, x, y); return !!e && e.kind !== 'hub' && e.kind !== 'vent'; };
+  const input = attachInput(cv, cam, {
+    begin: () => { group = null; camTo = null; },
+    mode: (x, y) => (tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y)) ? 'stroke' : 'pan'),
     tap(x, y) {
       const e = at(world, x, y);
       if (tool === 'erase') { if (e?.kind === 'hub') toast('納品所は消せない'); else if (!doErase(x, y)) toast('ここには何もない', 1200); return; }
-      if (tool === 'rotate') { if (e && e.kind !== 'hub') doTurn(e, ((e.dir + 1) % 4) as Dir); return; }
-      if (tool === 'pan') { if (e) inspect(e); else showZone(x, y); return; }
       if (e) {
-        if (tool === 'belt' && e.kind === 'belt') doTurn(e, ((e.dir + 1) % 4) as Dir);
-        else if (isMachine(e.kind)) inspect(e);
-        else toast(`そこには${e.kind === 'hub' ? '納品所' : MACHINES[e.kind as Placeable].name}がある。消すなら「消す」を選べ。`);
+        if (selected === e) inspect(e);
+        else selected = e;
         return;
       }
-      const err = doPlace(tool, x, y, tool === 'belt' ? beltDir : 0);
-      if (err) toast(err);
-      else if (isMachine(tool)) inspect(at(world, x, y)!);
+      if (tool === 'pan') { if (selected) selected = null; else showZone(x, y); return; }
+      const err = doPlace(tool, x, y, tool === 'belt' ? beltDir : autoDir(world, tool, x, y));
+      if (err) { toast(err); return; }
+      if (isMachine(tool)) inspect(at(world, x, y)!);
     },
     stroke(x, y, prev) {
+      selected = null;
       if (tool === 'erase') { doErase(x, y); return; }
-      if (tool !== 'belt') return;
       if (prev) {
         beltDir = (x > prev[0] ? 0 : x < prev[0] ? 2 : y > prev[1] ? 1 : 3) as Dir;
         const p = at(world, prev[0], prev[1]);
         if (p?.kind === 'belt') doTurn(p, beltDir);
       }
       const e = at(world, x, y);
-      if (!e) doPlace('belt', x, y, beltDir);
+      if (!e) { if (prev || tool === 'belt') doPlace('belt', x, y, beltDir); }
       else if (e.kind === 'belt' && prev) doTurn(e, beltDir);
     },
   });
@@ -281,7 +310,14 @@ function start(data: { save?: string }) {
     sinceSave += dt;
     if (sinceSave > 5) { sinceSave = 0; save(); }
     if (!warned && now - began > SESSION_LIMIT_MS) { warned = true; toast('25分たった。ここで切り上げて休め。', 8000); }
-    draw(ctx, cw, ch, world, cam, now / 1000, dt);
+    if (camTo) {
+      const k = 1 - Math.exp(-dt * 7);
+      cam.x += (camTo.x - cam.x) * k; cam.y += (camTo.y - cam.y) * k; cam.z += (camTo.z - cam.z) * k;
+      if (Math.abs(camTo.z - cam.z) < 0.05 && Math.hypot(camTo.x - cam.x, camTo.y - cam.y) < 0.01) camTo = null;
+    } else input.tick(dt);
+    if (selected && at(world, selected.x, selected.y) !== selected) selected = null;
+    draw(ctx, cw, ch, world, cam, now / 1000, dt, { tool, selected });
+    placeAct();
     hud();
     requestAnimationFrame(frame);
   };

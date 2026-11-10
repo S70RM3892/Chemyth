@@ -19,6 +19,13 @@ export const SUBSTANCES: Substance[] = [
   { id: 'O2', formula: 'O2', name: '酸素', color: '#ff8192', state: 'gas' },
   { id: 'H2', formula: 'H2', name: '水素', color: '#eef1f4', state: 'gas' },
   { id: 'NH3', formula: 'NH3', name: 'アンモニア', color: '#a8dd77', state: 'gas' },
+  { id: 'NO', formula: 'NO', name: '一酸化窒素', color: '#c9d6e8', state: 'gas' },
+  { id: 'NO2', formula: 'NO2', name: '二酸化窒素', color: '#b5633a', state: 'gas' },
+  { id: 'HNO3', formula: 'HNO3', name: '硝酸', color: '#f2d98a', state: 'liquid' },
+  { id: 'S', formula: 'S', name: '硫黄', color: '#f0d43a', state: 'solid' },
+  { id: 'SO2', formula: 'SO2', name: '二酸化硫黄', color: '#d9c7a0', state: 'gas' },
+  { id: 'SO3', formula: 'SO3', name: '三酸化硫黄', color: '#e6b98a', state: 'gas' },
+  { id: 'H2SO4', formula: 'H2SO4', name: '硫酸', color: '#e9a15b', state: 'liquid' },
 ];
 
 const byId = new Map(SUBSTANCES.map((s) => [s.id, s]));

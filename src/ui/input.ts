@@ -8,19 +8,21 @@ export interface InputHandlers {
   tap(tx: number, ty: number): void;
   /** なぞり始め・なぞり中に新しいマスへ入った。prev は直前のマス */
   stroke(tx: number, ty: number, prev: [number, number] | null): void;
-  /** いまの道具は、なぞると地図が動くか */
-  pans(): boolean;
+  /** このマスからなぞり始めたら、地図を動かすか、なぞり書きにするか */
+  mode(tx: number, ty: number): 'pan' | 'stroke';
 }
 
-const Z_MIN = 22, Z_MAX = 110;
+export const Z_MIN = 22, Z_MAX = 110;
 
-/** 1本指で操作、2本指で拡大縮小と移動。マウスとホイールにも対応 */
+/** 1本指で操作、2本指で拡大縮小と移動。指を離すと地図は少し滑る。マウスとホイールにも対応 */
 export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers) {
   const pts = new Map<number, { x: number; y: number }>();
   let start: { x: number; y: number } | null = null;
   let moved = false;
+  let panning = false;
   let last: [number, number] | null = null;
   let pinch: { d: number; cx: number; cy: number } | null = null;
+  let vx = 0, vy = 0, lastMove = 0;
 
   const rect = () => cv.getBoundingClientRect();
   const toTile = (px: number, py: number): [number, number] => {
@@ -48,9 +50,11 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
   cv.addEventListener('pointerdown', (ev) => {
     cv.setPointerCapture(ev.pointerId);
     pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    vx = vy = 0;
     if (pts.size === 1) {
       start = { x: ev.clientX, y: ev.clientY };
       moved = false;
+      panning = false;
       last = null;
       h.begin();
     } else if (pts.size === 2) {
@@ -74,18 +78,22 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
       return;
     }
     if (!start) return;
-    if (!moved && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 8) return;
-    if (h.pans()) {
+    if (!moved) {
+      if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 8) return;
       moved = true;
+      const st = toTile(start.x, start.y);
+      panning = h.mode(st[0], st[1]) === 'pan';
+      if (!panning) { last = st; h.stroke(st[0], st[1], null); }
+    }
+    if (panning) {
+      const now = performance.now(), el = Math.max(1, now - lastMove);
+      lastMove = now;
       cam.x -= dx / cam.z;
       cam.y -= dy / cam.z;
+      vx = 0.6 * vx + 0.4 * (-dx / cam.z / el) * 1000;
+      vy = 0.6 * vy + 0.4 * (-dy / cam.z / el) * 1000;
       clamp();
       return;
-    }
-    if (!moved) {
-      moved = true;
-      last = toTile(start.x, start.y);
-      h.stroke(last[0], last[1], null);
     }
     // 速くなぞってもマスを飛ばさない
     const [tx, ty] = toTile(ev.clientX, ev.clientY);
@@ -103,7 +111,10 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
       const [tx, ty] = toTile(ev.clientX, ev.clientY);
       h.tap(tx, ty);
     }
-    if (pts.size === 0) start = null;
+    if (pts.size === 0) {
+      if (!panning || performance.now() - lastMove > 80) vx = vy = 0;
+      start = null;
+    } else vx = vy = 0;
   };
   cv.addEventListener('pointerup', end);
   cv.addEventListener('pointercancel', end);
@@ -112,4 +123,18 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
     ev.preventDefault();
     zoomAt(ev.clientX, ev.clientY, Math.exp(-ev.deltaY * 0.0015));
   }, { passive: false });
+
+  return {
+    /** 指を離したあとの滑り */
+    tick(dt: number) {
+      if (pts.size || (Math.abs(vx) < 0.05 && Math.abs(vy) < 0.05)) return;
+      cam.x += vx * dt;
+      cam.y += vy * dt;
+      const k = Math.exp(-dt * 5);
+      vx *= k;
+      vy *= k;
+      clamp();
+    },
+    stop() { vx = vy = 0; },
+  };
 }

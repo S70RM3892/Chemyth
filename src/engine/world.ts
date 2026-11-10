@@ -73,7 +73,7 @@ export function at(w: World, x: number, y: number): Ent | undefined {
 export function place(w: World, kind: Kind, x: number, y: number, dir: Dir): string | null {
   if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return '地図の外だ';
   if (at(w, x, y)) return 'そこはもう埋まっている';
-  if (kind === 'extractor' && !zoneAt(x, y)) return '採取機は資源地（海・大気採取地）にしか置けない';
+  if (kind === 'extractor' && !zoneAt(x, y)) return '採取機は資源地にしか置けない。点のついた場所を選べ';
   const e: Ent = { kind, x, y, dir };
   if (kind === 'belt') e.item = null;
   if (kind === 'extractor') e.timer = 0;
@@ -138,6 +138,34 @@ export function configure(e: Ent, r: Recipe, order: string[]) {
 
 export function portDir(dir: Dir, port: number): Dir {
   return ((dir + [0, 1, 3][port]) % 4) as Dir;
+}
+
+/** (x,y) へ流れ込んでくるものがあれば、その進行方向を返す。prefer の向きを優先する */
+export function inflow(w: World, x: number, y: number, prefer?: Dir): Dir | null {
+  const order: Dir[] = prefer === undefined ? [0, 1, 2, 3] : [prefer, ((prefer + 1) % 4) as Dir, ((prefer + 3) % 4) as Dir];
+  for (const d of order) {
+    const n = at(w, x - DX[d], y - DY[d]);
+    if (!n) continue;
+    if ((n.kind === 'belt' || n.kind === 'extractor') && n.dir === d) return d;
+    if (n.outOrder && n.outOrder.some((_, i) => portDir(n.dir, i) === d)) return d;
+  }
+  return null;
+}
+
+/** 置くときの向きを決める。流れ込みがあればその向き、なければ納品所の方角 */
+export function autoDir(w: World, kind: Kind, x: number, y: number): Dir {
+  if (kind === 'extractor') {
+    for (const d of [0, 1, 2, 3] as Dir[]) {
+      const n = at(w, x + DX[d], y + DY[d]);
+      if (n && n.kind !== 'extractor' && n.kind !== 'hub' && !(n.kind === 'belt' && n.dir === (d + 2) % 4)) return d;
+    }
+  } else {
+    const d = inflow(w, x, y);
+    if (d !== null) return d;
+  }
+  const [hx, hy] = HUB_TILES[0];
+  const dx = hx + 1 - (x + 0.5), dy = hy + 1 - (y + 0.5);
+  return (Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 0 : 2) : dy >= 0 ? 1 : 3) as Dir;
 }
 
 function discover(w: World, s: string) {
