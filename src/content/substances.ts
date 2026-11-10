@@ -6,15 +6,19 @@ export interface Substance {
   formula?: string;
   name: string;
   color: string;
+  /** 常温常圧での状態。ベルト上の形が変わる */
+  state: 'gas' | 'liquid' | 'solid';
 }
 
 export const SUBSTANCES: Substance[] = [
-  { id: 'air', name: '空気', color: '#9fb0bd' },
-  { id: 'H2O', formula: 'H2O', name: '水', color: '#4fb6e8' },
-  { id: 'N2', formula: 'N2', name: '窒素', color: '#7f9cf5' },
-  { id: 'O2', formula: 'O2', name: '酸素', color: '#f0707f' },
-  { id: 'H2', formula: 'H2', name: '水素', color: '#e9ecef' },
-  { id: 'NH3', formula: 'NH3', name: 'アンモニア', color: '#9bd36b' },
+  { id: 'air', name: '空気', color: '#a9bccb', state: 'gas' },
+  { id: 'seawater', name: '海水', color: '#3f9ec4', state: 'liquid' },
+  { id: 'H2O', formula: 'H2O', name: '水', color: '#6cc7f2', state: 'liquid' },
+  { id: 'NaCl', formula: 'NaCl', name: '塩化ナトリウム', color: '#f1ede2', state: 'solid' },
+  { id: 'N2', formula: 'N2', name: '窒素', color: '#8ea6ff', state: 'gas' },
+  { id: 'O2', formula: 'O2', name: '酸素', color: '#ff8192', state: 'gas' },
+  { id: 'H2', formula: 'H2', name: '水素', color: '#eef1f4', state: 'gas' },
+  { id: 'NH3', formula: 'NH3', name: 'アンモニア', color: '#a8dd77', state: 'gas' },
 ];
 
 const byId = new Map(SUBSTANCES.map((s) => [s.id, s]));

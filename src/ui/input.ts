@@ -2,6 +2,8 @@ import { MAP_H, MAP_W } from '../content/map';
 import type { Camera } from './render';
 
 export interface InputHandlers {
+  /** 指が触れた。ひとまとまりの操作の始まり */
+  begin(): void;
   /** 指を動かさずに離した */
   tap(tx: number, ty: number): void;
   /** なぞり始め・なぞり中に新しいマスへ入った。prev は直前のマス */
@@ -10,7 +12,7 @@ export interface InputHandlers {
   pans(): boolean;
 }
 
-const Z_MIN = 18, Z_MAX = 110;
+const Z_MIN = 22, Z_MAX = 110;
 
 /** 1本指で操作、2本指で拡大縮小と移動。マウスとホイールにも対応 */
 export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers) {
@@ -50,6 +52,7 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
       start = { x: ev.clientX, y: ev.clientY };
       moved = false;
       last = null;
+      h.begin();
     } else if (pts.size === 2) {
       start = null;
       pinch = pinchState();

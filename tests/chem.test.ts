@@ -92,16 +92,25 @@ describe('工場の動作', () => {
     expect(w.delivered.H2).toBe(4);
   });
 
-  it('海の採取機→ベルト→電解槽がつながる', () => {
+  it('海の採取機→蒸留→電解槽がつながる', () => {
     const w = newWorld();
     expect(place(w, 'extractor', 10, 10, 0)).not.toBeNull();
     expect(place(w, 'extractor', 1, 5, 0)).toBeNull();
-    place(w, 'belt', 2, 5, 0);
-    place(w, 'electrolyzer', 3, 5, 0);
-    place(w, 'vent', 4, 5, 0);
-    place(w, 'vent', 3, 6, 0);
-    configure(at(w, 3, 5)!, RECIPES.find((r) => r.id === 'water-electrolysis')!, ['H2', 'O2']);
-    run(w, 10);
+    place(w, 'separator', 2, 5, 0);
+    place(w, 'vent', 2, 6, 0);
+    place(w, 'belt', 3, 5, 0);
+    place(w, 'electrolyzer', 4, 5, 0);
+    place(w, 'vent', 5, 5, 0);
+    place(w, 'vent', 4, 6, 0);
+    configure(at(w, 2, 5)!, RECIPES.find((r) => r.id === 'seawater-distillation')!, ['H2O', 'NaCl']);
+    configure(at(w, 4, 5)!, RECIPES.find((r) => r.id === 'water-electrolysis')!, ['H2', 'O2']);
+    run(w, 20);
     expect(w.discovered).toContain('H2');
+  });
+
+  it('分離法の取り違えを見抜く', () => {
+    const r = judge('separator', { reactants: [['seawater', 1]], products: [['H2O', 1], ['NaCl', 1]], condition: '分留' });
+    expect(r.ok ? 'ok' : r.part).toBe('condition');
+    expect(judge('separator', { reactants: [['air', 1]], products: [['O2', 1], ['N2', 1]], condition: '分留' }).ok).toBe(true);
   });
 });

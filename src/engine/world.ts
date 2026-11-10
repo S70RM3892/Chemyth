@@ -45,6 +45,8 @@ export interface World {
   tick: number;
   /** UI に知らせる出来事。保存しない */
   events: string[];
+  /** 画面効果のきっかけ。保存しない */
+  fx: { x: number; y: number; type: 'react' | 'deliver'; s: string }[];
 }
 
 export const BELT_SPEED = 2;
@@ -57,7 +59,7 @@ export function newWorld(): World {
   const w: World = {
     ents: new Map(), goal: 0, count: 0, delivered: {},
     discovered: Object.values(ZONES).map((z) => z.resource),
-    mistakes: [], tick: 0, events: [],
+    mistakes: [], tick: 0, events: [], fx: [],
   };
   for (const [x, y] of HUB_TILES) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
   return w;
@@ -142,7 +144,8 @@ function discover(w: World, s: string) {
   if (!w.discovered.includes(s)) w.discovered.push(s);
 }
 
-function deliver(w: World, s: string) {
+function deliver(w: World, s: string, x: number, y: number) {
+  w.fx.push({ x, y, type: 'deliver', s });
   w.delivered[s] = (w.delivered[s] || 0) + 1;
   const g = GOALS[w.goal];
   if (!g || g.s !== s) return;
@@ -164,7 +167,7 @@ function push(w: World, x: number, y: number, d: Dir, s: string): boolean {
       t.item = { s, p: 0, m: w.tick };
       return true;
     case 'hub':
-      deliver(w, s);
+      deliver(w, s, x, y);
       return true;
     case 'vent':
       return true;
@@ -210,6 +213,7 @@ export function step(w: World, dt: number) {
         if (e.prog >= 1) {
           e.busy = false;
           e.prog = 0;
+          w.fx.push({ x: e.x, y: e.y, type: 'react', s: e.outOrder[0] });
           e.outOrder.forEach((s, i) => {
             e.outBuf![i] += r.outputs.find(([id]) => id === s)![1];
             discover(w, s);

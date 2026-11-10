@@ -6,7 +6,7 @@ const out = await build({ entryPoints: ['src/main.ts'], bundle: true, minify: tr
 const js = out.outputFiles[0].text.replace(/<\/script/g, '<\\/script');
 const css = readFileSync('src/ui/style.css', 'utf8');
 const shell = readFileSync('src/ui/shell.html', 'utf8');
-const fonts = '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Zen+Kaku+Gothic+New:wght@400;700&display=swap">';
+const fonts = '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=IBM+Plex+Mono:wght@500;600&family=Zen+Kaku+Gothic+New:wght@400;700&display=swap">';
 const page = `<title>Chemyth</title>\n<meta name="claude:viewport-fit-sides" content="cover">\n${fonts}\n<style>\n${css}</style>\n${shell}<script>\n${js}</script>\n`;
 
 mkdirSync('dist', { recursive: true });
