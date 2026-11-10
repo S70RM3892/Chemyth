@@ -1,0 +1,17 @@
+<div id="app">
+  <canvas id="cv" aria-label="工場の地図"></canvas>
+  <section id="goal" aria-live="polite">
+    <div class="goal-top"><span id="goal-step"></span><span id="goal-count"></span></div>
+    <strong id="goal-name"></strong>
+    <div class="track"><div id="goal-bar"></div></div>
+    <p id="goal-hint"></p>
+  </section>
+  <div id="topbtns">
+    <button type="button" id="b-log">記録</button>
+    <button type="button" id="b-help">遊び方</button>
+    <button type="button" id="b-reset">やり直す</button>
+  </div>
+  <div id="toast" role="status" hidden></div>
+  <nav id="tools" aria-label="道具"></nav>
+  <div id="modal" hidden><div id="sheet" role="dialog" aria-modal="true"></div></div>
+</div>

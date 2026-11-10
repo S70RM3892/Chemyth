@@ -1,0 +1,81 @@
+/* 配置：地図が全面、上に目標カードと小さなボタン、下に親指で届く道具バー。暗い一色の世界に固定 */
+:root {
+  --bg: #0f1312;
+  --panel: #1a201e;
+  --panel-2: #232b28;
+  --line: #34403b;
+  --fg: #e8ece9;
+  --muted: #93a09b;
+  --accent: #e0a23a;
+  --accent-ink: #231a08;
+  --danger: #e2685f;
+  --font-ui: "Zen Kaku Gothic New", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --gl: max(16px, env(safe-area-inset-left, 0px));
+  --gr: max(16px, env(safe-area-inset-right, 0px));
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 15px; line-height: 1.6; overflow: hidden; overscroll-behavior: none; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+#app { position: relative; height: 100%; overflow: hidden; user-select: none; -webkit-user-select: none; }
+#cv { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+
+#goal { position: absolute; top: 12px; left: var(--gl); width: min(340px, calc(100% - var(--gl) - var(--gr))); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px 12px; display: grid; gap: 4px; pointer-events: none; }
+.goal-top { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
+#goal-name { font-size: 17px; line-height: 1.35; }
+#goal-hint { margin: 2px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.track { height: 5px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+#goal-bar { height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
+
+#topbtns { position: absolute; top: 12px; right: var(--gr); display: flex; gap: 6px; }
+#topbtns button, .ghost { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; min-height: 40px; }
+@media (max-width: 620px) { #topbtns { top: auto; bottom: 96px; } }
+
+#toast { position: absolute; left: 50%; bottom: 104px; transform: translateX(-50%); max-width: calc(100% - 32px); background: var(--fg); color: var(--bg); padding: 9px 16px; border-radius: 8px; font-weight: 700; text-align: center; pointer-events: none; }
+@media (max-width: 620px) { #toast { bottom: 150px; } }
+
+#tools { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 6px; padding: 8px var(--gr) calc(8px + env(safe-area-inset-bottom, 0px)) var(--gl); background: var(--panel); border-top: 1px solid var(--line); overflow-x: auto; justify-content: safe center; }
+.tool { --tint: var(--panel-2); flex: 0 0 auto; width: 76px; min-height: 64px; display: grid; justify-items: center; align-content: center; gap: 2px; background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 6px 2px; }
+.tool .g { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; background: var(--tint); font-weight: 700; font-size: 17px; }
+.tool .l { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.tool.on { background: var(--panel-2); border-color: var(--accent); }
+.tool.on .l { color: var(--fg); }
+
+#modal { position: absolute; inset: 0; background: rgba(5, 8, 7, 0.6); display: grid; place-items: center; padding: 16px var(--gr) 16px var(--gl); }
+#sheet { width: min(560px, 100%); max-height: 100%; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px 20px; display: grid; gap: 12px; user-select: text; -webkit-user-select: text; }
+#sheet header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+#sheet h2 { margin: 0; font-size: 20px; }
+#sheet h3 { margin: 0; font-size: 13px; color: var(--muted); letter-spacing: 0.06em; }
+#sheet p { margin: 0; }
+.muted { color: var(--muted); font-size: 13px; }
+.note { font-size: 14px; }
+.eq, .formula { font-family: var(--font-mono); }
+.eq { font-size: 20px; background: var(--panel-2); border-radius: 8px; padding: 10px 14px; overflow-x: auto; white-space: nowrap; }
+.cfg { display: grid; gap: 16px; }
+.cfg section { display: grid; gap: 8px; }
+.rows { display: grid; gap: 8px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { --dot: var(--muted); display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 14px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 22px; font-family: var(--font-mono); }
+.chip::before { content: ""; width: 12px; height: 12px; border-radius: 50%; background: var(--dot); }
+.chip.on { border-color: var(--accent); background: #3a2f17; }
+.tag { min-width: 3em; color: var(--muted); font-size: 13px; }
+input.coef, input.ftext, select { min-height: 44px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 16px; }
+input.coef { width: 64px; text-align: center; font-family: var(--font-mono); }
+input.ftext { flex: 1 1 140px; min-width: 0; font-family: var(--font-mono); }
+select { width: 100%; }
+.feedback { color: var(--accent); font-weight: 700; min-height: 1.6em; }
+.answer { display: grid; gap: 8px; border-left: 3px solid var(--line); padding-left: 12px; }
+.primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px; padding: 10px 18px; min-height: 44px; font-weight: 700; }
+.danger { background: var(--danger); color: #1c0d0b; border: 0; border-radius: 8px; padding: 10px 18px; min-height: 44px; font-weight: 700; }
+.help { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+.log { width: 100%; border-collapse: collapse; font-size: 14px; }
+.log td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); }
+.log .n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { #goal-bar { transition: none; } }
