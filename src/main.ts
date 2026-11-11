@@ -1,12 +1,13 @@
-import { GOALS, chapterOf } from './content/goals';
+import { CHAPTERS, TOTAL_GOALS } from './content/goals';
 import { HUB_TILES, LAND, MAP_H, MAP_W, ZONES, resourceAt, zoneAt } from './content/map';
 import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
-import { at, autoDir, deserialize, isMachine, key, newWorld, place, remove, serialize, step, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { at, autoDir, configure, currentGoal, deserialize, doneCount, goalCount, isMachine, key, newWorld, place, remove, serialize, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { recipeById } from './content/recipes';
 import { about, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
 import { attachInput, Z_MIN } from './ui/input';
-import { showBook, showDepot, showLog, showUpgrades, type PanelCtx } from './ui/panels';
+import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showUpgrades, type PanelCtx } from './ui/panels';
 import { draw, type Camera } from './ui/render';
 import { setSound, sfx, soundOn } from './ui/sound';
 import { initTitle, store } from './ui/title';
@@ -16,12 +17,15 @@ type Placeable = Exclude<Kind, 'hub'>;
 type Tool = 'pan' | 'erase' | Placeable;
 type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir };
 const SESSION_LIMIT_MS = 25 * 60 * 1000;
-const BUILD: Placeable[] = ['belt', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'splitter', 'bridge', 'depot', 'vent'];
+const BUILD: Placeable[] = ['belt', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'sampler', 'analyzer', 'collector', 'splitter', 'bridge', 'depot', 'vent'];
+const SPEEDS = [1, 2, 4, 0];
+/** 複製：同じ設定の装置を続けて置く */
+interface Clone { kind: Placeable; recipe?: string; outOrder?: string[]; test?: string; sub?: string }
 
-const TOOLS: { id: Tool; glyph: string; name: string; tip: string; color?: string; unlock: number }[] = [
-  { id: 'pan', glyph: '☝', name: '見る', unlock: 0, tip: 'タップで選ぶ。装置やベルトから指を引くとベルトが伸びる。何もない所を引くと地図が動く。' },
-  ...BUILD.map((id) => ({ id, glyph: MACHINES[id].glyph, name: MACHINES[id].name, tip: MACHINES[id].tip, color: MACHINES[id].color, unlock: MACHINES[id].unlock })),
-  { id: 'erase', glyph: '✕', name: '消す', unlock: 0, color: '#b0453f', tip: 'タップするか、なぞると消える。間違えたら右上の「元に戻す」。' },
+const TOOLS: { id: Tool; glyph: string; name: string; tip: string; color?: string; need: { done?: number; chapter?: number } }[] = [
+  { id: 'pan', glyph: '☝', name: '見る', need: {}, tip: 'タップで選ぶ。装置やベルトから指を引くとベルトが伸びる。何もない所を引くと地図が動く。' },
+  ...BUILD.map((id) => ({ id, glyph: MACHINES[id].glyph, name: MACHINES[id].name, tip: MACHINES[id].tip, color: MACHINES[id].color, need: MACHINES[id] })),
+  { id: 'erase', glyph: '✕', name: '消す', need: {}, color: '#b0453f', tip: 'タップするか、なぞると消える。間違えたら右上の「元に戻す」。' },
 ];
 
 interface HotData { slot?: number; save?: string }
@@ -35,7 +39,12 @@ function boot(data: HotData) {
   let beltDir: Dir = 0;
   let selected: Ent | null = null;
   let camTo: Camera | null = null;
-  let shownGoal = -2;
+  let shownGoal = '';
+  let speed = 1;
+  let clone: Clone | null = null;
+  /** なぞり書きで、いま乗っている「横切るかもしれない」ベルト */
+  let cross: [number, number] | null = null;
+  let lastWrong = 0;
   const app = $('app');
   const cv = $<HTMLCanvasElement>('cv');
   const ctx = cv.getContext('2d')!;
@@ -120,7 +129,7 @@ function boot(data: HotData) {
     rotate: (e: Ent) => { group = null; doTurn(e, ((e.dir + 1) % 4) as Dir); },
     erase: (e: Ent) => { group = null; doErase(e.x, e.y); sfx.erase(); },
   };
-  const panel = (): PanelCtx => ({ w: world, show: showSheet, close: closeModal, toast });
+  const panel = (): PanelCtx => ({ w: world, show: showSheet, close: closeModal, toast, sheet, actions: sheetActions });
 
   const sideOf = (e: Ent) => {
     const side = h('div', { class: 'side' });
@@ -137,14 +146,18 @@ function boot(data: HotData) {
   const inspect = (e: Ent) => {
     if (isMachine(e.kind)) { modal.hidden = false; sheet.scrollTop = 0; openConfig(sheet, world, e, sheetActions); return; }
     if (e.kind === 'hub') {
-      const g = GOALS[world.goal];
+      const g = currentGoal(world);
       showSheet(h('header', {}, h('h2', {}, '納品所'), closeBtn()),
         h('p', {}, '指定された物質をここへ運ぶ。どの側からでも受け取る。指定と違う物質も受け取って在庫にする。在庫は「搬出口」で取り出せる。'),
-        h('p', { class: 'muted' }, g ? `いまの指令：${sub(g.s).name} ${label(g.s)} を ${g.n} 個（${world.count} 個 納品済み）` : 'すべての指令を終えた。'));
+        h('p', { class: 'muted' }, g ? `いまの指令：${sub(g.s).name} を ${g.n} 個（${goalCount(world)} 個 納品済み）` : 'この章の指令は終えた。'),
+        h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', onclick: () => showChapters(panel()) }, '指令の一覧を開く')));
       return;
     }
     const kind = e.kind as Placeable;
-    if (kind === 'depot') { showDepot(panel(), e, h('div', { class: 'split' }, about(kind), sideOf(e))); return; }
+    const extra = () => h('div', { class: 'split' }, about(kind), sideOf(e));
+    if (kind === 'depot') { showDepot(panel(), e, extra()); return; }
+    if (kind === 'sampler') { showSampler(panel(), e, extra()); return; }
+    if (kind === 'analyzer') { showAnalyzer(panel(), e, extra()); return; }
     showSheet(h('header', {}, h('h2', {}, MACHINES[kind].name), closeBtn()),
       kind === 'extractor' ? h('p', { class: 'eq' }, `ここで採れるもの：${sub(resourceAt(e.x, e.y)).name}`) : null,
       h('div', { class: 'split' }, about(kind), sideOf(e)));
@@ -177,6 +190,8 @@ function boot(data: HotData) {
   const showMenu = () => showSheet(
     h('header', {}, h('h2', {}, 'メニュー'), closeBtn()),
     h('div', { class: 'menu' },
+      h('button', { class: 'ghost', type: 'button', id: 'm-chapters', onclick: () => showChapters(panel()) }, '指令の一覧（章を切り替える）'),
+      h('button', { class: 'ghost', type: 'button', id: 'm-passages', onclick: () => showPassages(panel()) }, 'リード文課題（京大形式の空欄補充）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-log', onclick: () => showLog(panel()) }, '記録（間違えたところ）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-help', onclick: () => showHelp() }, '遊び方'),
       h('button', { class: 'ghost', type: 'button', id: 'm-sound', onclick: () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); showMenu(); } }, soundOn() ? '音：あり' : '音：なし'),
@@ -188,17 +203,23 @@ function boot(data: HotData) {
   $('b-menu').onclick = showMenu;
   $('b-up').onclick = () => showUpgrades(panel());
   $('b-book').onclick = () => showBook(panel());
+  $('b-review').onclick = () => showReview(panel());
+  $('goal').onclick = () => showChapters(panel());
+  const speedBtn = $('b-speed');
+  const paintSpeed = () => { speedBtn.textContent = speed === 0 ? '⏸ 停止中' : `▶ ×${speed}`; speedBtn.classList.toggle('hot', speed !== 1); };
+  speedBtn.onclick = () => { speed = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length]; paintSpeed(); sfx.tap(); };
   undoBtn.onclick = doUndo;
   undoBtn.disabled = true;
 
   // ---- 道具バー ----
   const bar = $('tools'), tip = $('tip');
   const buttons = new Map<Tool, HTMLButtonElement>();
-  const pick = (id: Tool) => {
+  const pick = (id: Tool, keepClone = false) => {
     tool = id;
+    if (!keepClone) clone = null;
     const t = TOOLS.find((x) => x.id === id)!;
     for (const [k, el] of buttons) { el.classList.toggle('on', k === tool); el.setAttribute('aria-pressed', String(k === tool)); }
-    tip.replaceChildren(h('b', {}, t.name), t.tip);
+    tip.replaceChildren(h('b', {}, clone ? `${t.name}を複製` : t.name), clone ? 'タップした場所に、同じ設定の装置を置く。ほかの道具を選ぶと複製をやめる。' : t.tip);
   };
   for (const t of TOOLS) {
     const b = h('button', { type: 'button', id: `tool-${t.id}`, class: 'tool' }, h('span', { class: 'g' }, t.glyph), h('span', { class: 'l' }, t.name));
@@ -210,7 +231,7 @@ function boot(data: HotData) {
   /** 指令が進むと使える道具が増える */
   const refreshTools = (announce: boolean) => {
     for (const t of TOOLS) {
-      const b = buttons.get(t.id)!, locked = world.goal < t.unlock;
+      const b = buttons.get(t.id)!, locked = !toolUnlocked(world, t.need);
       if (announce && b.hidden && !locked) toast(`新しい道具「${t.name}」が使えるようになった`, 4000);
       b.hidden = locked;
     }
@@ -219,15 +240,25 @@ function boot(data: HotData) {
 
   // ---- 選んだものの上に出る操作 ----
   const act = $('act');
-  const actOpen = $<HTMLButtonElement>('act-open'), actTurn = $<HTMLButtonElement>('act-turn'), actErase = $<HTMLButtonElement>('act-erase');
+  const actOpen = $<HTMLButtonElement>('act-open'), actTurn = $<HTMLButtonElement>('act-turn'), actErase = $<HTMLButtonElement>('act-erase'), actCopy = $<HTMLButtonElement>('act-copy');
+  const copyable = (e: Ent) => !!(e.recipe || e.test || ((e.kind === 'sampler' || e.kind === 'depot') && e.sub));
+  actCopy.onclick = () => {
+    if (!selected || !copyable(selected)) return;
+    const e = selected;
+    clone = { kind: e.kind as Placeable, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, test: e.test, sub: e.sub };
+    selected = null;
+    pick(clone.kind, true);
+    sfx.ok();
+  };
   actOpen.onclick = () => { if (selected) inspect(selected); };
   actTurn.onclick = () => { if (selected) sheetActions.rotate(selected); };
   actErase.onclick = () => { if (selected) sheetActions.erase(selected); };
   const placeAct = () => {
     if (!selected || !modal.hidden || !slot) { act.hidden = true; return; }
     const hub = selected.kind === 'hub';
-    actOpen.textContent = isMachine(selected.kind) ? '設定' : selected.kind === 'depot' ? '選ぶ' : '説明';
+    actOpen.textContent = isMachine(selected.kind) ? '設定' : selected.kind === 'depot' || selected.kind === 'sampler' ? '選ぶ' : selected.kind === 'analyzer' ? '検査' : '説明';
     actTurn.hidden = actErase.hidden = hub;
+    actCopy.hidden = !copyable(selected);
     act.hidden = false;
     const ax = (selected.x + (hub ? 1 : 0.5) - cam.x) * cam.z + cw / 2;
     const ay = (selected.y - cam.y) * cam.z + ch / 2 - 14;
@@ -244,7 +275,7 @@ function boot(data: HotData) {
   // ---- 地図の操作 ----
   const pullsBelt = (x: number, y: number) => { const e = at(world, x, y); return !!e && e.kind !== 'hub' && e.kind !== 'vent'; };
   const input = attachInput(cv, cam, {
-    begin: () => { group = null; camTo = null; },
+    begin: () => { group = null; camTo = null; cross = null; },
     mode: (x, y) => (tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y)) ? 'stroke' : 'pan'),
     tap(x, y) {
       const e = at(world, x, y);
@@ -258,40 +289,61 @@ function boot(data: HotData) {
       const err = doPlace(tool, x, y, tool === 'belt' ? beltDir : autoDir(world, tool, x, y));
       if (err) { toast(err); sfx.bad(); return; }
       sfx.place();
-      if (isMachine(tool) || tool === 'depot') inspect(at(world, x, y)!);
+      const placed = at(world, x, y)!;
+      if (clone && clone.kind === tool) {
+        // 複製：設定を写す
+        const r = recipeById(clone.recipe);
+        if (r && clone.outOrder) configure(placed, r, clone.outOrder.filter((s) => s !== 'e'));
+        placed.test = clone.test;
+        placed.sub = clone.sub;
+        return;
+      }
+      if (isMachine(tool) || tool === 'depot' || tool === 'sampler' || tool === 'analyzer') inspect(placed);
     },
     stroke(x, y, prev) {
       selected = null;
       if (tool === 'erase') { doErase(x, y); return; }
       if (prev) {
-        beltDir = (x > prev[0] ? 0 : x < prev[0] ? 2 : y > prev[1] ? 1 : 3) as Dir;
+        const nd = (x > prev[0] ? 0 : x < prev[0] ? 2 : y > prev[1] ? 1 : 3) as Dir;
         const p = at(world, prev[0], prev[1]);
-        if (p?.kind === 'belt') doTurn(p, beltDir);
+        if (p?.kind === 'belt') {
+          // 別のベルトをまっすぐ横切ったら、そこを立体交差にする
+          if (cross && cross[0] === prev[0] && cross[1] === prev[1] && nd === beltDir) { doErase(prev[0], prev[1]); doPlace('bridge', prev[0], prev[1], 0); }
+          else doTurn(p, nd);
+        }
+        beltDir = nd;
       }
+      cross = null;
       const e = at(world, x, y);
       if (!e) { if (prev || tool === 'belt') doPlace('belt', x, y, beltDir); }
-      else if (e.kind === 'belt' && prev) doTurn(e, beltDir);
+      else if (e.kind === 'belt' && prev) {
+        if (e.dir % 2 !== beltDir % 2) cross = [x, y]; // 直角に乗った。次の一歩で、横切るか合流かが決まる
+        else doTurn(e, beltDir);
+      }
     },
   });
 
   // ---- 指令の表示 ----
   const goalIco = $<HTMLCanvasElement>('goal-ico');
   const hud = () => {
-    const g = GOALS[world.goal];
+    const g = currentGoal(world), ch2 = CHAPTERS[world.chapter];
     $('pts').textContent = String(world.points);
-    if (shownGoal !== world.goal) {
-      shownGoal = world.goal;
+    const due = reviewCount(world);
+    $('due').textContent = due ? String(due) : '';
+    const sig = `${world.chapter}:${world.progress[world.chapter]}`;
+    if (shownGoal !== sig) {
+      shownGoal = sig;
       const c2 = goalIco.getContext('2d')!;
       c2.clearRect(0, 0, 88, 88);
       if (g) drawToken(c2, g.s, 44, 46, 36);
       goalIco.hidden = !g;
-      const ch2 = chapterOf(world.goal);
-      $('goal-step').textContent = ch2 ? `${ch2.name}　${ch2.index + 1} / ${ch2.of}` : `全 ${GOALS.length} 指令 達成`;
-      $('goal-name').textContent = g ? `${sub(g.s).name} ${sub(g.s).formula ? label(g.s) : g.s === 'e' ? 'e⁻' : ''} を ${g.n} 個` : 'すべての指令を終えた';
-      $('goal-hint').textContent = g ? g.hint : '記録を開いて、間違えた反応を紙に書き出して確認しろ。ここから先は過去問で仕上げる。';
+      $('goal-step').textContent = `${ch2.name}　${Math.min(world.progress[world.chapter] + 1, ch2.goals.length)} / ${ch2.goals.length}`;
+      const s2 = g ? sub(g.s) : null;
+      $('goal-name').textContent = g && s2 ? `${s2.name}${s2.formula && !s2.mask ? ' ' + label(g.s) : g.s === 'e' ? ' e⁻' : ''} を ${g.n} 個` : doneCount(world) >= TOTAL_GOALS ? 'すべての指令を終えた' : 'この章は完了。ここを押して別の章へ';
+      $('goal-hint').textContent = g ? g.hint : '記録を開いて、間違えた反応を紙に書き出して確認しろ。';
     }
-    $('goal-count').textContent = g ? `${world.count} / ${g.n}` : '';
-    $('goal-bar').style.width = g ? `${(world.count / g.n) * 100}%` : '100%';
+    $('goal-count').textContent = g ? `${goalCount(world)} / ${g.n}` : '';
+    $('goal-bar').style.width = g ? `${(goalCount(world) / g.n) * 100}%` : '100%';
   };
 
   // ---- タイトルと開始 ----
@@ -299,13 +351,14 @@ function boot(data: HotData) {
     start(n, json) {
       world = (json && deserialize(json)) || newWorld();
       slot = n;
-      undo.length = 0; group = null; selected = null; undoBtn.disabled = true; shownGoal = -2;
+      undo.length = 0; group = null; selected = null; undoBtn.disabled = true; shownGoal = ''; speed = 1; paintSpeed(); clone = null;
       cam.x = hubX + 1; cam.y = hubY + 1; cam.z = nearZoom(); camTo = null;
       $('b-fit').textContent = '全体';
       title.hide();
       app.classList.remove('in-title');
       for (const b of buttons.values()) b.hidden = false;
       refreshTools(false);
+      lastSeen = world.seen;
       pick('pan');
       began = performance.now(); warned = false;
       save();
@@ -315,18 +368,22 @@ function boot(data: HotData) {
   const toTitle = () => { save(); slot = 0; selected = null; app.classList.add('in-title'); title.show(); };
 
   // ---- ループ ----
-  let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0;
+  let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1;
   const STEP = 1 / 60;
   const frame = (now: number) => {
     const dt = Math.min(0.1, (now - prev) / 1000);
     prev = now;
     if (slot) {
       if (modal.hidden) {
-        acc += dt;
-        while (acc >= STEP) { step(world, STEP); acc -= STEP; }
+        acc += dt * speed;
+        let guard = 0;
+        while (acc >= STEP && guard++ < 24) { step(world, STEP); acc -= STEP; }
+        if (acc > STEP * 4) acc = 0;
       }
       for (const ev of world.events.splice(0)) {
         if (ev === 'goal-done') { toast('納品完了。研究点 +30。次の指令が出た。', 3500); sfx.goal(); refreshTools(true); }
+        if (ev === 'chapter-done') { toast(`章を終えた。${CHAPTERS[world.chapter].name} へ進む。`, 5000); sfx.goal(); refreshTools(true); }
+        if (ev === 'wrong-sample' && now - lastWrong > 2500) { lastWrong = now; toast('違う物質が納品所に入った。2 個減点。検査を見直せ。', 3200); sfx.bad(); }
         if (ev === 'all-done') { toast('すべての指令を終えた。', 6000); sfx.goal(); }
         save();
       }
@@ -339,6 +396,7 @@ function boot(data: HotData) {
         if (Math.abs(camTo.z - cam.z) < 0.05 && Math.hypot(camTo.x - cam.x, camTo.y - cam.y) < 0.01) camTo = null;
       } else input.tick(dt);
       if (selected && at(world, selected.x, selected.y) !== selected) selected = null;
+      if (lastSeen !== world.seen) { lastSeen = world.seen; refreshTools(true); }
       draw(ctx, cw, ch, world, cam, now / 1000, dt, { tool, selected });
       hud();
     }

@@ -1,7 +1,7 @@
 import { pretty } from '../chem/formula';
 import { ELEMENTS } from '../content/elements';
 import { MACHINES } from '../content/machines';
-import { CONDITIONS, electronsOf, productsOf, recipeById, type MachineKind, type Recipe } from '../content/recipes';
+import { CONDITIONS, SHIFTS, electronsOf, productsOf, recipeById, type MachineKind, type Recipe } from '../content/recipes';
 import { label, sameAtoms, sub, subByFormula, SUBSTANCES } from '../content/substances';
 import { clearRecipe, configure, judge, learn, portDir, type Ent, type Kind, type World } from '../engine/world';
 import { h } from './dom';
@@ -12,9 +12,22 @@ const PORT_NAME = ['正面', '右手', '左手'];
 const NAMED = SUBSTANCES.filter((s) => s.named);
 
 export function equation(r: Recipe): string {
-  const side = (s: [string, number][]) => s.map(([id, n]) => (r.loose || n === 1 ? '' : n) + label(id)).join(' + ');
-  return `${side(r.inputs)} → ${side(productsOf(r))}`;
+  const side = (s: [string, number][], coef: boolean) => s.map(([id, n]) => (!coef || n === 1 ? '' : n) + label(id)).join(' + ');
+  return `${side(r.inputs, !r.loose)} → ${side(productsOf(r), !r.loose && !r.mix)}`;
 }
+
+/** 設定済みの装置が、いま何をしているか */
+export function statusOf(e: Ent, r: Recipe): string {
+  const have = r.inputs.map(([s, n]) => `${label(s)} ${e.inBuf?.[s] || 0}/${n}`).join('　');
+  if (e.busy) return `反応中。手持ち：${have}`;
+  const jam = e.outOrder?.find((_, i) => (e.outBuf?.[i] || 0) > 0);
+  if (jam) return `止まっている：${label(jam)} の出口がふさがっている。ベルトか廃棄口をつなげ。`;
+  const lack = r.inputs.filter(([s, n]) => (e.inBuf?.[s] || 0) < n).map(([s]) => label(s));
+  return `原料待ち：${lack.join('、')} が足りない。手持ち：${have}`;
+}
+
+/** 復習のとき：装置に結びつけず、指定した反応を何も見ずに再現させる */
+export interface Review { recipe: Recipe; done(correct: boolean): void }
 
 function shuffle<T>(a: T[]): T[] {
   const b = [...a];
@@ -41,7 +54,7 @@ export function diagram(e: Ent): HTMLElement {
   const cells: (HTMLElement | null)[] = Array(9).fill(null);
   const cellOf = [5, 7, 3, 1]; // 右・下・左・上
   const names: string[] = kind === 'electrolyzer' ? ['陰極', '陽極', 'ほか'] : kind === 'battery' ? ['e⁻', '生成物', '生成物']
-    : kind === 'extractor' ? ['産出物'] : kind === 'depot' ? ['在庫'] : kind === 'splitter' ? ['出口', '出口', '出口']
+    : kind === 'extractor' ? ['産出物'] : kind === 'depot' ? ['在庫'] : kind === 'sampler' ? ['試薬'] : kind === 'analyzer' ? ['陽性', '陰性'] : kind === 'collector' ? ['集めた気体'] : kind === 'splitter' ? ['出口', '出口', '出口']
     : kind === 'vent' || kind === 'belt' || kind === 'bridge' ? [] : PORT_NAME;
   const count = e.outOrder ? e.outOrder.length : names.length;
   for (let i = 0; i < count; i++) {
@@ -70,10 +83,10 @@ export function chip(id: string, extra = ''): HTMLButtonElement {
 }
 
 /** 装置の設定シート。原料・生成物・係数・条件を自分で埋めさせる */
-export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActions) {
+export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActions, review?: Review) {
   const kind = e.kind as MachineKind;
   const cond = CONDITIONS[kind];
-  const isCell = kind === 'electrolyzer', isSep = kind === 'separator', isBat = kind === 'battery';
+  const isCell = kind === 'electrolyzer', isSep = kind === 'separator', isBat = kind === 'battery', isCol = kind === 'collector';
   let fails = 0;
 
   const side = () => {
@@ -90,6 +103,11 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
   const render = () => {
     sheet.replaceChildren();
     const r = recipeById(e.recipe);
+    if (review) {
+      sheet.append(h('header', {}, h('h2', {}, '復習'), h('button', { class: 'ghost', type: 'button', id: 'cfg-close', onclick: act.close }, 'やめる')),
+        h('p', { class: 'qtext' }, `「${review.recipe.name}」を、何も見ずに再現しろ。装置は${MACHINES[kind].name}。`), form());
+      return;
+    }
     sheet.append(h('header', {}, h('h2', {}, MACHINES[kind].name), h('button', { class: 'ghost', type: 'button', id: 'cfg-close', onclick: act.close }, '閉じる')));
     if (r) {
       sheet.append(
@@ -97,8 +115,9 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
         h('div', { class: 'split' },
           h('div', { class: 'stack' },
             h('p', {}, h('b', {}, r.name)),
+            h('p', { class: 'status', id: 'cfg-status' }, statusOf(e, r)),
             h('p', { class: 'note' }, r.note),
-            h('p', { class: 'muted' }, `${cond.label}：${r.accept.join(' または ')}` + (isBat ? `　負極 ${label(r.neg!)}　正極 ${label(r.pos!)}` : '')),
+            h('p', { class: 'muted' }, `${cond.label}：${r.accept.join(' または ')}` + (isBat ? `　負極 ${label(r.neg!)}　正極 ${label(r.pos!)}` : '') + (r.shift ? `　平衡上有利：${r.shift}` : '')),
             h('button', { class: 'ghost', type: 'button', id: 'cfg-redo', onclick: () => { clearRecipe(e); render(); } }, '設定をやり直す'),
           ),
           side(),
@@ -113,7 +132,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
     const picked = new Map<string, number>();
     /** 生成物の欄。化学式を打つか、名前で選ぶ */
     const prods: { coef: number; formula: string; id?: string }[] = [];
-    let active = 0, condition = '', neg = '', pos = '', electrons = 1;
+    let active = 0, condition = '', neg = '', pos = '', electrons = 1, shift = '';
     let lastRecipe: Recipe | null = null;
 
     const reactRows = h('div', { class: 'rows' });
@@ -147,7 +166,8 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
       );
     };
 
-    const chips = h('div', { class: 'chips' }, ...w.discovered.filter((s) => s !== 'e').map((s) => {
+    const pool = [...new Set([...w.discovered, ...(review ? review.recipe.inputs.map(([s]) => s) : [])])].filter((s) => s !== 'e' && !sub(s).mask && !s.startsWith('jar-'));
+    const chips = h('div', { class: 'chips' }, ...pool.map((s) => {
       const b = chip(s);
       b.id = `cfg-chip-${s}`;
       b.onclick = () => {
@@ -156,7 +176,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
         if (!picked.has(pos)) pos = '';
         b.classList.toggle('on', picked.has(s));
         b.setAttribute('aria-pressed', String(picked.has(s)));
-        reactRows.replaceChildren(...(isSep ? [] : [...picked.keys()].map((p) =>
+        reactRows.replaceChildren(...(isSep || isCol ? [] : [...picked.keys()].map((p) =>
           h('div', { class: 'row' }, stepper(`cfg-rc-${p}`, () => picked.get(p)!, (n) => picked.set(p, n)), h('span', { class: 'formula big' }, label(p))))));
         paintPoles();
       };
@@ -212,6 +232,18 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
       return b;
     }));
 
+    // 可逆反応のときだけ答える。もう一度押すと外れる
+    const shiftChips = h('div', { class: 'chips' }, ...SHIFTS.map((o) => {
+      const b = h('button', { class: 'chip plain', type: 'button' }, o);
+      b.dataset.shift = o;
+      b.onclick = () => {
+        shift = shift === o ? '' : o;
+        for (const c of shiftChips.children) { c.classList.toggle('on', (c as HTMLElement).dataset.shift === shift); }
+        sfx.tap();
+      };
+      return b;
+    }));
+
     const reveal = h('button', { class: 'ghost', type: 'button', id: 'cfg-reveal', hidden: true }, '答えを見る');
     const answerBox = h('div', { class: 'answer', hidden: true });
     reveal.onclick = () => {
@@ -221,17 +253,22 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
         h('p', { class: 'muted' }, '読んだら、何も見ずに自分で入力し直せ。'));
       answerBox.hidden = false;
       reveal.hidden = true;
+      if (review) {
+        answerBox.append(h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'rv-next', onclick: () => review.done(false) }, '次へ')));
+        (f.querySelector('#cfg-ok') as HTMLElement).hidden = true;
+      }
     };
 
     const n = (isSep ? ['①', '②', '③'] : isBat ? ['①', '②', '③', '④', '⑤'] : ['①', '②', '③']);
     const f = h('form', { class: 'cfg' },
-      h('section', {}, h('h3', {}, `${n[0]} 原料`), h('p', { class: 'muted' }, 'この装置に流し込む物質を選べ。' + (isSep ? '' : '選んだら係数を合わせろ。')), chips, reactRows),
+      h('section', {}, h('h3', {}, `${n[0]} ${isCol ? '集める気体' : '原料'}`), h('p', { class: 'muted' }, isCol ? 'この装置で集める気体を選べ。' : 'この装置に流し込む物質を選べ。' + (isSep ? '' : '選んだら係数を合わせろ。')), chips, reactRows),
       isBat ? h('section', {}, h('h3', {}, `${n[1]} 負極と正極`), poleBox) : null,
-      h('section', {}, h('h3', {}, `${n[isBat ? 2 : 1]} ${isSep ? '取り出す物質' : '生成物'}`),
+      isCol ? null : h('section', {}, h('h3', {}, `${n[isBat ? 2 : 1]} ${isSep ? '取り出す物質' : '生成物'}`),
         h('p', { class: 'muted' }, isCell ? '各極で生じる物質を化学式で入れろ。溶液中にできるものがあれば追加しろ。' : isBat ? '電子のほかにできる物質を入れろ。' : '入れた順に、正面・右手・左手の出口から出る。'),
         prodRows, more, keypad),
       isBat ? h('section', {}, h('h3', {}, `${n[3]} 流れる電子 e⁻ の数`), h('div', { class: 'row' }, stepper('cfg-el', () => electrons, (x) => { electrons = x; }), h('span', { class: 'muted' }, '上の係数で反応したとき、導線を流れる電子は何 mol か。'))) : null,
-      h('section', {}, h('h3', {}, `${n[isBat ? 4 : 2]} ${cond.label}`), condChips),
+      h('section', {}, h('h3', {}, `${n[isCol ? 1 : isBat ? 4 : 2]} ${cond.label}`), condChips),
+      kind === 'reactor' ? h('section', {}, h('h3', {}, '④ 平衡を生成物側へ動かす温度と圧力'), h('p', { class: 'muted' }, '可逆反応のときだけ答えろ。そうでなければ選ばなくてよい。'), shiftChips) : null,
       feedback, answerBox,
       h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit', id: 'cfg-ok' }, 'この設定で動かす'), reveal),
     );
@@ -242,9 +279,15 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
       if (picked.size === 0) { feedback.textContent = '原料を選べ。'; return; }
       const filled = prods.filter((p) => p.formula || p.id);
       const products = filled.map((p) => [p.id ?? subByFormula(p.formula)?.id ?? null, p.coef] as [string | null, number]);
-      const verdict = judge(kind, { reactants: [...picked], products, condition, neg, pos, electrons });
+      const verdict = judge(kind, { reactants: [...picked], products, condition, neg, pos, electrons, shift });
+      if (verdict.ok && review) {
+        if (verdict.recipe.id !== review.recipe.id) { feedback.textContent = `それは別の反応（${verdict.recipe.name}）だ。`; return; }
+        sfx.ok();
+        review.done(fails === 0);
+        return;
+      }
       if (verdict.ok) {
-        configure(e, verdict.recipe, products.map(([p]) => p!));
+        configure(e, verdict.recipe, isCol ? productsOf(verdict.recipe).map(([s]) => s) : products.map(([p]) => p!));
         const gain = learn(w, verdict.recipe, fails === 0);
         sfx.ok();
         if (gain) act.toast(`${verdict.recipe.name}　研究点 +${gain}` + (fails === 0 ? '（一発正解）' : ''));

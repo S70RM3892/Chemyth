@@ -200,3 +200,22 @@ button:disabled { opacity: 0.4; cursor: default; }
 #title-panel textarea { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 14px; padding: 10px; font: 12px/1.4 var(--font-mono); resize: vertical; user-select: text; -webkit-user-select: text; }
 .foot { align-items: center; }
 .foot .muted { flex: 1 1 240px; }
+
+/* ---- 追加：章の選択、分析、復習、リード文、早送り ---- */
+#goal { pointer-events: auto; cursor: pointer; }
+#due:not(:empty) { background: var(--danger); color: #1c0d0b; border-radius: 10px; padding: 0 7px; font-family: var(--font-mono); font-size: 13px; margin-left: 4px; }
+#b-speed.hot { color: var(--lamp); border-color: var(--lamp); }
+#topbtns { max-width: calc(100% - 350px); }
+.status { background: var(--panel-2); border-radius: 14px; padding: 8px 14px; font-size: 13px; }
+.ghost.picked { border-color: var(--lamp); background: #3b2f16; }
+.ghost.wrong { border-color: var(--danger); }
+.chapter { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.key.wide { grid-column: span 3; }
+.passage { background: var(--panel-2); border-radius: 20px; padding: 16px 20px; display: grid; gap: 12px; font-size: 16px; line-height: 2.25; }
+.blank { display: inline-flex; align-items: center; gap: 6px; min-width: 76px; min-height: 36px; margin: 0 3px; padding: 0 12px 0 6px; vertical-align: middle; background: var(--bg); border: 2px solid var(--line); border-radius: 18px; font-family: var(--font-mono); font-size: 15px; line-height: 1.2; }
+.blank i { font-style: normal; font-family: var(--font-ui); font-weight: 700; font-size: 12px; color: var(--lamp-ink); background: var(--lamp); border-radius: 50%; width: 22px; height: 22px; display: grid; place-items: center; flex: 0 0 auto; }
+.blank.on { border-color: var(--lamp); }
+.blank.ok { border-color: var(--moss); }
+.blank.ng { border-color: var(--danger); }
+.editor { display: grid; gap: 8px; position: sticky; bottom: 0; background: var(--panel-solid); padding: 8px 0; }
+.editor:empty { display: none; }

@@ -1,5 +1,5 @@
 import { ELEMENTS } from '../content/elements';
-import { GOALS, chapterOf } from '../content/goals';
+import { CHAPTERS, TOTAL_GOALS } from '../content/goals';
 import { deserialize, summarize } from '../engine/world';
 import { $, h } from './dom';
 import { setSound, sfx, soundOn } from './sound';
@@ -63,12 +63,11 @@ export function initTitle(api: TitleApi) {
             h('button', { class: 'primary', type: 'button', id: `slot-${n}-new`, onclick: () => { sfx.ok(); api.start(n, null); } }, 'はじめる'),
             h('button', { class: 'ghost', type: 'button', id: `slot-${n}-import`, onclick: () => importInto(n) }, '読み込む')));
       }
-      const ch = chapterOf(sum.goal);
       const erase = h('button', { class: 'ghost warn', type: 'button', id: `slot-${n}-erase` }, confirmErase === n ? '本当に消す' : '消す');
       erase.onclick = () => { if (confirmErase === n) { store.erase(n); confirmErase = 0; sfx.erase(); } else confirmErase = n; paint(); };
       return h('div', { class: 'slotcard' },
         h('div', { class: 'stack tight' }, h('b', {}, `セーブ ${n}`),
-          h('span', {}, ch ? `${ch.name}　指令 ${sum.goal + 1} / ${GOALS.length}` : `全 ${GOALS.length} 指令を達成`),
+          h('span', {}, sum.done >= TOTAL_GOALS ? `全 ${TOTAL_GOALS} 指令を達成` : `${CHAPTERS[sum.chapter]?.name ?? ''}　達成 ${sum.done} / ${TOTAL_GOALS}`),
           h('span', { class: 'muted' }, `${fmtTime(sum.playMs)}　研究点 ${sum.points}　${fmtDate(sum.savedAt)}`)),
         h('div', { class: 'row' },
           h('button', { class: 'primary', type: 'button', id: `slot-${n}-go`, onclick: () => { sfx.ok(); api.start(n, json); } }, 'つづける'),

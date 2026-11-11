@@ -1,8 +1,7 @@
 import { HUB_TILES, MAP_H, MAP_W, ZONES, zoneAt, type Zone } from '../content/map';
-import { GOALS } from '../content/goals';
 import { MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { beltSpeed, DX, DY, inflow, isMachine, portDir, type Dir, type Ent, type World } from '../engine/world';
+import { beltSpeed, currentGoal, DX, DY, goalCount, inflow, isMachine, portDir, type Dir, type Ent, type World } from '../engine/world';
 import { sprite } from './token';
 
 export interface Camera { x: number; y: number; z: number }
@@ -205,7 +204,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   ctx.textBaseline = 'middle';
 
   // ---- いまの指令で使う資源地が画面の外にあれば、縁に道しるべを出す ----
-  const gz = GOALS[w.goal]?.zone;
+  const gz = currentGoal(w)?.zone;
   if (gz) {
     const zn = ZONES[gz], tx = sx(zn.at[0]), ty = sy(zn.at[1]);
     if (tx < 0 || tx > cw || ty < 150 || ty > ch - 170) {
@@ -239,16 +238,27 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.moveTo(cx + b.c.ax * z, cy + b.c.ay * z);
     ctx.quadraticCurveTo(cx, cy, cx + b.c.bx * z, cy + b.c.by * z);
   };
+  // 線の見た目は、最後に流れた物質の状態で変わる：固体は幅広のコンベヤ、液体は管、気体は細い管
+  const LINE = {
+    solid: { w: 0.62, track: '#3b352a', flow: 'rgba(225,205,165,0.55)', dash: [0.05, 0.2] },
+    liquid: { w: 0.5, track: '#1d3a45', flow: 'rgba(140,215,240,0.6)', dash: [0.16, 0.34] },
+    gas: { w: 0.38, track: '#2c3048', flow: 'rgba(215,220,255,0.45)', dash: [0.04, 0.21] },
+    none: { w: 0.56, track: C.track, flow: C.flow, dash: [0.1, 0.4] },
+  };
+  const style = (b: (typeof belts)[number]) => LINE[b.e.st ?? 'none'];
   ctx.lineCap = 'round';
-  ctx.strokeStyle = C.bank; ctx.lineWidth = z * 0.74;
-  for (const b of belts) { trace(b); ctx.stroke(); }
-  ctx.strokeStyle = C.track; ctx.lineWidth = z * 0.6;
-  for (const b of belts) { trace(b); ctx.stroke(); }
+  ctx.strokeStyle = C.bank;
+  for (const b of belts) { ctx.lineWidth = z * (style(b).w + 0.14); trace(b); ctx.stroke(); }
+  for (const b of belts) { const st = style(b); ctx.strokeStyle = st.track; ctx.lineWidth = z * st.w; trace(b); ctx.stroke(); }
   ctx.lineCap = 'butt';
-  ctx.strokeStyle = C.flow; ctx.lineWidth = Math.max(1.5, z * 0.07);
-  ctx.setLineDash([z * 0.1, z * 0.4]);
   ctx.lineDashOffset = -t * beltSpeed(w) * z * 0.5;
-  for (const b of belts) { trace(b); ctx.stroke(); }
+  for (const b of belts) {
+    const st = style(b);
+    ctx.strokeStyle = st.flow;
+    ctx.lineWidth = b.e.st === 'solid' ? z * st.w * 0.8 : Math.max(1.5, z * 0.07);
+    ctx.setLineDash([z * st.dash[0], z * st.dash[1]]);
+    trace(b); ctx.stroke();
+  }
   ctx.setLineDash([]);
   // 立体交差は縦横 2 本の管
   for (const e of w.ents.values()) {
@@ -445,6 +455,38 @@ function machine(ctx: CanvasRenderingContext2D, cx: number, cy: number, u: numbe
       if (e.item) ctx.drawImage(sprite(e.item.s), cx - u * 0.3, cy - u * 0.3, u * 0.6, u * 0.6);
       break;
     }
+    case 'analyzer': {
+      // 虫めがね
+      ctx.strokeStyle = info.color;
+      ctx.lineWidth = u * 0.08;
+      ctx.lineCap = 'round';
+      disc(cx - u * 0.04, cy - u * 0.04, u * 0.21); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx + u * 0.12, cy + u * 0.12); ctx.lineTo(cx + u * 0.27, cy + u * 0.27); ctx.stroke();
+      if (e.item) ctx.drawImage(sprite(e.item.s), cx - u * 0.22, cy - u * 0.22, u * 0.36, u * 0.36);
+      break;
+    }
+    case 'sampler': {
+      // 棚に並んだ試薬びん
+      ctx.fillStyle = info.color;
+      rr(ctx, cx - u * 0.3, cy + u * 0.14, u * 0.6, u * 0.07, u * 0.03); ctx.fill();
+      for (let i = -1; i <= 1; i++) {
+        ctx.fillStyle = ['#d9a05b', '#8fbf7a', '#7fb2d9'][i + 1];
+        rr(ctx, cx + i * u * 0.19 - u * 0.07, cy - u * 0.12, u * 0.14, u * 0.26, u * 0.04); ctx.fill();
+        ctx.fillStyle = C.steel;
+        ctx.fillRect(cx + i * u * 0.19 - u * 0.035, cy - u * 0.2, u * 0.07, u * 0.08);
+      }
+      break;
+    }
+    case 'collector': {
+      // 集気びん
+      ctx.strokeStyle = info.color;
+      ctx.lineWidth = u * 0.06;
+      rr(ctx, cx - u * 0.17, cy - u * 0.14, u * 0.34, u * 0.42, u * 0.08); ctx.stroke();
+      ctx.fillStyle = info.color;
+      ctx.fillRect(cx - u * 0.09, cy - u * 0.28, u * 0.18, u * 0.12);
+      if (busy) { ctx.fillStyle = 'rgba(215,235,230,0.5)'; rr(ctx, cx - u * 0.13, cy + u * (0.24 - 0.34 * (e.prog || 0)), u * 0.26, u * 0.34 * (e.prog || 0), u * 0.04); ctx.fill(); }
+      break;
+    }
     case 'depot': {
       ctx.fillStyle = info.color;
       rr(ctx, cx - u * 0.27, cy - u * 0.27, u * 0.54, u * 0.54, u * 0.16);
@@ -503,7 +545,8 @@ function machine(ctx: CanvasRenderingContext2D, cx: number, cy: number, u: numbe
       ctx.fillText(text, cx + DX[d] * u * 0.2 + (DY[d] ? u * 0.25 : 0), cy + DY[d] * u * 0.27 + (DX[d] ? u * 0.27 : 0));
     }
   };
-  if (e.kind === 'extractor' || e.kind === 'depot') port(e.dir, C.ink);
+  if (e.kind === 'extractor' || e.kind === 'depot' || e.kind === 'sampler') port(e.dir, C.ink);
+  else if (e.kind === 'analyzer') { port(portDir(e.dir, 0), '#8fbf7a', '陽'); port(portDir(e.dir, 1), '#ec7b6c', '陰'); }
   else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), C.steel);
   else if (e.outOrder) e.outOrder.forEach((s, i) => port(portDir(e.dir, i), sub(s).color, label(s)));
   else if (unset) port(e.dir, C.dim);
@@ -519,6 +562,15 @@ function machine(ctx: CanvasRenderingContext2D, cx: number, cy: number, u: numbe
     ctx.fillStyle = C.lampInk;
     ctx.font = `700 ${u * 0.2}px ${FONT_UI}`;
     ctx.fillText('?', cx + u * 0.3, cy - u * 0.29);
+  }
+  if ((e.kind === 'analyzer' && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub) || (e.stuck || 0) > 2.5) {
+    // 設定が要る、または出口が詰まっている
+    const jam = (e.stuck || 0) > 2.5;
+    ctx.fillStyle = jam ? '#ec7b6c' : C.lamp;
+    disc(cx + u * 0.3, cy - u * 0.3, u * 0.15); ctx.fill();
+    ctx.fillStyle = C.lampInk;
+    ctx.font = `700 ${u * 0.2}px ${FONT_UI}`;
+    ctx.fillText(jam ? '!' : '?', cx + u * 0.3, cy - u * 0.29);
   }
   if (busy) {
     ctx.strokeStyle = C.lamp;
@@ -547,15 +599,16 @@ function hub(ctx: CanvasRenderingContext2D, px: number, py: number, z: number, w
   ctx.fillStyle = C.lampInk;
   ctx.font = `700 ${z * 0.2}px ${FONT_UI}`;
   ctx.fillText('納品所', px + s / 2, py + z * 0.27);
-  const goal = GOALS[w.goal];
-  const tx = goal ? label(goal.s) : '完了';
+  const goal = currentGoal(w);
+  const gs = goal ? sub(goal.s) : null;
+  const tx = !gs ? '完了' : gs.mask || !gs.formula ? (goal!.s === 'e' ? 'e⁻' : gs.name.replace(/（.*）| .*$/g, '')) : label(goal!.s);
   ctx.fillStyle = `rgba(255,214,130,${0.85 + 0.15 * Math.sin(t * 3)})`;
-  ctx.font = `600 ${z * (tx.length > 9 ? 0.15 : tx.length > 6 ? 0.22 : tx.length > 4 ? 0.3 : 0.46)}px ${FONT_MONO}`;
+  ctx.font = `600 ${z * Math.min(0.46, 1.3 / Math.max(1, tx.length * (gs?.formula && !gs.mask ? 0.62 : 1)))}px ${gs?.formula && !gs.mask ? FONT_MONO : FONT_UI}`;
   ctx.fillText(tx, px + s / 2, py + z * 0.9);
   if (goal) {
     ctx.font = `500 ${z * 0.22}px ${FONT_MONO}`;
     ctx.fillStyle = '#c99a45';
-    ctx.fillText(`${w.count} / ${goal.n}`, px + s / 2, py + z * 1.36);
+    ctx.fillText(`${goalCount(w)} / ${goal.n}`, px + s / 2, py + z * 1.36);
   }
 }
 

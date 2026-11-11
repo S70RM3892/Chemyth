@@ -1,7 +1,7 @@
 export const MAP_W = 84;
 export const MAP_H = 56;
 
-export type Zone = 'sea' | 'sulfur' | 'limestone' | 'iron' | 'coal' | 'bauxite' | 'copper' | 'zinc' | 'lead' | 'oil' | 'gas' | 'farm' | 'grove';
+export type Zone = 'sea' | 'sulfur' | 'limestone' | 'iron' | 'coal' | 'bauxite' | 'copper' | 'zinc' | 'lead' | 'oil' | 'gas' | 'farm' | 'grove' | 'ranch';
 
 export interface ZoneInfo {
   name: string;
@@ -83,6 +83,11 @@ export const ZONES: Record<Zone, ZoneInfo> = {
     name: 'オリーブ畑', resource: 'fat', form: '化合物', tint: ['#2f3b22', '#6f8a3c'], at: [76, 9, 2.6],
     about: '油脂は、グリセリン 1 分子と高級脂肪酸 3 分子からなるエステル。',
     exam: 'けん化価・ヨウ素価の計算、セッケンの性質（弱塩基性、硬水で沈殿）、硬化油。',
+  },
+  ranch: {
+    name: '牧場', resource: 'protein', form: '化合物', tint: ['#3a3326', '#a08a5c'], at: [28, 30, 2.4],
+    about: '肉・乳・卵に含まれるタンパク質は、多数の α-アミノ酸がペプチド結合でつながった天然高分子。',
+    exam: 'ビウレット反応、キサントプロテイン反応、硫黄の検出、変性、酵素による加水分解、アミノ酸の等電点。',
   },
 };
 

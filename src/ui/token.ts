@@ -80,6 +80,25 @@ export function drawToken(ctx: CanvasRenderingContext2D, id: string, x: number, 
   ctx.save();
   ctx.translate(x, y);
   ctx.scale(r, r);
+  if (s.mask) {
+    // 分析用の試料は、見た目では区別できない
+    ctx.beginPath();
+    ctx.arc(0, 0, 0.95, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(12,18,15,0.92)';
+    ctx.fill();
+    ctx.lineWidth = 0.12;
+    ctx.strokeStyle = s.color;
+    ctx.setLineDash([0.3, 0.2]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = s.color;
+    ctx.font = '700 1.25px "IBM Plex Mono", ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('?', 0, 0.08);
+    ctx.restore();
+    return;
+  }
   ctx.beginPath();
   if (id === 'e') ctx.arc(0, 0, 0.9, 0, Math.PI * 2);
   else if (s.state === 'solid') {

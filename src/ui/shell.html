@@ -1,6 +1,6 @@
 <div id="app" class="in-title">
   <canvas id="cv" aria-label="工場の地図"></canvas>
-  <section id="goal" aria-live="polite">
+  <section id="goal" role="button" tabindex="0" aria-label="指令。押すと章の一覧が開く">
     <div class="goal-top"><span id="goal-step"></span><span id="goal-count"></span></div>
     <div class="goal-main"><canvas id="goal-ico" width="88" height="88"></canvas><strong id="goal-name"></strong></div>
     <div class="track"><div id="goal-bar"></div></div>
@@ -9,6 +9,8 @@
   <div id="topbtns">
     <button type="button" id="b-undo">↶ 元に戻す</button>
     <button type="button" id="b-fit">全体</button>
+    <button type="button" id="b-speed">▶ ×1</button>
+    <button type="button" id="b-review">復習 <span id="due"></span></button>
     <button type="button" id="b-up">強化 <span id="pts">0</span></button>
     <button type="button" id="b-book">図鑑</button>
     <button type="button" id="b-menu">メニュー</button>
@@ -16,6 +18,7 @@
   <div id="act" hidden>
     <button type="button" id="act-open">設定</button>
     <button type="button" id="act-turn" aria-label="向きを変える">↻</button>
+    <button type="button" id="act-copy" aria-label="同じ設定で複製する">複</button>
     <button type="button" id="act-erase" aria-label="消す">✕</button>
   </div>
   <div id="toast" role="status" hidden></div>

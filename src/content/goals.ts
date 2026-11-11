@@ -6,6 +6,8 @@ export interface Goal {
   hint: string;
   /** 画面の縁に道しるべを出す資源地 */
   zone?: Zone;
+  /** 仕分け課題：この試料の組の別の物質を納品すると減点される */
+  strict?: string;
 }
 
 export interface Chapter { name: string; goals: Goal[] }
@@ -62,6 +64,46 @@ export const CHAPTERS: Chapter[] = [
     { s: 'C6H12O6', n: 10, hint: '南の農地のデンプンを、酵素で 2 段階に分解しろ。酵素は相手を選ぶ。', zone: 'farm' },
     { s: 'soap', n: 10, hint: '北東のオリーブ畑の油脂を、強塩基で加水分解しろ。', zone: 'grove' },
   ] },
+  { name: '第8章 気体の製法と捕集', goals: [
+    { s: 'jar-O2', n: 5, hint: '新しい装置「試薬棚」と「捕集器」。試薬棚の過酸化水素を分解して酸素を作り、正しい方法で集めろ。' },
+    { s: 'jar-NH3', n: 5, hint: '塩化アンモニウムと水酸化カルシウムを加熱しろ。乾燥剤を間違えるな。' },
+    { s: 'jar-Cl2', n: 5, hint: '酸化マンガン(IV)と濃塩酸。ここでの MnO₂ は触媒ではない。' },
+    { s: 'jar-H2S', n: 5, hint: '硫化鉄(II)と希硫酸。この気体は濃硫酸では乾燥できない。' },
+    { s: 'jar-NO', n: 5, hint: '銅と硝酸。酸の濃さで出てくる気体が変わる。' },
+    { s: 'jar-SO2', n: 5, hint: '銅と硫酸。希硫酸では溶けない。' },
+  ] },
+  { name: '第9章 金属イオンの分離', goals: [
+    { s: 'x-Ag', n: 8, strict: 'G', hint: '試薬棚で「試料 G」を選べ。見分けのつかない 4 種のイオンが流れてくる。分析器で検査して、銀イオンだけを納品しろ。違うものを納めると減点される。' },
+    { s: 'x-Cu', n: 8, strict: 'G', hint: '同じ試料 G から銅(II)イオンだけを取り出せ。検査は 1 つとは限らない。' },
+    { s: 'x-Al', n: 8, strict: 'H', hint: '試料 H。アンモニア水にも水酸化ナトリウム水溶液にも、少量と過剰で違いが出る。' },
+    { s: 'x-Zn', n: 8, strict: 'H', hint: '試料 H から亜鉛イオンを。錯イオンをつくって溶けるのはどれか。' },
+    { s: 'x-Ba', n: 8, strict: 'I', hint: '試料 I。沈殿をつくらないイオンは炎の色で見分けろ。' },
+    { s: 'x-K', n: 8, strict: 'I', hint: '試料 I からカリウムイオンを。' },
+  ] },
+  { name: '第10章 有機化合物の構造決定', goals: [
+    { s: 'x-2-butanol', n: 8, strict: 'A', hint: '試料 A は分子式 C₄H₁₀O の 5 種。2-ブタノールだけがもつ特徴を検査しろ。' },
+    { s: 'x-tbutanol', n: 8, strict: 'A', hint: '試料 A から 2-メチル-2-プロパノールを。第三級アルコールの性質を使え。検査を 2 つ直列につなぐ。' },
+    { s: 'x-ether', n: 8, strict: 'A', hint: '試料 A からジエチルエーテルを。陰性の側の出口を使え。' },
+    { s: 'x-acetone', n: 8, strict: 'B', hint: '試料 B は分子式 C₃H₆O の 3 種。ケトンを取り出せ。' },
+    { s: 'x-propanal', n: 8, strict: 'B', hint: '試料 B からアルデヒドを。' },
+    { s: 'x-benzyl', n: 8, strict: 'C', hint: '試料 C は芳香族 C₇H₈O の 3 種。ベンジルアルコールを。フェノール類との違いは。' },
+    { s: 'x-cresol', n: 8, strict: 'C', hint: '試料 C から o-クレゾールを。' },
+    { s: 'x-formate', n: 8, strict: 'D', hint: '試料 D は C₄H₈O₂ の 4 種。エステルなのに還元性を示すものがある。' },
+    { s: 'x-butyric', n: 8, strict: 'D', hint: '試料 D からカルボン酸を。' },
+  ] },
+  { name: '第11章 アミノ酸・染料・縮合重合・緩衝液', goals: [
+    { s: 'aa', n: 10, hint: '納品所の西の牧場でタンパク質を採り、酵素で 2 段階に分解しろ。', zone: 'ranch' },
+    { s: 'x-gly', n: 8, strict: 'E', hint: '試料 E は 6 種の α-アミノ酸。グリシンだけがもたないものは何か。' },
+    { s: 'x-cys', n: 8, strict: 'E', hint: '試料 E からシステインを。' },
+    { s: 'x-lys', n: 8, strict: 'E', hint: '試料 E から塩基性アミノ酸のリシンを。' },
+    { s: 'x-tripeptide', n: 8, strict: 'F', hint: '試料 F からトリペプチドを。ペプチド結合の数で決まる呈色がある。' },
+    { s: 'C6H5COOH', n: 5, hint: 'ナフサを別の触媒で処理するとトルエンが得られる。側鎖を酸化しろ。', zone: 'oil' },
+    { s: 'PET', n: 5, hint: 'p-キシレンからテレフタル酸、エチレンからエチレングリコール。水がとれながらつながる。' },
+    { s: 'nylon66', n: 5, hint: '2 種類の単量体は試薬棚にある。' },
+    { s: 'C6H5N2C6H4OH', n: 5, hint: 'アニリンをジアゾ化し、ナトリウムフェノキシドとカップリングさせろ。温度に注意。原料は試薬棚にもある。' },
+    { s: 'buffer47', n: 10, hint: '酢酸（Ka = 2.0×10⁻⁵ mol/L）と酢酸ナトリウムを混ぜて pH 4.7 にしろ。混ぜる比を係数で指定する。' },
+    { s: 'buffer57', n: 11, hint: '同じ 2 つで pH 5.7 の緩衝液を。比を計算しろ。' },
+  ] },
 ];
 
 export const GOALS: Goal[] = CHAPTERS.flatMap((c) => c.goals);
@@ -72,3 +114,4 @@ export function chapterOf(goalIndex: number): { name: string; index: number; of:
 }
 /** 何番目の指令で始まる章か */
 export const chapterStart = (ch: number) => CHAPTERS.slice(0, ch).reduce((a, c) => a + c.goals.length, 0);
+export const TOTAL_GOALS = GOALS.length;
