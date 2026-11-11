@@ -1,5 +1,7 @@
 import { normalizeFormula, parseFormula, pretty } from '../chem/formula';
 import { ION_LABEL, ionsOf } from './ions';
+import { ORG as ORGANICS, aqOf, orgOf } from './extract';
+import { AMINO, aminoOf } from './phoresis';
 import { element } from './elements';
 
 export type State = 'gas' | 'liquid' | 'solid';
@@ -52,6 +54,9 @@ export const SUBSTANCES: Substance[] = [
   M('bauxite', 'ボーキサイト', 'solid', ['Al', 'O', 'Fe']),
   M('starch', 'デンプン', 'solid', ['C', 'H', 'O']),
   M('fat', '油脂', 'liquid', ['C', 'H', 'O', 'O']),
+  // ---- 抽出・電気泳動で分ける物質 ----
+  F('C6H5COONa', '安息香酸ナトリウム', 'solid'),
+  M('Glu', 'グルタミン酸', 'solid', ['C', 'N', 'O', 'O'], true), M('Ala', 'アラニン', 'solid', ['C', 'N', 'O'], true), M('Lys', 'リシン', 'solid', ['C', 'N', 'N', 'O'], true),
   // ---- 系統分離で生じる、まじりの沈殿 ----
   M('mud-cl', 'AgCl と PbCl₂ のまじった沈殿', 'solid', ['Ag', 'Pb', 'Cl']),
   M('mud-oh', 'Fe(OH)₃ と Al(OH)₃ のまじった沈殿', 'solid', ['Fe', 'Al', 'O']),
@@ -328,12 +333,15 @@ const byId = new Map(SUBSTANCES.map((s) => [s.id, s]));
 const byText = new Map<string, Substance>();
 for (const s of SUBSTANCES) for (const t of [s.formula, ...(s.aliases ?? [])]) if (t) byText.set(t, s);
 
-/** 金属イオンの混合溶液（'ions:Ag.Cu' など）。組み合わせが多いので、一覧には持たず、求められたときに作る */
+/** 分ける前の混合物（'ions:Ag.Cu'、'org:An.Nb'、'aq:Bz.Ph'、'amino:Glu.Lys' など）。組み合わせが多いので、一覧には持たず、求められたときに作る */
 function ionMix(id: string): Substance | null {
-  const keys = ionsOf(id);
-  if (!keys) return null;
-  const s: Substance = { id, name: `${keys.map((k) => ION_LABEL[k]).join('・')} の溶液`, state: 'liquid', rep: keys, color: tint(keys) };
-  byId.set(id, s);
+  let s: Substance | null = null;
+  const ions = ionsOf(id), org = orgOf(id), aq = aqOf(id), amino = aminoOf(id);
+  if (ions) s = { id, name: `${ions.map((k) => ION_LABEL[k]).join('・')} の溶液`, state: 'liquid', rep: ions, color: tint(ions) };
+  else if (org) s = { id, name: `${org.map((k) => ORGANICS[k].name).join('・')} のエーテル溶液`, state: 'liquid', rep: ['C', 'H', ...(org.includes('An') || org.includes('Nb') ? ['N'] : []), ...(org.some((k) => k !== 'An') ? ['O'] : [])], color: ORG };
+  else if (aq) s = { id, name: `${aq.map((k) => ORGANICS[k].saltName).join('・')} の水溶液`, state: 'liquid', rep: ['Na', 'C', 'O'], color: tint(['Na']) };
+  else if (amino) s = { id, name: `${amino.map((k) => AMINO[k].name).join('・')} の水溶液`, state: 'liquid', rep: ['C', 'N', 'O'], color: AMI };
+  if (s) byId.set(id, s);
   return s;
 }
 export function sub(id: string): Substance {

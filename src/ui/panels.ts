@@ -12,7 +12,10 @@ import { pretty } from '../chem/formula';
 import { TANK_CAP, RESEARCH, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, SIGNALS, signalOn, doResearch, has, researchBlock, tierNeed, LINES, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { researchById } from '../content/research';
 import { appearance, lookOf } from '../content/looks';
-import { AGENTS, ION_LABEL, ION_ORDER, MIXES, agentById, refusal, settleable, type Agent } from '../content/ions';
+import { AGENTS, ION_LABEL, ION_ORDER, MIXES } from '../content/ions';
+import { ORG as ORGANICS, ORG_MIXES, WASHES } from '../content/extract';
+import { AMINO, AMINO_MIXES, AMINO_ORDER, PH_MAX, PH_MIN, PI_BAND, POLE_NAME, phOf, poleAt, type AminoKey, type Pole } from '../content/phoresis';
+import { sepAccepts, sepRefusal } from '../content/sep';
 import { chip, equation, openConfig, type SheetActions } from './config';
 import { h } from './dom';
 import { sfx } from './sound';
@@ -305,6 +308,12 @@ export function showSampler(c: PanelCtx, e: Ent, extra: HTMLElement) {
     h('h3', {}, '金属イオンの混合溶液（沈殿槽で系統分離する）'),
     h('div', { class: 'menu' }, ...MIXES.map((m, i) => h('button', { class: 'ghost' + (e.sub === m.id ? ' picked' : ''), type: 'button', id: `mix-${i}`, onclick: () => pick(m.id) },
       h('b', {}, m.name), h('span', { class: 'muted' }, `　${m.ions.map((k) => ION_LABEL[k]).join('・')}`)))),
+    h('h3', {}, '芳香族化合物のエーテル溶液（分液ろうとで抽出する）'),
+    h('div', { class: 'menu' }, ...ORG_MIXES.map((m, i) => h('button', { class: 'ghost' + (e.sub === m.id ? ' picked' : ''), type: 'button', id: `orgmix-${i}`, onclick: () => pick(m.id) },
+      h('b', {}, m.name), h('span', { class: 'muted' }, `　${m.keys.map((k) => ORGANICS[k].name).join('・')}`)))),
+    h('h3', {}, 'アミノ酸の混合水溶液（電気泳動槽で分ける）'),
+    h('div', { class: 'menu' }, ...AMINO_MIXES.map((m, i) => h('button', { class: 'ghost' + (e.sub === m.id ? ' picked' : ''), type: 'button', id: `aminomix-${i}`, onclick: () => pick(m.id) },
+      h('b', {}, m.name), h('span', { class: 'muted' }, `　${m.keys.map((k) => `${AMINO[k].name}（等電点 ${AMINO[k].pI.toFixed(1)}）`).join('・')}`)))),
     h('h3', {}, '実験室の試薬'),
     h('div', { class: 'chips' }, ...REAGENTS.map((r) => { const b = chip(r, e.sub === r ? 'on' : ''); b.id = `reagent-${r}`; b.title = sub(r).name; b.onclick = () => pick(r); return b; })),
     h('p', { class: 'muted' }, '試薬棚から出したものを、そのまま納品所へ運んでも指令には数えない。反応させてできたものは数える。'),
@@ -337,40 +346,62 @@ export function showAnalyzer(c: PanelCtx, e: Ent, extra: HTMLElement) {
     extra);
 }
 
-// ---------------- 沈殿槽（金属イオンの系統分離）----------------
+// ---------------- 分ける装置：沈殿槽（金属イオンの系統分離）・分液ろうと（芳香族の抽出）----------------
+
+/** 試薬を 1 つ選んで使う装置の、画面に出す形 */
+interface AgentView { id: string; name: string; tag: string; quiz?: { text: string; pool: string[]; answer: string[] }; note: string; chips: [string, string][] }
+const SEP_VIEW: Record<'settler' | 'funnel', { title: string; pick: string; lead: string; ports: string; only: string; agents: AgentView[] }> = {
+  settler: {
+    title: '沈殿槽', pick: '加える試薬',
+    lead: '1 台に 1 つ。初めて使う試薬は、何が沈殿するかを答えてから使える。試薬を正しい順に並べれば、イオンは 1 種類ずつ取り出せる。',
+    ports: 'ろ液は正面（左）の出口、沈殿は右手（手前）の出口から出る。沈殿槽を一列に並べると、ろ液がまっすぐ次の槽へ流れ、沈殿が横へ出ていく。',
+    only: '沈殿槽に入れられるのは、金属イオンの混合溶液と、まじりの沈殿だけだ。',
+    agents: AGENTS.map((a) => ({ id: a.id, name: a.name, quiz: a.quiz, note: a.note,
+      tag: a.group ? `第 ${a.group} 属` : a.dissolve && !Object.keys(a.ppt).length ? '溶かし分け' : a.dissolve ? '溶かし分けにも使う' : '確認',
+      chips: ION_ORDER.filter((k) => a.ppt[k]).map((k) => [a.ppt[k]!, `${ION_LABEL[k]} → ${appearance(a.ppt[k]!)}`] as [string, string]) })),
+  },
+  funnel: {
+    title: '分液ろうと', pick: '加えるもの・操作',
+    lead: '1 台に 1 つ。初めて使う水溶液は、何が水層へ移るかを答えてから使える。',
+    ports: 'エーテル層（上層）は正面（左）の出口、水層（下層）は右手（手前）の出口から出る。水層に出た塩は、反応器で酸や塩基を加えると元の化合物に戻る。',
+    only: '分液ろうとに入れられるのは、芳香族化合物のエーテル溶液と、その塩の水溶液だけだ。',
+    agents: WASHES.map((a) => ({ id: a.id, name: a.name, quiz: a.quiz, note: a.note, tag: a.id === 'x-evap' ? '取り出す' : a.id === 'x-co2' ? '水層に使う' : 'エーテル層に使う',
+      chips: a.moves.map((k) => [ORGANICS[k].salt!, `${ORGANICS[k].name} → ${ORGANICS[k].saltName}`] as [string, string]) })),
+  },
+};
 
 export function showSettler(c: PanelCtx, e: Ent, extra: HTMLElement) {
   const { w } = c, again = () => showSettler(c, e, extra);
-  const a = agentById(e.test);
+  const kind = e.kind as 'settler' | 'funnel', V = SEP_VIEW[kind], a = V.agents.find((x) => x.id === e.test);
   const waiting = [...(e.buf ?? []), ...(e.buf2 ?? [])];
-  const why = e.bad ? (a && settleable(e.bad) ? refusal(e.bad, a) : null) ?? `${label(e.bad)} は受け取れない。沈殿槽に入れられるのは、金属イオンの混合溶液と、まじりの沈殿だけだ。` : '';
-  const state = !a ? '試薬が決まっていない。下から選べ。' : e.bad ? why : e.busy ? `${label(e.item!.s)} に ${a.name} を加えている。` : waiting.length ? `出口が詰まっている（${waiting.map((x) => label(x)).join('、')}）。ろ液は正面、沈殿は右手から出る。` : '溶液を待っている。';
-  const choose = (ag: Agent) => {
-    if (w.agents.includes(ag.id)) { e.test = ag.id; e.bad = undefined; sfx.ok(); again(); return; }
+  const why = e.bad ? (a && sepAccepts(kind, e.bad) ? sepRefusal(kind, e.bad, e.test) : null) ?? `${label(e.bad)} は受け取れない。${V.only}` : '';
+  const state = !a ? '何を加えるかが決まっていない。下から選べ。' : e.bad ? why : e.busy ? `${label(e.item!.s)} に ${a.name}。` : waiting.length ? `出口が詰まっている（${waiting.map((x) => label(x)).join('、')}）。` : '溶液を待っている。';
+  const choose = (ag: AgentView) => {
+    if (!ag.quiz || w.agents.includes(ag.id)) { e.test = ag.id; e.bad = undefined; sfx.ok(); again(); return; }
     askAgent(c, e, ag, extra);
   };
-  c.show(h('header', {}, h('h2', {}, '沈殿槽'), closeBtn(c)),
-    a ? h('p', { class: 'eq' }, `試薬：${a.name}` + (a.group ? `　（第 ${a.group} 属を沈殿させる）` : '')) : null,
+  c.show(h('header', {}, h('h2', {}, V.title), closeBtn(c)),
+    a ? h('p', { class: 'eq' }, `${a.name}` + (a.tag ? `　（${a.tag}）` : '')) : null,
     h('p', { class: 'status', id: 'settler-status' }, state),
     a ? h('p', { class: 'note' }, a.note) : null,
-    a ? h('div', { class: 'chips' }, ...ION_ORDER.filter((k) => a.ppt[k]).map((k) => { const b = chip(a.ppt[k]!); b.disabled = true; b.append(h('span', { class: 'muted' }, `${ION_LABEL[k]} → ${appearance(a.ppt[k]!)}`)); return b; })) : null,
-    h('h3', {}, '加える試薬'),
-    h('p', { class: 'muted' }, '1 台に 1 つ。初めて使う試薬は、何が沈殿するかを答えてから使える。試薬を正しい順に並べれば、イオンは 1 種類ずつ取り出せる。'),
-    h('div', { class: 'menu' }, ...AGENTS.map((ag) => h('button', { class: 'ghost' + (e.test === ag.id ? ' picked on' : ''), type: 'button', id: `agent-${ag.id}`, onclick: () => choose(ag) },
-      h('b', {}, ag.name), h('span', { class: 'muted' }, `　${ag.group ? `第 ${ag.group} 属` : ag.dissolve && !Object.keys(ag.ppt).length ? '溶かし分け' : ag.dissolve ? '溶かし分けにも使う' : '確認'}${w.agents.includes(ag.id) ? '' : '　（まだ使ったことがない）'}`)))),
-    h('p', { class: 'muted' }, 'ろ液は正面（左）の出口、沈殿は右手（手前）の出口から出る。沈殿槽を一列に並べると、ろ液がまっすぐ次の槽へ流れ、沈殿が横へ出ていく。'),
+    a && a.chips.length ? h('div', { class: 'chips' }, ...a.chips.map(([id, text]) => { const b = chip(id); b.disabled = true; b.append(h('span', { class: 'muted' }, text)); return b; })) : null,
+    h('h3', {}, V.pick),
+    h('p', { class: 'muted' }, V.lead),
+    h('div', { class: 'menu' }, ...V.agents.map((ag) => h('button', { class: 'ghost' + (e.test === ag.id ? ' picked on' : ''), type: 'button', id: `agent-${ag.id}`, onclick: () => choose(ag) },
+      h('b', {}, ag.name), h('span', { class: 'muted' }, `　${ag.tag}${!ag.quiz || w.agents.includes(ag.id) ? '' : '　（まだ使ったことがない）'}`)))),
+    h('p', { class: 'muted' }, V.ports),
     extra);
 }
 
-function askAgent(c: PanelCtx, e: Ent, ag: Agent, extra: HTMLElement, fails = 0, picked = new Set<string>(), msg = '') {
-  const { w } = c;
+function askAgent(c: PanelCtx, e: Ent, ag: AgentView, extra: HTMLElement, fails = 0, picked = new Set<string>(), msg = '') {
+  const { w } = c, quiz = ag.quiz!;
   const redo = (m: string, f = fails) => askAgent(c, e, ag, extra, f, picked, m);
   const submit = () => {
-    const ok = picked.size === ag.quiz.answer.length && ag.quiz.answer.every((x) => picked.has(x));
+    const ok = picked.size === quiz.answer.length && quiz.answer.every((x) => picked.has(x));
     if (!ok) {
       w.mistakes.push({ machine: 'analysis', recipe: `sep:${ag.id}`, part: 'quiz', t: Date.now() });
       sfx.bad();
-      redo(fails >= 1 ? '違う。下の解説を読んでから、もう一度選べ。' : '違う。多すぎるか、足りない。沈殿する理由を 1 つずつ考えろ。', fails + 1);
+      redo(fails >= 1 ? '違う。下の解説を読んでから、もう一度選べ。' : '違う。多すぎるか、足りない。理由を 1 つずつ考えろ。', fails + 1);
       return;
     }
     w.agents.push(ag.id);
@@ -381,11 +412,49 @@ function askAgent(c: PanelCtx, e: Ent, ag: Agent, extra: HTMLElement, fails = 0,
     showSettler(c, e, extra);
   };
   c.show(h('header', {}, h('h2', {}, ag.name), h('button', { class: 'ghost', type: 'button', id: 'agent-back', onclick: () => showSettler(c, e, extra) }, '戻る')),
-    h('p', { class: 'qtext' }, ag.quiz.text),
-    h('div', { class: 'chips' }, ...ag.quiz.pool.map((x, i) => h('button', { class: 'chip plain' + (picked.has(x) ? ' on' : ''), type: 'button', id: `agent-opt-${i}`, onclick: () => { if (picked.has(x)) picked.delete(x); else picked.add(x); sfx.tap(); redo(''); } }, x))),
+    h('p', { class: 'qtext' }, quiz.text),
+    h('div', { class: 'chips' }, ...quiz.pool.map((x, i) => h('button', { class: 'chip plain' + (picked.has(x) ? ' on' : ''), type: 'button', id: `agent-opt-${i}`, onclick: () => { if (picked.has(x)) picked.delete(x); else picked.add(x); sfx.tap(); redo(''); } }, x))),
     msg ? h('p', { class: 'feedback', id: 'agent-msg' }, msg) : null,
     fails >= 2 ? h('p', { class: 'note' }, ag.note) : null,
     h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'agent-ok', onclick: submit }, '答える')));
+}
+
+// ---------------- 電気泳動槽（アミノ酸）----------------
+
+export function showPhoresis(c: PanelCtx, e: Ent, extra: HTMLElement, draft?: number, guess: Partial<Record<AminoKey, Pole>> = {}, msg = '') {
+  const { w } = c, cur = phOf(e.test), pH = draft ?? cur ?? 7, changing = draft !== undefined && draft !== cur;
+  const again = (d?: number, g = guess, m = '') => showPhoresis(c, e, extra, d, g, m);
+  const waiting = [...(e.buf ?? []), ...(e.buf2 ?? []), ...(e.buf3 ?? [])];
+  const state = cur === null ? 'pH が決まっていない。下で決めろ。' : e.bad ? `${label(e.bad)} は受け取れない。電気泳動槽に入れられるのは、アミノ酸の水溶液だけだ。` : e.busy ? `${label(e.item!.s)} に電圧をかけている。` : waiting.length ? `出口が詰まっている（${waiting.map((x) => label(x)).join('、')}）。` : '溶液を待っている。';
+  const submit = () => {
+    const ok = AMINO_ORDER.every((k) => guess[k] === poleAt(k, pH));
+    if (!ok) {
+      w.mistakes.push({ machine: 'analysis', recipe: 'sep:phoresis', part: 'quiz', t: Date.now() });
+      sfx.bad();
+      again(pH, guess, '違う。pH が等電点より小さいか大きいかを、1 つずつ比べろ。等電点より酸性側では H⁺ を受け取って陽イオンになる。');
+      return;
+    }
+    const first = !w.agents.includes('phoresis');
+    if (first) { w.agents.push('phoresis'); w.points += 12; }
+    e.test = String(pH); e.bad = undefined;
+    sfx.ok();
+    c.toast(first ? '正解。電気泳動槽が使えるようになった。研究点 +12。' : `正解。pH ${pH} にした。`, 2800);
+    showPhoresis(c, e, extra);
+  };
+  const step = (d: number) => h('button', { class: 'stepper', type: 'button', id: d < 0 ? 'ph-down' : 'ph-up', onclick: () => { sfx.tap(); again(Math.max(PH_MIN, Math.min(PH_MAX, pH + d)), {}, ''); } }, d < 0 ? '−' : '＋');
+  c.show(h('header', {}, h('h2', {}, '電気泳動槽'), closeBtn(c)),
+    cur !== null ? h('p', { class: 'eq' }, `pH ${cur}`) : null,
+    h('p', { class: 'status', id: 'phoresis-status' }, state),
+    h('h3', {}, '① pH を決める'),
+    h('div', { class: 'row' }, step(-1), h('b', { class: 'formula big', id: 'ph-value' }, `pH ${pH}`), step(1)),
+    h('h3', {}, '② この pH で、それぞれがどちらへ動くかを答える'),
+    h('p', { class: 'muted' }, '等電点：' + AMINO_ORDER.map((k) => `${AMINO[k].name} ${AMINO[k].pI.toFixed(1)}`).join('、') + `。等電点との差が ${PI_BAND} 以内なら「動かない」とする。`),
+    ...AMINO_ORDER.map((k) => h('div', { class: 'row' }, h('span', { class: 'tag wide' }, AMINO[k].name),
+      ...(['cathode', 'stay', 'anode'] as Pole[]).map((p) => h('button', { class: 'chip plain' + (guess[k] === p ? ' on' : ''), type: 'button', id: `ph-${k}-${p}`, onclick: () => { sfx.tap(); again(pH, { ...guess, [k]: p }, ''); } }, POLE_NAME[p])))),
+    msg ? h('p', { class: 'feedback', id: 'ph-msg' }, msg) : null,
+    h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'ph-ok', disabled: !AMINO_ORDER.every((k) => guess[k]), onclick: submit }, changing || cur === null ? `pH ${pH} にする` : 'もう一度確かめる')),
+    h('p', { class: 'muted' }, '動かないものは正面（左）、陽極へ動くものは右手（手前）、陰極へ動くものは左手（手前）の出口から出る。酸性アミノ酸は等電点が小さく、塩基性アミノ酸は等電点が大きい。'),
+    extra);
 }
 
 // ---------------- 貯蔵タンク ----------------

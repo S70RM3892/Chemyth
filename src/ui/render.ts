@@ -9,6 +9,9 @@ import { districtsOf, type District } from '../engine/districts';
 import { equationOf, hexOf, reactionLookById } from '../content/looks';
 import { recipeById } from '../content/recipes';
 import { agentById, ionsOf, settle } from '../content/ions';
+import { washById } from '../content/extract';
+import { AMINO_ORDER, aminoOf, phOf, poleAt, type AminoKey } from '../content/phoresis';
+import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/sep';
 
 export interface Camera { x: number; y: number; z: number }
 export interface View { /** 見ている階（0 が 1 階） */ floor?: number; tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string; /** 出口（out）と入口の場所。d は物が流れる向き */ ports?: { x: number; y: number; d: number; out: boolean }[] }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null }
@@ -682,7 +685,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       const info = MACHINES[e.kind as keyof typeof MACHINES], px0 = sx(e.x) + z * 0.08, py0 = sy(e.y) + z * 0.08, ps = sz * z - z * 0.16;
       ctx.fillStyle = info.color; ctx.fillRect(px0, py0, ps, ps);
       ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = Math.max(1, z * 0.07); ctx.strokeRect(px0, py0, ps, ps);
-      const needs = (isMachine(e.kind) && !e.recipe) || ((e.kind === 'analyzer' || e.kind === 'settler') && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
+      const needs = (isMachine(e.kind) && !e.recipe) || ((e.kind === 'analyzer' && !e.test) || (isSep(e.kind) && !sepReady(e.kind, e.test))) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
       const jam = (e.stuck || 0) > 2.5 || !!e.bad;
       if (needs || jam || e.busy) { ctx.fillStyle = needs || jam ? P.red : '#58e06a'; ctx.fillRect(px0 + ps * 0.3, py0 + ps * 0.3, ps * 0.4, ps * 0.4); }
       continue;
@@ -1234,7 +1237,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
   else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), P.plate);
   else if (e.kind === 'station') { if (e.role === 'out') for (const i of [0, 1]) { const p = slotPort(e, i); port(p.d, P.plate, undefined, p.x + 0.5 - mx, p.y + 0.5 - my); } }
   else if (e.kind === 'tank') for (const i of [0, 1]) { const p = slotPort(e, i); port(p.d, P.plate, undefined, p.x + 0.5 - mx, p.y + 0.5 - my); }
-  else if (e.kind === 'settler') { if (e.test) for (const [i, tx] of [[0, 'ろ液'], [2, '沈殿']] as [number, string][]) { const p = slotPort(e, i); port(p.d, i ? '#c9b27a' : '#9fd0e6', tx, p.x + 0.5 - mx, p.y + 0.5 - my); } }
+  else if (isSep(e.kind)) { if (sepReady(e.kind, e.test)) sepSlots(e.kind).forEach((i, k) => { const p = slotPort(e, i); port(p.d, ['#9fd0e6', '#c9b27a', '#b9a0d6'][k], SEP_PORTS[e.kind as SepKind][k], p.x + 0.5 - mx, p.y + 0.5 - my); }); }
   else if (e.outOrder) e.outOrder.forEach((s2, i) => { const p = outPort(e, i); port(p.d, sub(s2).color, label(s2), p.x + 0.5 - mx, p.y + 0.5 - my, s2); });
   else if (unset) { const p = slotPort(e, 0); port(p.d, P.plate, undefined, p.x + 0.5 - mx, p.y + 0.5 - my); }
   if (e.kind === 'electrolyzer' && e.big) poleMarks(ctx, P, e, cx, cy, pu, line);
@@ -1242,7 +1245,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
 
   // 赤ペンの印：設定が要る「？」、詰まっている「！」
   const jam = (e.stuck || 0) > 2.5 || !!e.bad || (e.kind === 'station' && e.role === 'out' && (e.buf?.length ?? 0) >= STATION_CAP);
-  const needs = unset || ((e.kind === 'analyzer' || e.kind === 'settler') && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
+  const needs = unset || ((e.kind === 'analyzer' && !e.test) || (isSep(e.kind) && !sepReady(e.kind, e.test))) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
   if (needs || jam) {
     if (needs) {
       ctx.strokeStyle = P.red; ctx.lineWidth = line * 1.2;
@@ -1269,7 +1272,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
 function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, z: number, e: Ent, t: number) {
   const info = MACHINES[e.kind as keyof typeof MACHINES], light = P.name === 'light';
   const unset = isMachine(e.kind) && !e.recipe;
-  const needs = unset || ((e.kind === 'analyzer' || e.kind === 'settler') && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
+  const needs = unset || ((e.kind === 'analyzer' && !e.test) || (isSep(e.kind) && !sepReady(e.kind, e.test))) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
   const jam = (e.stuck || 0) > 2.5 || !!e.bad || (e.kind === 'station' && e.role === 'out' && (e.buf?.length ?? 0) >= STATION_CAP), busy = !!e.busy;
   const line = Math.max(1.5, u * 0.05), a = u * 0.46, c = u * 0.14, INK = '#0b0d10';
   ctx.lineJoin = 'miter';
@@ -1322,7 +1325,7 @@ function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: 
     else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), '#eef0ea');
     else if (e.kind === 'station') { if (e.role === 'out') for (const i of [0, 1]) { const p = slotPort(e, i); port(p.d, '#eef0ea', undefined, p.x + 0.5 - mx, p.y + 0.5 - my); } }
     else if (e.kind === 'tank') for (const i of [0, 1]) { const p = slotPort(e, i); port(p.d, '#eef0ea', undefined, p.x + 0.5 - mx, p.y + 0.5 - my); }
-    else if (e.kind === 'settler') { if (e.test) for (const [i, tx] of [[0, 'ろ液'], [2, '沈殿']] as [number, string][]) { const p = slotPort(e, i); port(p.d, i ? '#c9b27a' : '#9fd0e6', tx, p.x + 0.5 - mx, p.y + 0.5 - my); } }
+    else if (isSep(e.kind)) { if (sepReady(e.kind, e.test)) sepSlots(e.kind).forEach((i, k) => { const p = slotPort(e, i); port(p.d, ['#9fd0e6', '#c9b27a', '#b9a0d6'][k], SEP_PORTS[e.kind as SepKind][k], p.x + 0.5 - mx, p.y + 0.5 - my); }); }
     else if (e.outOrder) e.outOrder.forEach((s2, i) => { const p = outPort(e, i); port(p.d, sub(s2).color, label(s2), p.x + 0.5 - mx, p.y + 0.5 - my, s2); });
     else if (unset) { const p = slotPort(e, 0); port(p.d, '#eef0ea', undefined, p.x + 0.5 - mx, p.y + 0.5 - my); }
   };
@@ -1575,6 +1578,48 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
       }
       break;
     }
+    case 'funnel': {
+      // 分液ろうと：上にエーテル層、下に水層。振ると、塩になったものが下の層へ移る
+      const a = washById(e.test), top = cy - u * 0.3, hh = u * 0.52, wd = u * 0.4;
+      const shape = () => { ctx.beginPath(); ctx.moveTo(cx - wd * 0.28, top); ctx.lineTo(cx + wd * 0.28, top); ctx.quadraticCurveTo(cx + wd * 0.62, top + hh * 0.35, cx + wd * 0.1, top + hh); ctx.lineTo(cx - wd * 0.1, top + hh); ctx.quadraticCurveTo(cx - wd * 0.62, top + hh * 0.35, cx - wd * 0.28, top); ctx.closePath(); };
+      shape(); ctx.fillStyle = P.plate; ctx.fill();
+      if (e.item) {
+        const k = busy ? Math.min(1, e.prog || 0) : 0, sh = busy ? Math.sin(t * 16) * u * 0.012 * (1 - k) : 0, mid = top + hh * 0.52 + sh;
+        ctx.save(); shape(); ctx.clip();
+        ctx.fillStyle = '#e9d9a0'; ctx.fillRect(cx - wd, top + hh * 0.14, wd * 2, hh);            // エーテル層（上）
+        ctx.fillStyle = '#bcdff0'; ctx.fillRect(cx - wd, mid, wd * 2, hh);                           // 水層（下）
+        if (busy) for (let i = 0; i < 6; i++) { const f = cyc(t, i + e.x, 1.1); disc(cx + (((i * 0.37) % 1) - 0.5) * wd * 0.7, top + hh * 0.2 + hh * 0.6 * f, u * 0.018); ctx.fillStyle = i % 2 ? '#e9d9a0' : '#bcdff0'; ctx.fill(); }
+        ctx.strokeStyle = P.ink; ctx.lineWidth = Math.max(0.8, line * 0.45); ctx.beginPath(); ctx.moveTo(cx - wd, mid); ctx.lineTo(cx + wd, mid); ctx.stroke();
+        ctx.restore();
+      }
+      shape(); ctx.strokeStyle = P.ink; ctx.lineWidth = line; ctx.stroke();
+      // 栓とコック
+      rr(ctx, cx - wd * 0.14, top - u * 0.07, wd * 0.28, u * 0.07, u * 0.015); ctx.fillStyle = P.plate; ctx.fill(); ctx.stroke();
+      ctx.lineWidth = line * 0.9; ctx.beginPath(); ctx.moveTo(cx, top + hh); ctx.lineTo(cx, top + hh + u * 0.1); ctx.moveTo(cx - u * 0.06, top + hh + u * 0.035); ctx.lineTo(cx + u * 0.06, top + hh + u * 0.035); ctx.stroke();
+      if (a && u >= 84) sepTag(ctx, P, a.name.slice(0, 9), cx, top + hh + u * 0.15, u, line);
+      break;
+    }
+    case 'phoresis': {
+      // 電気泳動槽：ろ紙の帯の両端に電極。陽イオンは陰極（左）へ、陰イオンは陽極（右）へ動く
+      const pH = phOf(e.test), wd = u * 0.62, hh = u * 0.2, x0 = cx - wd / 2, y0 = cy - hh / 2;
+      rr(ctx, x0, y0, wd, hh, u * 0.03); ctx.fillStyle = P.plate; ctx.fill(); ctx.strokeStyle = P.ink; ctx.lineWidth = line; ctx.stroke();
+      const keys = e.item ? aminoOf(e.item.s) ?? ((AMINO_ORDER as string[]).includes(e.item.s) ? [e.item.s as AminoKey] : []) : [];
+      const k = busy ? Math.min(1, e.prog || 0) : 0;
+      keys.forEach((key, i) => {
+        const pole = pH === null ? 'stay' : poleAt(key, pH), dx = pole === 'cathode' ? -1 : pole === 'anode' ? 1 : 0;
+        disc(cx + dx * wd * 0.36 * k, y0 + hh * (0.3 + 0.2 * i), u * 0.035);
+        ctx.fillStyle = ['#d86a5a', '#7ab86a', '#5a8ad8'][AMINO_ORDER.indexOf(key)]; ctx.fill(); ctx.strokeStyle = P.ink; ctx.lineWidth = Math.max(0.6, line * 0.35); ctx.stroke();
+      });
+      // 電極と電源
+      ctx.lineWidth = u * 0.05; ctx.lineCap = 'butt'; ctx.strokeStyle = P.ink;
+      for (const sx2 of [-1, 1]) { ctx.beginPath(); ctx.moveTo(cx + sx2 * wd * 0.46, y0 - u * 0.1); ctx.lineTo(cx + sx2 * wd * 0.46, y0 + hh + u * 0.02); ctx.stroke(); }
+      ctx.lineCap = 'round'; ctx.lineWidth = line * 0.7;
+      ctx.beginPath(); ctx.moveTo(cx - wd * 0.46, y0 - u * 0.1); ctx.lineTo(cx - wd * 0.46, y0 - u * 0.18); ctx.lineTo(cx + wd * 0.46, y0 - u * 0.18); ctx.lineTo(cx + wd * 0.46, y0 - u * 0.1); ctx.stroke();
+      ctx.fillStyle = P.ink; ctx.font = `700 ${u * 0.12}px ${FONT_MONO}`; ctx.textAlign = 'center';
+      ctx.fillText('−', cx - wd * 0.46, y0 + hh + u * 0.15); ctx.fillText('+', cx + wd * 0.46, y0 + hh + u * 0.15);
+      if (pH !== null && u >= 70) sepTag(ctx, P, `pH ${pH}`, cx, y0 + hh + u * 0.1, u, line);
+      break;
+    }
     case 'tank': {
       // 貯蔵タンク：中身の色で、たまっている量だけ満ちる
       const n = (e.cnt || 0) + (e.rcn || 0), k = Math.min(1, n / TANK_CAP), wd = u * 0.46, hh = u * 0.6, x0 = cx - wd / 2, y0 = cy - hh / 2;
@@ -1654,6 +1699,13 @@ function smokeTint(recipe: string | undefined): string | undefined {
   if (!L) return undefined;
   const c = L.gasPhase ? L.after : L.gases.find((g) => g !== '#e4ecf1');
   return c && c !== '#e4ecf1' ? c : undefined;
+}
+/** 装置の下に出す、短い札（試薬の名前や pH） */
+function sepTag(ctx: CanvasRenderingContext2D, P: Palette, text: string, cx: number, y: number, u: number, line: number) {
+  ctx.font = `700 ${Math.max(8, u * 0.07)}px ${FONT_UI}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const tw = ctx.measureText(text).width + u * 0.05, th = Math.max(11, u * 0.095);
+  rr(ctx, cx - tw / 2, y - th / 2, tw, th, th * 0.3); ctx.fillStyle = P.plate; ctx.fill(); ctx.strokeStyle = P.ink; ctx.lineWidth = Math.max(0.8, line * 0.45); ctx.stroke();
+  ctx.fillStyle = P.ink; ctx.fillText(text, cx, y + 0.5); ctx.textBaseline = 'alphabetic';
 }
 /** 色の明るさ（0〜1）。濃い色の上には白、淡い色の上には墨で描くために使う */
 const lum = (hex: string) => (0.299 * parseInt(hex.slice(1, 3), 16) + 0.587 * parseInt(hex.slice(3, 5), 16) + 0.114 * parseInt(hex.slice(5, 7), 16)) / 255;

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { ORG_MIXES, WASHES, extract, extractReachable, extractRefusal, washById } from '../src/content/extract';
+import { AMINO, AMINO_MIXES, migrate, migrateReachable, poleAt } from '../src/content/phoresis';
 import { AGENTS, ION_ORDER, MIXES, MUD_CL, MUD_OH, SLUDGE, agentById, ionsId, ionsOf, reachableFrom, refusal, settle } from '../src/content/ions';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
 import { RAIL_BOOST, addRail, layRail, railRoute, removeRail, stationRoutes, STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, goalRate, reactionsPerMin, stationTargets, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
@@ -70,6 +72,8 @@ describe('内容データ', () => {
     const have = new Set<string>(['air', ...Object.values(ZONES).map((z) => z.resource), ...REAGENTS, ...SETS.flatMap((x) => x.members)]);
     // 試薬棚の混合溶液から、沈殿槽で作れるもの
     for (const m of MIXES) for (const x of reachableFrom(m.id)) have.add(x);
+    for (const m of ORG_MIXES) for (const x of extractReachable(m.id)) have.add(x);
+    for (const m of AMINO_MIXES) for (const x of migrateReachable(m.id)) have.add(x);
     for (let grew = true; grew;) {
       grew = false;
       for (const r of RECIPES) {
@@ -84,7 +88,7 @@ describe('内容データ', () => {
   it('章と指令の対応', () => {
     expect(GOALS.length).toBe(CHAPTERS.reduce((a, c) => a + c.goals.length, 0));
     expect(chapterOf(0)?.name).toContain('第1章');
-    expect(chapterOf(GOALS.length - 1)?.name).toContain('第22章');
+    expect(chapterOf(GOALS.length - 1)?.name).toContain('第24章');
     expect(CHAPTERS[MACHINES.settler.chapter!].name).toContain('系統分離');
     expect(CHAPTERS[13].name).toContain('総合演習');
     expect(CHAPTERS[13].goals.length).toBeGreaterThan(60);
@@ -1576,5 +1580,119 @@ describe('金属イオンの系統分離とタンク', () => {
     run(w3, 30);
     expect(w3.stock.N2).toBeGreaterThan(0);
     expect(w3.delivered.N2 || 0).toBe(0);
+  });
+});
+
+describe('抽出分離と電気泳動', () => {
+  const W = (id: string) => washById(id)!;
+  const run = (w: ReturnType<typeof newWorld>, sec: number) => { for (let i = 0; i < sec * 60; i++) step(w, 1 / 60); };
+
+  it('抽出：酸・塩基の強さの順に、塩になるものだけが水層へ移る', () => {
+    const all = 'org:An.Bz.Ph.Nb';
+    expect(sub(all).name).toBe('アニリン・安息香酸・フェノール・ニトロベンゼン のエーテル溶液');
+    expect(extract(all, W('x-hcl'))).toEqual({ main: 'org:Bz.Ph.Nb', side: 'C6H5NH3Cl' });
+    // 炭酸水素ナトリウムでは、カルボン酸だけ。フェノールは炭酸より弱いので動かない
+    expect(extract('org:Bz.Ph.Nb', W('x-nahco3'))).toEqual({ main: 'org:Ph.Nb', side: 'C6H5COONa' });
+    expect(extract('org:Ph.Nb', W('x-naoh'))).toEqual({ main: 'org:Nb', side: 'C6H5ONa' });
+    expect(extract('org:Nb', W('x-evap'))).toEqual({ main: 'C6H5NO2', side: null });
+    // 水酸化ナトリウムでは、安息香酸とフェノールがまとめて移る。CO₂ でフェノールだけが遊離する
+    expect(extract('org:Bz.Ph.Nb', W('x-naoh'))).toEqual({ main: 'org:Nb', side: 'aq:Bz.Ph' });
+    expect(extract('aq:Bz.Ph', W('x-co2'))).toEqual({ main: 'org:Ph', side: 'C6H5COONa' });
+    expect(extract('C6H5ONa', W('x-co2'))).toEqual({ main: 'org:Ph', side: null });
+    // 効かない操作
+    expect(extract('org:Nb', W('x-hcl'))).toEqual({ main: 'org:Nb', side: null });
+    expect(extractRefusal(all, W('x-evap'))).toMatch(/残っている/);
+    expect(extractRefusal(all, W('x-co2'))).toMatch(/水層/);
+    expect(extractRefusal('aq:Bz.Ph', W('x-hcl'))).toMatch(/エーテル層/);
+    expect(extractRefusal('org:Nb', W('x-evap'))).toBeNull();
+    for (const a of WASHES) if (a.quiz) for (const x of a.quiz.answer) expect(a.quiz.pool).toContain(x);
+    // 塩は、反応器の反応で元の化合物に戻せる
+    for (const id of ['aniline-release', 'benzoic-release', 'phenol-release', 'phenol-release-hcl', 'benzoate']) expect(RECIPES.some((r) => r.id === id), id).toBe(true);
+  });
+
+  it('電気泳動：等電点より酸性側では陰極へ、塩基性側では陽極へ動く', () => {
+    expect([AMINO.Glu.pI, AMINO.Ala.pI, AMINO.Lys.pI]).toEqual([3.2, 6.0, 9.7]);
+    expect([poleAt('Glu', 6), poleAt('Ala', 6), poleAt('Lys', 6)]).toEqual(['anode', 'stay', 'cathode']);
+    expect([poleAt('Glu', 1), poleAt('Ala', 1), poleAt('Lys', 1)]).toEqual(['cathode', 'cathode', 'cathode']);
+    expect([poleAt('Glu', 13), poleAt('Ala', 13), poleAt('Lys', 13)]).toEqual(['anode', 'anode', 'anode']);
+    expect(poleAt('Glu', 3)).toBe('stay');
+    expect(poleAt('Lys', 10)).toBe('stay');
+    // pH 6 なら、3 種が 1 回で分かれる
+    expect(migrate('amino:Glu.Ala.Lys', 6)).toEqual({ main: 'Ala', side: 'Glu', side2: 'Lys' });
+    // pH 1 では全部が陰極へ動いて、分かれない
+    expect(migrate('amino:Glu.Ala.Lys', 1)).toEqual({ main: null, side: null, side2: 'amino:Glu.Ala.Lys' });
+    expect(migrate('amino:Glu.Lys', 8)).toEqual({ main: null, side: 'Glu', side2: 'Lys' });
+    expect(migrate('amino:Ala.Lys', 8)).toEqual({ main: null, side: 'Ala', side2: 'Lys' });
+    expect(sub('amino:Glu.Lys').name).toBe('グルタミン酸・リシン の水溶液');
+  });
+
+  it('新しい 2 つの章の指令は、どれも試薬棚の混合物から達成できる', () => {
+    const have = new Set<string>();
+    for (const m of ORG_MIXES) for (const x of extractReachable(m.id)) have.add(x);
+    for (const m of AMINO_MIXES) for (const x of migrateReachable(m.id)) have.add(x);
+    // 水層の塩は、反応器で元に戻す
+    for (let grew = true; grew;) { grew = false; for (const r of RECIPES) if (r.inputs.every(([s2]) => have.has(s2) || REAGENTS.includes(s2) || s2 === 'CO2' || s2 === 'H2O')) for (const [s2] of r.outputs) if (!have.has(s2)) { have.add(s2); grew = true; } }
+    for (const name of ['抽出分離', '電気泳動']) {
+      const ch = CHAPTERS.find((c) => c.name.includes(name))!;
+      for (const g of ch.goals) for (const x of [g.s, ...(g.also ?? [])]) expect(have.has(x), `${name}: ${x}`).toBe(true);
+    }
+    expect(CHAPTERS[MACHINES.funnel.chapter!].name).toContain('抽出分離');
+    expect(CHAPTERS[MACHINES.phoresis.chapter!].name).toContain('電気泳動');
+  });
+
+  it('分液ろうとと反応器の工場で、アニリンとニトロベンゼンを分けて納める', () => {
+    const w = newWorld();
+    const ci = CHAPTERS.findIndex((c) => c.name.includes('抽出分離'));
+    setChapter(w, ci);
+    const [hx0, hy0] = HUB_TILES[0];
+    // 試薬棚 → ろうと①（希塩酸）→ ろうと②（蒸発）→ 納品所。水層（下へ出る）は反応器で NaOH を加えてアニリンに戻す
+    place(w, 'sampler', hx0 - 9, hy0, 0); at(w, hx0 - 9, hy0)!.sub = 'org:An.Nb';
+    place(w, 'funnel', hx0 - 8, hy0, 0); place(w, 'funnel', hx0 - 5, hy0, 0);
+    place(w, 'belt', hx0 - 6, hy0, 0);
+    for (let x = hx0 - 3; x < hx0; x++) place(w, 'belt', x, hy0, 0);
+    const f1 = at(w, hx0 - 8, hy0)!, f2 = at(w, hx0 - 5, hy0)!;
+    f1.test = 'x-hcl'; f2.test = 'x-evap';
+    const p = slotPort(f1, 2);                       // 水層の出口（下向き）
+    place(w, 'belt', p.tx, p.ty, 1);
+    place(w, 'reactor', p.tx, p.ty + 1, 0);
+    const rx = at(w, p.tx, p.ty + 1)!;
+    configure(rx, rec('aniline-release'), ['C6H5NH2', 'NaCl', 'H2O']);
+    place(w, 'sampler', p.tx - 1, p.ty + 1, 0); at(w, p.tx - 1, p.ty + 1)!.sub = 'NaOH';
+    // 反応器の正面（左）からアニリン。右へ運んで納品所の下から入れる。残りの出口は廃棄口へ
+    const out = outPort(rx, 0);
+    for (let x = out.tx; x < hx0; x++) place(w, 'belt', x, out.ty, 0);
+    place(w, 'belt', hx0, out.ty, 3);
+    for (let y = out.ty - 1; y > hy0 + 1; y--) place(w, 'belt', hx0, y, 3);
+    for (const i of [1, 2]) { const q = outPort(rx, i); if (!at(w, q.tx, q.ty)) place(w, 'vent', q.tx, q.ty, q.d as 0 | 1 | 2 | 3); }
+    run(w, 240);
+    expect(w.delivered.C6H5NO2).toBeGreaterThan(0);
+    expect(w.delivered.C6H5NH2).toBeGreaterThan(0);
+    expect(w.progress[ci]).toBeGreaterThanOrEqual(1);
+  });
+
+  it('電気泳動槽 1 台で、3 種のアミノ酸が 3 方向に分かれる', () => {
+    const w = newWorld();
+    place(w, 'sampler', 9, 10, 0); at(w, 9, 10)!.sub = 'amino:Glu.Ala.Lys';
+    place(w, 'phoresis', 10, 10, 0);
+    const e = at(w, 10, 10)!;
+    run(w, 3);
+    expect(e.bad).toBe('amino:Glu.Ala.Lys');          // pH を決めるまでは受け取らない
+    e.test = '6';
+    // 出口ごとにタンクで受ける：正面（残る）、右手（陽極）、左手（陰極）
+    const spots = [0, 2, 3].map((i) => slotPort(e, i));
+    expect(spots.map((q) => q.d)).toEqual([0, 1, 3]);
+    place(w, 'tank', spots[0].tx, spots[0].ty, 0);
+    place(w, 'tank', spots[1].tx - 1, spots[1].ty, 0);
+    place(w, 'tank', spots[2].tx - 1, spots[2].ty - 1, 0);
+    for (const q of spots) at(w, q.tx, q.ty)!.test = 'hold';
+    run(w, 60);
+    expect(spots.map((q) => at(w, q.tx, q.ty)!.sub)).toEqual(['Ala', 'Glu', 'Lys']);
+    expect(at(w, spots[0].tx, spots[0].ty)!.cnt!).toBeGreaterThan(5);
+    // 物質でないものは受け取らない
+    const w2 = newWorld();
+    place(w2, 'phoresis', 10, 10, 0); at(w2, 10, 10)!.test = '6';
+    place(w2, 'belt', 9, 10, 0); at(w2, 9, 10)!.item = { s: 'ions:Ag.Cu', p: 0, m: 0 };
+    run(w2, 2);
+    expect(at(w2, 10, 10)!.bad).toBe('ions:Ag.Cu');
   });
 });

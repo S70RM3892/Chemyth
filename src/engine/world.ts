@@ -6,7 +6,7 @@ import { isBalanced, parseFormula } from '../chem/formula';
 import { ELEMENTS } from '../content/elements';
 import { isPositive, setById } from '../content/samples';
 import { RESEARCH, researchById, type Research } from '../content/research';
-import { agentById, refusal, settle, settleable } from '../content/ions';
+import { isSep, sepAccepts, sepReady, sepRefusal, sepRun, sepSlots } from '../content/sep';
 
 /** 0:右 1:下 2:左 3:上 */
 export type Dir = 0 | 1 | 2 | 3;
@@ -14,7 +14,7 @@ export const DX = [1, 0, -1, 0];
 export const DY = [0, 1, 0, -1];
 
 /** 'part' は 2×2 の装置が占める残りのマス。ref が本体の位置を指す */
-export type Kind = 'belt' | 'extractor' | 'vent' | 'hub' | 'splitter' | 'bridge' | 'tunnel' | 'station' | 'depot' | 'sampler' | 'analyzer' | 'sensor' | 'gate' | 'lift' | 'settler' | 'tank' | 'part' | MachineKind;
+export type Kind = 'belt' | 'extractor' | 'vent' | 'hub' | 'splitter' | 'bridge' | 'tunnel' | 'station' | 'depot' | 'sampler' | 'analyzer' | 'sensor' | 'gate' | 'lift' | 'settler' | 'funnel' | 'phoresis' | 'tank' | 'part' | MachineKind;
 /** 2 階は、同じ x のまま y をこれだけずらした場所として持つ。隣り合うマスの計算は 1 階と同じになる */
 export const FLOOR_DY = 100000;
 export const floorOf = (y: number) => (y >= FLOOR_DY / 2 ? 1 : 0);
@@ -23,7 +23,7 @@ export const groundY = (y: number) => y - floorOf(y) * FLOOR_DY;
 /** 信号の数（1〜8 番） */
 export const SIGNALS = 8;
 /** 2×2 マスを占める装置。出口が 6 か所あり、奥の面が入口の目安になる */
-export const BIG: Kind[] = ['separator', 'reactor', 'electrolyzer', 'battery', 'station', 'settler', 'tank'];
+export const BIG: Kind[] = ['separator', 'reactor', 'electrolyzer', 'battery', 'station', 'settler', 'funnel', 'phoresis', 'tank'];
 /** 貯蔵タンクに入る数 */
 export const TANK_CAP = 200;
 /** 沈殿槽が 1 回の操作にかける秒数 */
@@ -92,9 +92,11 @@ export interface Ent {
   /** 古いセーブの、駅ごとの線路。読み込むときに地図の線路（World.rails）へ移す */
   rail?: [number, number][];
   railTo?: string;
-  /** 沈殿槽：test が試薬（src/content/ions.ts の id）、item が処理中のもの、buf がろ紙に残った固体、buf2 がろ液。
+  /** 分ける装置（沈殿槽・分液ろうと・電気泳動槽）：test が設定（試薬の id や pH）、item が処理中のもの。
+   *  buf が右手へ出すもの（沈殿・水層・陽極側）、buf2 が正面へ出すもの（ろ液・上層・動かないもの）、buf3 が左手へ出すもの（陰極側）。
    *  貯蔵タンク：sub がためている物質、cnt と rcn が数（rcn は試薬棚や搬出口から出たぶん）、test が 'hold' なら出口を閉じている */
   buf2?: string[];
+  buf3?: string[];
   cnt?: number;
   rcn?: number;
   /** 検知器・弁：ch が信号の番号。検知器の test は 'jam'（詰まっている間）か 'is:物質'（その物質が通ったあと 3 秒）。
@@ -478,7 +480,7 @@ export function place(w: World, kind: Kind, x: number, y: number, dir: Dir): str
     e.item = null; e.role = 'in';
     w.ents.set(key(x, oy), { kind: 'lift', x, y: oy, dir, item: null, role: 'out' });
   }
-  if (kind === 'settler') { e.item = null; e.buf = []; e.buf2 = []; }
+  if (isSep(kind)) { e.item = null; e.buf = []; e.buf2 = []; e.buf3 = []; }
   if (kind === 'tank') { e.cnt = 0; e.rcn = 0; e.timer = 0; e.rr = 0; }
   if (kind === 'sensor') { e.item = null; e.ch = 1; e.test = 'jam'; }
   if (kind === 'gate') { e.item = null; e.ch = 1; e.test = 'on'; }
@@ -738,8 +740,8 @@ function emits(w: World, n: Ent, x: number, y: number, d: Dir, depth = 0): boole
   switch (n.kind) {
     case 'belt': case 'extractor': case 'depot': case 'sampler': case 'sensor': case 'gate': return n.dir === d;
     case 'lift': return n.role === 'out' && n.dir === d;
-    // 沈殿槽：ろ液は正面（左）、固体は右手（手前）から出る。タンク：正面の 2 つの口
-    case 'settler': return !!n.test && [0, 2].some((i) => { const p = slotPort(n, i); return p.d === d && p.tx === x && p.ty === y; });
+    // 分ける装置：正面（左）・右手（手前）・左手（手前）から出る。タンク：正面の 2 つの口
+    case 'settler': case 'funnel': case 'phoresis': return sepReady(n.kind, n.test) && sepSlots(n.kind).some((i) => { const p = slotPort(n, i); return p.d === d && p.tx === x && p.ty === y; });
     case 'tank': return [0, 1].some((i) => { const p = slotPort(n, i); return p.d === d && p.tx === x && p.ty === y; });
     case 'analyzer': return [0, 1].some((i) => portDir(n.dir, i) === d);
     case 'splitter': return [0, 1, 2].some((i) => portDir(n.dir, i) === d);
@@ -948,10 +950,9 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): 
       if (t.role !== 'in' || t.item || t.dir === (d + 2) % 4) return false;
       t.item = { s, p: 0, m: w.tick, rc };
       return true;
-    case 'settler': {
-      // 沈殿槽：混合溶液か、分け直せるまじりの沈殿だけを受け取る。試薬を決めるまでは動かない
-      const a = agentById(t.test);
-      if (!a || !settleable(s) || refusal(s, a)) { t.bad = s; t.badT = w.tick; return false; }
+    case 'settler': case 'funnel': case 'phoresis': {
+      // 分ける装置：その装置が扱う混合物だけを受け取る。設定を決めるまでは動かない
+      if (!sepReady(t.kind, t.test) || !sepAccepts(t.kind, s) || sepRefusal(t.kind, s, t.test)) { t.bad = s; t.badT = w.tick; return false; }
       if (t.item) return false;
       t.item = { s, p: 0, m: w.tick };
       return true;
@@ -1083,24 +1084,31 @@ export function step(w: World, dt: number) {
         if (signalOn(w, e.ch) === (e.test !== 'off') && push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc)) e.item = null;
         break;
       }
-      case 'settler': {
-        const a = agentById(e.test), solids = (e.buf ??= []), liquids = (e.buf2 ??= []);
+      case 'settler': case 'funnel': case 'phoresis': {
+        const ready = sepReady(e.kind, e.test), side = (e.buf ??= []), main = (e.buf2 ??= []), side2 = (e.buf3 ??= []);
         if (e.bad && w.tick - (e.badT || 0) > 45) e.bad = undefined;
-        if (a && e.item && !e.busy && !solids.length && !liquids.length) { e.busy = true; e.prog = 0; }
-        if (a && e.busy && e.item) {
+        if (ready && e.item && !e.busy && !side.length && !main.length && !side2.length) { e.busy = true; e.prog = 0; }
+        if (ready && e.busy && e.item) {
           e.prog = (e.prog || 0) + (dt * rate) / SETTLE_TIME;
           if (e.prog >= 1) {
-            const r = settle(e.item.s, a);
-            if (r.solid) { solids.push(r.solid); discover(w, r.solid); if (r.solid !== e.item.s) { bump(w.made, r.solid); bucket(w).made++; } }
-            if (r.liquid) { liquids.push(r.liquid); discover(w, r.liquid); }
-            w.fx.push({ x: e.x + 0.5, y: e.y + 0.5, type: 'react', s: r.solid ?? r.liquid ?? e.item.s });
+            const r = sepRun(e.kind, e.item.s, e.test);
+            for (const [x, q] of [[r.main, main], [r.side, side], [r.side2 ?? null, side2]] as [string | null, string[]][]) {
+              if (!x) continue;
+              q.push(x); discover(w, x);
+              // 新しくできたものだけを「作った数」に入れる（そのまま通り抜けたものは数えない）
+              if (x !== e.item.s && !x.includes(':')) { bump(w.made, x); bucket(w).made++; }
+            }
+            w.fx.push({ x: e.x + 0.5, y: e.y + 0.5, type: 'react', s: r.side ?? r.main ?? r.side2 ?? e.item.s });
             e.item = null; e.busy = false; e.prog = 0; e.n = (e.n || 0) + 1;
           }
         }
-        // ろ液は正面（左）、固体は右手（手前）へ
-        if (liquids.length) { const p = slotPort(e, 0); if (push(w, p.tx, p.ty, p.d, liquids[0])) liquids.shift(); }
-        if (solids.length) { const p = slotPort(e, 2); if (push(w, p.tx, p.ty, p.d, solids[0])) solids.shift(); }
-        e.stuck = !e.busy && (solids.length || liquids.length) ? (e.stuck || 0) + dt : 0;
+        // 正面（左）・右手（手前）・左手（手前）へ
+        for (const [q, slot] of [[main, 0], [side, 2], [side2, 3]] as [string[], number][]) {
+          if (!q.length) continue;
+          const p = slotPort(e, slot);
+          if (push(w, p.tx, p.ty, p.d, q[0])) q.shift();
+        }
+        e.stuck = !e.busy && (side.length || main.length || side2.length) ? (e.stuck || 0) + dt : 0;
         break;
       }
       case 'tank': {
