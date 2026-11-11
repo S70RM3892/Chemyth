@@ -531,19 +531,22 @@ describe('工場の動作', () => {
     e.dir = 0;
     // 出口から出たものを、隣のベルトが流れ込みとして認識する
     configure(e, rec('soda-ash'), ['Na2CO3', 'H2O', 'CO2']);
-    expect(inflow(w, 12, 10)).toBe(0); // 正面・左
-    expect(inflow(w, 12, 11)).toBe(0); // 正面・右
-    expect(inflow(w, 11, 12)).toBe(1); // 右手・手前
-    expect(inflow(w, 10, 12)).toBeNull(); // 右手・奥は使っていない
-    moveOutput(e, 2, 4);
-    expect(inflow(w, 11, 12)).toBeNull();
+    // 入れた順に、正面・右手・左手と面を分けて出る
+    expect(e.outSlot).toEqual([0, 2, 3]);
+    expect(inflow(w, 12, 10)).toBe(0);    // 正面・左：Na₂CO₃
+    expect(inflow(w, 12, 11)).toBeNull(); // 正面・右は使っていない
+    expect(inflow(w, 11, 12)).toBe(1);    // 右手・手前：H₂O
+    expect(inflow(w, 11, 9)).toBe(3);     // 左手・手前：CO₂
+    expect(inflow(w, 10, 12)).toBeNull();
+    moveOutput(e, 2, 4);                  // CO₂ を右手・奥へ移す
+    expect(inflow(w, 11, 9)).toBeNull();
     expect(inflow(w, 10, 12)).toBe(1);
-    moveOutput(e, 0, 1); // 入れ替え
-    expect(e.outSlot).toEqual([1, 0, 4]);
+    moveOutput(e, 0, 2);                  // Na₂CO₃ と H₂O を入れ替える
+    expect(e.outSlot).toEqual([2, 0, 4]);
     // 保存して読み戻しても、大きさと出口が残る
     const r = deserialize(serialize(w))!;
     expect(at(r, 11, 11)).toBe(at(r, 10, 10));
-    expect(at(r, 10, 10)!.outSlot).toEqual([1, 0, 4]);
+    expect(at(r, 10, 10)!.outSlot).toEqual([2, 0, 4]);
     // 消すと 4 マスとも空く。元に戻せる
     expect(remove(w, 11, 11)).toBe(true);
     expect(at(w, 10, 10)).toBeUndefined();
@@ -602,6 +605,33 @@ describe('工場の動作', () => {
     const r = deserialize(serialize(w2))!;
     expect(r.vented.H2).toBe(w2.vented.H2);
     expect(r.made.H2).toBe(w2.made.H2);
+  });
+
+  it('使わない物質が入口に来ると、受け取らずに印をつける', () => {
+    const w = newWorld();
+    place(w, 'electrolyzer', 10, 10, 0);
+    const e = at(w, 10, 10)!;
+    configure(e, rec('water-electrolysis'), ['H2', 'O2'], ['c', 'a']);
+    place(w, 'belt', 9, 10, 0);
+    at(w, 9, 10)!.item = { s: 'NaCl', p: 1, m: 0 };
+    run(w, 0.5);
+    expect(at(w, 9, 10)!.item?.s).toBe('NaCl'); // ベルトに残ったまま
+    expect(e.bad).toBe('NaCl');
+    expect(flowStats(w).jammed).toBe(1);
+    // 取り除けば、印は消える
+    at(w, 9, 10)!.item = null;
+    run(w, 1.5);
+    expect(e.bad).toBeUndefined();
+    at(w, 9, 10)!.item = { s: 'H2O', p: 1, m: 0 };
+    run(w, 0.2);
+    expect(e.inBuf!.H2O).toBe(1);
+    // 食塩水の電気分解は、膜のない電極でも同じ生成物
+    expect(judge('electrolyzer', { reactants: [['NaCl', 2], ['H2O', 2]], products: [['H2', 1], ['NaOH', 2], ['Cl2', 1]], poles: ['c', 'c', 'a'], condition: '水溶液・炭素電極' }).ok).toBe(true);
+    // 1 マスだった頃の電解槽：正面に陰極、右手に陽極、残りは左手
+    const old = { kind: 'electrolyzer', x: 20, y: 20, dir: 0 } as Parameters<typeof configure>[0];
+    configure(old, rec('brine-electrolysis'), ['H2', 'NaOH', 'Cl2'], ['c', 'c', 'a']);
+    expect(old.outOrder).toEqual(['H2', 'Cl2', 'NaOH']);
+    expect(old.outSlot).toBeUndefined();
   });
 
   it('1 マスだった頃の装置は、そのまま 3 つの出口で動く', () => {

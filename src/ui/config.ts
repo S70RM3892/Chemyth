@@ -3,7 +3,7 @@ import { ELEMENTS } from '../content/elements';
 import { MACHINES } from '../content/machines';
 import { CONDITIONS, SHIFTS, electronsOf, productsOf, recipeById, type MachineKind, type Recipe } from '../content/recipes';
 import { label, sameAtoms, sub, subByFormula, SUBSTANCES } from '../content/substances';
-import { DX, DY, clearRecipe, configure, inDoors, judge, learn, moveOutput, sizeOf, slotCount, slotPort, SLOT_NAMES, type Ent, type Kind, type World } from '../engine/world';
+import { BIG_ORDER, DX, DY, clearRecipe, configure, inDoors, judge, learn, moveOutput, sizeOf, slotCount, slotPort, SLOT_NAMES, type Ent, type Kind, type World } from '../engine/world';
 import { h } from './dom';
 import { sfx } from './sound';
 import { elementIcon, tokenIcon } from './token';
@@ -19,6 +19,8 @@ export function equation(r: Recipe): string {
 /** 設定済みの装置が、いま何をしているか */
 export function statusOf(e: Ent, r: Recipe): string {
   const have = r.inputs.map(([s, n]) => `${label(s)} ${e.inBuf?.[s] || 0}/${n}`).join('　');
+  const bad = e.bad ? `入口に、この反応で使わない ${label(e.bad)} が来て、ベルトが止まっている。${label(e.bad)} は廃棄口かほかの装置へ分けろ。` : '';
+  if (bad && !e.busy) return bad + `手持ち：${have}`;
   if (e.busy) return `反応中。手持ち：${have}`;
   const jam = e.outOrder?.find((_, i) => (e.outBuf?.[i] || 0) > 0);
   if (jam) return `止まっている：${label(jam)} の出口がふさがっている。ベルトか廃棄口をつなげ。`;
@@ -268,7 +270,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
     }));
 
     const names = e.big ? SLOT_NAMES.big : SLOT_NAMES.small;
-    const slotName = (i: number) => (isBat ? names[i + 1] : names[i]) ?? '';
+    const slotName = (i: number) => { const k = isBat ? i + 1 : i; return names[e.big ? BIG_ORDER[k] : k] ?? ''; };
     /** 出口の数の上限。電解槽は極ごとに 3 つまで */
     const maxProds = isBat ? slotCount(e) - 1 : slotCount(e);
     const perPole = e.big ? 3 : 2;
@@ -372,7 +374,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
       h('section', {}, h('h3', {}, `${n[0]} ${isCol ? '集める気体' : '原料'}`), h('p', { class: 'muted' }, isCol ? 'この装置で集める気体を選べ。' : 'この装置に流し込む物質を選べ。' + (isSep ? '' : '選んだら係数を合わせろ。')), chips, reactRows),
       isBat ? h('section', {}, h('h3', {}, `${n[1]} 負極と正極`), poleBox) : null,
       isCol ? null : h('section', {}, h('h3', {}, `${n[isBat ? 2 : 1]} ${isSep ? '取り出す物質' : '生成物'}`),
-        h('p', { class: 'muted' }, isCell ? '各極で生じる物質を化学式で入れろ。1 つの極で 2 つ以上のものが生じるときは、その極の側に欄を足せ。溶液に残るもの（酸や塩基）も、それが生じる極の側に書く。' : isBat ? '電子のほかにできる物質を入れろ。' : `入れた順に、${names.slice(0, 3).join('・')}… の出口から出る。出口の場所は、設定のあとで入れ替えられる。`),
+        h('p', { class: 'muted' }, isCell ? '各極で生じる物質を化学式で入れろ。1 つの極で 2 つ以上のものが生じるときは、その極の側に欄を足せ。溶液に残るもの（酸や塩基）も、それが生じる極の側に書く。' : isBat ? '電子のほかにできる物質を入れろ。' : `入れた順に、${[0, 1, 2].map(slotName).join(' → ')} … の出口から出る。出口の場所は、設定のあとで入れ替えられる。`),
         prodRows, more, keypad),
       isBat ? h('section', {}, h('h3', {}, `${n[3]} 流れる電子 e⁻ の数`), h('div', { class: 'row' }, stepper('cfg-el', () => electrons, (x) => { electrons = x; }), h('span', { class: 'muted' }, '上の係数で反応したとき、導線を流れる電子は何 mol か。'))) : null,
       h('section', {}, h('h3', {}, `${n[isCol ? 1 : isBat ? 4 : 2]} ${cond.label}`), condChips),

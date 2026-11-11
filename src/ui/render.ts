@@ -775,7 +775,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
   if (e.kind === 'electrolyzer' && e.big) poleMarks(ctx, P, e, cx, cy, pu, line);
 
   // 赤ペンの印：設定が要る「？」、詰まっている「！」
-  const jam = (e.stuck || 0) > 2.5;
+  const jam = (e.stuck || 0) > 2.5 || !!e.bad;
   const needs = unset || (e.kind === 'analyzer' && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
   if (needs || jam) {
     if (needs) {
@@ -804,7 +804,7 @@ function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: 
   const info = MACHINES[e.kind as keyof typeof MACHINES], light = P.name === 'light';
   const unset = isMachine(e.kind) && !e.recipe;
   const needs = unset || (e.kind === 'analyzer' && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
-  const jam = (e.stuck || 0) > 2.5, busy = !!e.busy;
+  const jam = (e.stuck || 0) > 2.5 || !!e.bad, busy = !!e.busy;
   const line = Math.max(1.5, u * 0.05), a = u * 0.46, c = u * 0.14, INK = '#0b0d10';
   ctx.lineJoin = 'miter';
   ctx.lineCap = 'butt';

@@ -56,6 +56,9 @@ export interface Ent {
   ts?: [number, number, number];
   n?: number;
   u?: number;
+  /** この反応で使わない物質が入口に来て、受け取れずにいる。bad：その物質、badT：最後に断った tick */
+  bad?: string;
+  badT?: number;
 }
 
 /** 直近の稼働率をならす時間（秒） */
@@ -307,7 +310,8 @@ export function judge(machine: MachineKind, a: Answer): Verdict {
 export function configure(e: Ent, r: Recipe, order: string[], poles?: ('c' | 'a')[]) {
   e.recipe = r.id;
   e.outOrder = r.machine === 'battery' ? ['e', ...order] : order;
-  e.outSlot = undefined;
+  e.outSlot = e.big ? e.outOrder.map((_, i) => BIG_ORDER[i]) : undefined;
+  e.bad = undefined;
   if (r.machine === 'electrolyzer' && poles) {
     if (e.big) {
       // 陰極側の生成物は左手、陽極側は右手から出す
@@ -315,8 +319,10 @@ export function configure(e: Ent, r: Recipe, order: string[], poles?: ('c' | 'a'
       let c = 0, a2 = 0;
       e.outSlot = order.map((_, i) => (poles[i] === 'a' ? A[a2++] : C[c++]));
     } else {
-      // 1 マスの古い電解槽：陰極のものを先に並べる
-      e.outOrder = [...order.filter((_, i) => poles[i] !== 'a'), ...order.filter((_, i) => poles[i] === 'a')];
+      // 1 マスの古い電解槽：正面に陰極の 1 つ目、右手に陽極の 1 つ目、残りは左手
+      const c0 = order.find((_, i) => poles[i] !== 'a'), a0 = order.find((_, i) => poles[i] === 'a');
+      const head = [c0, a0].filter((s): s is string => s !== undefined);
+      e.outOrder = [...head, ...order.filter((s) => !head.includes(s))];
     }
   }
   e.inBuf = {};
@@ -375,7 +381,7 @@ export function flowStats(w: World): FlowStats {
     perMin1: sum(m1, 'deliver') / mins(6), perMin5: sum(m5, 'deliver') / mins(30), goalPerMin,
     etaSec: g && goalPerMin > 0 ? (left / goalPerMin) * 60 : null,
     util: set.length ? set.reduce((a, e) => a + (e.u || 0), 0) / set.length : null,
-    machines: set.length, jammed: set.filter((e) => machineState(e) === 2 && (e.stuck || 0) > 2.5).length,
+    machines: set.length, jammed: set.filter((e) => (machineState(e) === 2 && (e.stuck || 0) > 2.5) || !!e.bad).length,
     starved: set.filter((e) => machineState(e) === 1 && (e.u || 0) < 0.15).length, unset: ms.length - set.length,
     wasteRate: made5 > 0 ? Math.min(1, lost5 / made5) : null,
   };
@@ -400,6 +406,8 @@ export function portDir(dir: Dir, port: number): Dir {
 export const poleOf = (r: Recipe, i: number): 'c' | 'a' | 'x' => ((r.poles ?? 'ca')[i] ?? 'x') as 'c' | 'a' | 'x';
 /** 出口の場所の数 */
 export const slotCount = (e: Ent) => (e.big ? 6 : 3);
+/** 2×2 の装置に生成物を割り当てる順。1 つ目は正面、2 つ目は右手、3 つ目は左手と、面を分けて出す */
+export const BIG_ORDER = [0, 2, 3, 1, 4, 5];
 export const SLOT_NAMES = { small: ['正面', '右手', '左手'], big: ['正面・左', '正面・右', '右手・手前', '左手・手前', '右手・奥', '左手・奥'] };
 
 /** 2×2 の装置のマス。a：0 奥 / 1 手前（正面側）、b：0 左手 / 1 右手 */
@@ -552,7 +560,8 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): 
       const r = recipeById(t.recipe);
       if (!r || !t.inBuf) return false;
       const need = r.inputs.find(([id]) => id === s)?.[1];
-      if (!need) return false;
+      // 使わない物質は受け取らない。ベルトはそこで止まるので、理由がわかるように印をつける
+      if (!need) { t.bad = s; t.badT = w.tick; return false; }
       // 入れすぎた分はあふれて捨てる（1 本のベルトに混ぜても詰まらない）
       if ((t.inBuf[s] || 0) >= need * 4) { w.fx.push({ x, y, type: 'spill', s }); bump(w.spilled, s); bucket(w).spill++; return true; }
       t.inBuf[s] = (t.inBuf[s] || 0) + 1;
@@ -636,6 +645,7 @@ export function step(w: World, dt: number) {
       default: {
         const r = recipeById(e.recipe);
         if (!r || !e.inBuf || !e.outBuf || !e.outOrder) break;
+        if (e.bad && w.tick - (e.badT || 0) > 45) e.bad = undefined;
         if (!e.busy) {
           // 出口が全部はけるまで次の反応は始まらない（副生成物を放置すると詰まる）
           if (e.outBuf.every((n) => n === 0) && r.inputs.every(([s, n]) => (e.inBuf![s] || 0) >= n)) {
