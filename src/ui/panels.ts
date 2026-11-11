@@ -172,6 +172,8 @@ export function showLog(c: PanelCtx) {
   }
   const rows = [...tally].sort((a, b) => b[1] - a[1]);
   const delivered = Object.entries(w.delivered).sort((a, b) => b[1] - a[1]);
+  const times = Object.entries(w.goalMs).map(([k, ms]) => { const [ch, i] = k.split(':').map(Number); const g = CHAPTERS[ch]?.goals[i]; return [g ? `${CHAPTERS[ch].name.split(' ')[0]}　${sub(g.s).name}` : k, ms] as [string, number]; })
+    .sort((a, b) => b[1] - a[1]).slice(0, 8);
   c.show(
     h('header', {}, h('h2', {}, '記録'), closeBtn(c)),
     h('h3', {}, '間違えたところ（多い順）'),
@@ -179,6 +181,8 @@ export function showLog(c: PanelCtx) {
       ? h('table', { class: 'log' }, ...rows.map(([k, n]) => { const [a, b] = k.split('｜'); return h('tr', {}, h('td', {}, a), h('td', {}, b), h('td', { class: 'n' }, `${n}回`)); }))
       : h('p', { class: 'muted' }, 'まだ間違いはない。'),
     h('p', { class: 'muted' }, '回数の多いものから、反応式と条件を紙に書いて確認しろ。図鑑の「反応」に解説がある。'),
+    h('h3', {}, '時間のかかった指令'),
+    times.length ? h('table', { class: 'log' }, ...times.map(([name, ms]) => h('tr', {}, h('td', {}, name), h('td', { class: 'n' }, `${Math.max(1, Math.round(ms / 60000))} 分`)))) : h('p', { class: 'muted' }, '—'),
     h('h3', {}, 'これまでの納品'),
     delivered.length ? h('div', { class: 'chips' }, ...delivered.map(([s, n]) => { const b = chip(s); b.disabled = true; b.append(h('span', { class: 'muted' }, `×${n}`)); return b; })) : h('p', { class: 'muted' }, '—'),
   );
