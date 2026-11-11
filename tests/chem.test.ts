@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
-import { STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, goalRate, reactionsPerMin, stationTargets, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
+import { RAIL_BOOST, addRail, layRail, railRoute, removeRail, stationRoutes, STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, goalRate, reactionsPerMin, stationTargets, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
@@ -832,17 +832,16 @@ describe('工場の動作', () => {
     expect(auto.custom).toBe(false);
     expect(auto.len).toBe(20);
     // 遠回りの線路：下へ 10、右へ 20、上へ 10
-    a.rail = [[10.5, 10.5], [10.5, 20.5], [30.5, 20.5], [30.5, 10.5]];
-    a.railTo = '30,10';
+    layRail(w, [[10, 10], [10, 20], [30, 20], [30, 10]]);
     const own = railOf(w, a)!;
     expect(own.custom).toBe(true);
     expect(own.len).toBe(40);
-    expect(pathLength(a.rail)).toBe(40);
+    expect(pathLength(own.pts)).toBe(40);
     a.buf = ['N2'];
     run(w, 2.6);                         // 発車
     const p1 = a.tr!.p;
-    run(w, 1);
-    expect(a.tr!.p - p1).toBeCloseTo(trainSpeed(w) / 40, 1); // 長いぶん、進む割合は小さい
+    run(w, 0.5);
+    expect(a.tr!.p - p1).toBeCloseTo((trainSpeed(w) * RAIL_BOOST * 0.5) / 40, 1); // 敷いた線路は速いが、長いぶん進む割合は小さい
     // 行き先の番線を変えると、敷いた線路は使われなくなる
     b.ch = 2;
     expect(railOf(w, a)).toBeNull();
@@ -870,7 +869,8 @@ describe('工場の動作', () => {
     const w2 = newWorld();
     place(w2, 'station', 10, 10, 0); place(w2, 'station', 30, 10, 0); place(w2, 'station', 10, 40, 0);
     at(w2, 30, 10)!.role = 'out'; at(w2, 10, 40)!.role = 'out';
-    Object.assign(at(w2, 10, 10)!, { rail: [[10.5, 10.5], [10.5, 40.5]], railTo: '10,40', buf: Array(TRAIN_CAP * 2).fill('O2') });
+    layRail(w2, [[10, 10], [10, 40]]);
+    at(w2, 10, 10)!.buf = Array(TRAIN_CAP * 2).fill('O2');
     run(w2, 40);
     expect(at(w2, 30, 10)!.buf!.length).toBe(0);
     expect(at(w2, 10, 40)!.buf!.length).toBe(TRAIN_CAP * 2);
@@ -1293,5 +1293,78 @@ describe('研究・信号・2 階・設計図の共有・区画', () => {
     expect([a.n, a.x0, a.y0, a.x1, a.y1]).toEqual([3, 10, 10, 15, 15]);
     expect(a.perMin).toBeGreaterThan(reactionsPerMin(w, at(w, 10, 10)!, rec('haber-bosch')) * 2 * 2 * 0.5); // 2 台が動いている
     expect([b.n, b.perMin]).toEqual([1, 0]);
+  });
+});
+
+describe('線路の網', () => {
+  const run = (w: ReturnType<typeof newWorld>, sec: number) => { for (let i = 0; i < sec * 60; i++) step(w, 1 / 60); };
+  it('幹線を共有する：2 つの積む駅の列車が、同じ線路を通って同じ降ろす駅へ届く', () => {
+    const w = newWorld();
+    // 積む駅 A1 (0,100)・A2 (0,110)、降ろす駅 B (60,100)。A2 の支線は (20,100) で幹線に合流する（分岐点）
+    place(w, 'station', 0, 100, 0); place(w, 'station', 0, 110, 0); place(w, 'station', 60, 100, 0);
+    const a1 = at(w, 0, 100)!, a2 = at(w, 0, 110)!, b = at(w, 60, 100)!;
+    b.role = 'out';
+    layRail(w, [[2, 100], [59, 100]]);                // 幹線
+    expect(railRoute(w, a1, b)!.tiles.length).toBe(58);
+    expect(railRoute(w, a2, b)).toBeNull();           // まだつながっていない
+    expect(railOf(w, a2)!.custom).toBe(false);        // つながるまでは自動の仮線路
+    layRail(w, [[2, 110], [20, 110], [20, 100]]);     // 支線
+    const r2 = railRoute(w, a2, b)!;
+    expect(r2.custom).toBe(true);
+    expect(w.rails.get('20,100')).toBe(0b0111);          // 分岐点：右・下（支線）・左の 3 方向につながる
+    expect(r2.tiles.some(([x, y]) => x === 40 && y === 100)).toBe(true); // 幹線を通る
+    a1.cars = 2; a2.cars = 2;
+    let got = 0, held = 0, clash = 0;
+    for (let i = 0; i < 60 * 90; i++) {
+      a1.buf = Array(STATION_CAP).fill('N2'); a2.buf = Array(STATION_CAP).fill('O2');
+      got += b.buf!.length; b.buf = [];
+      step(w, 1 / 60);
+      const trs = [a1.tr!, ...a1.xtr!, a2.tr!, ...a2.xtr!];
+      if (trs.some((t) => t.held)) held++;
+      // 同じ向きの列車が同じマスに重なっていないか（位置の覚え書きは 1 マスに 1 編成）
+      const seen = new Set<object>();
+      for (const o of w.occ.values()) if (o.t === w.tick) { if (seen.has(o.o)) clash++; seen.add(o.o); }
+    }
+    expect(got).toBeGreaterThan(TRAIN_CAP * 20);
+    expect(held).toBeGreaterThan(0);                  // 幹線が混んで、待つ列車が出る
+    expect(clash).toBe(0);
+    // 線路を切ると、つながらなくなり、自動の仮線路に戻る
+    expect(removeRail(w, 40, 100)).toBe(true);
+    expect(railRoute(w, a1, b)).toBeNull();
+    expect(stationRoutes(w, a1).map((r) => r.custom)).toEqual([false]);
+    expect(w.rails.get('39,100')! & 1).toBe(0);
+    expect(addRail(w, [39, 100], [40, 100])).toBe(true);
+    expect(addRail(w, [40, 100], [41, 100])).toBe(true);
+    expect(addRail(w, [40, 100], [41, 100])).toBe(false); // もうつながっている
+    expect(addRail(w, [40, 100], [42, 100])).toBe(false); // 隣り合っていない
+    expect(railRoute(w, a1, b)).not.toBeNull();
+  });
+
+  it('分岐：1 つの積む駅から、線路でつながる降ろす駅だけへ順番に配る。保存しても線路は残る', () => {
+    const w = newWorld();
+    place(w, 'station', 0, 100, 0); place(w, 'station', 40, 90, 0); place(w, 'station', 40, 110, 0); place(w, 'station', 80, 100, 0);
+    const a = at(w, 0, 100)!, b1 = at(w, 40, 90)!, b2 = at(w, 40, 110)!, b3 = at(w, 80, 100)!;
+    for (const b of [b1, b2, b3]) b.role = 'out';
+    // 幹線 → (30,100) で上下に分かれる。b3 にはつながない
+    layRail(w, [[2, 100], [30, 100], [30, 91], [39, 91]]);
+    layRail(w, [[30, 100], [30, 111], [39, 111]]);
+    expect(stationRoutes(w, a).map((r) => r.dest).sort((p, q) => p.y - q.y)).toEqual([b1, b2]);
+    a.buf = Array(TRAIN_CAP * 4).fill('N2');
+    run(w, 60);
+    expect(b1.buf!.length).toBeGreaterThan(0);
+    expect(b2.buf!.length).toBeGreaterThan(0);
+    expect(b3.buf!.length).toBe(0);                    // 線路がつながっていない駅へは行かない
+    const r = deserialize(serialize(w))!;
+    expect(r.rails.size).toBe(w.rails.size);
+    expect(railRoute(r, at(r, 0, 100)!, at(r, 40, 90)!)!.custom).toBe(true);
+    // 古いセーブ（駅ごとに線路を持っていた頃）は、地図の線路へ移される
+    const old = JSON.parse(serialize(newWorld()));
+    old.ents.push({ kind: 'station', x: 10, y: 10, dir: 0, big: true, role: 'in', ch: 1, buf: [], rail: [[10.5, 10.5], [10.5, 40.5]], railTo: '10,40' }, { kind: 'station', x: 10, y: 40, dir: 0, big: true, role: 'out', ch: 1, buf: [] });
+    delete old.rails;
+    const m = deserialize(JSON.stringify(old))!;
+    expect(at(m, 10, 10)!.rail).toBeUndefined();
+    expect(railRoute(m, at(m, 10, 10)!, at(m, 10, 40)!)!.custom).toBe(true);
+    // 2 階には敷けない
+    expect(addRail(m, [0, 100000], [1, 100000])).toBe(false);
   });
 });

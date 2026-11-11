@@ -2,7 +2,7 @@ import { ZONES, hubRect, isSea, zoneAt, zoneSpots, type Zone } from '../content/
 import { ELEMENTS } from '../content/elements';
 import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { FLOOR_DY, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, railOf, stationTargets, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { FLOOR_DY, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 import { districtsOf, type District } from '../engine/districts';
@@ -294,6 +294,16 @@ function onCurve(c: ReturnType<typeof beltCurve>, p: number): [number, number] {
   return [q * q * c.ax + p * p * c.bx, q * q * c.ay + p * p * c.by];
 }
 
+/** 敷いた線路のマスを、描きやすい形（x, y, つながり の並び）にして覚えておく。線路が変わるまで作り直さない */
+let railCache: { w: World; rev: number; geo: Int32Array } | null = null;
+function railGeo(w: World): Int32Array {
+  if (railCache && railCache.w === w && railCache.rev === w.railRev) return railCache.geo;
+  const geo = new Int32Array(w.rails.size * 3);
+  let i = 0;
+  for (const [k, m] of w.rails) { const c = k.indexOf(','); geo[i++] = +k.slice(0, c); geo[i++] = +k.slice(c + 1); geo[i++] = m; }
+  railCache = { w, rev: w.railRev, geo };
+  return geo;
+}
 /** いまの信号の状態（検知器と弁の絵に使う） */
 let SIG: number[] = [];
 /** 区画の集計は 1 秒半に 1 回でよい */
@@ -683,46 +693,80 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   const hr = hubRect(w.hubSize);
   if (!off) hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
 
-  // ---- 貨物線：積む駅から降ろす駅へ、設備の上を越える高架の線路と列車。
-  //      自動の線路は横に進んでから縦に曲がる。降ろす駅がいくつもあれば、それぞれへ線路が分かれる ----
-  for (const e of w.ents.values()) {
-    if (off || e.kind !== 'station' || e.role !== 'in') continue;
-    const own = railOf(w, e);
-    if (!own) continue;
-    const routes = own.custom ? [own] : stationTargets(w, e).map((d) => railOf(w, e, d)!);
-    const col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length], lift2 = z * 0.3;
-    const screen = routes.map((r) => ({ r, xs: r.pts.map((q) => sx(q[0])), ys: r.pts.map((q) => sy(q[1])) }));
-    ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
-    for (const { xs, ys } of screen) {
-      if (Math.max(...xs) < -50 || Math.min(...xs) > cw + 50 || Math.max(...ys) < -50 || Math.min(...ys) > ch + 50) continue;
-      const path = (ox: number, oy: number) => { ctx.beginPath(); xs.forEach((x, k) => (k ? ctx.lineTo(x + ox, ys[k] + oy) : ctx.moveTo(x + ox, ys[k] + oy))); };
-      // 地面の影 → 枕木 → 桁 → 路線色
-      ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2; path(lift2 * 0.5, lift2); ctx.stroke();
-      ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = z * 0.26; ctx.setLineDash([z * 0.07, z * 0.2]); path(0, 0); ctx.stroke(); ctx.setLineDash([]);
-      ctx.lineWidth = z * 0.13; path(0, 0); ctx.stroke();
-      ctx.strokeStyle = col; ctx.lineWidth = z * 0.07; path(0, 0); ctx.stroke();
+  // ---- 貨物線：設備の上を越える高架の線路と列車。
+  //      敷いた線路は、どの駅の列車も共有する網。つながっていない駅どうしは、自動の仮線路（横に進んでから縦に曲がる）で結ぶ ----
+  if (!off) {
+    const ink = punk ? '#0b0d10' : P.ink, lift2 = z * 0.3;
+    if (w.rails.size) {
+      const geo = railGeo(w);
+      const seg: number[] = [], junc: number[] = [];
+      for (let k = 0; k < geo.length; k += 3) {
+        const x = geo[k], y = geo[k + 1], m = geo[k + 2];
+        if (x < x0 - 2 || x > x1 + 2 || y < y0 - 2 || y > y1 + 2) continue;
+        if (m & 1) seg.push(x + 0.5, y + 0.5, x + 1.5, y + 0.5);
+        if (m & 2) seg.push(x + 0.5, y + 0.5, x + 0.5, y + 1.5);
+        if ((m & 1) + ((m >> 1) & 1) + ((m >> 2) & 1) + ((m >> 3) & 1) >= 3) junc.push(x + 0.5, y + 0.5);
+      }
+      const path = (ox: number, oy: number) => { ctx.beginPath(); for (let k = 0; k < seg.length; k += 4) { ctx.moveTo(sx(seg[k]) + ox, sy(seg[k + 1]) + oy); ctx.lineTo(sx(seg[k + 2]) + ox, sy(seg[k + 3]) + oy); } };
+      ctx.lineJoin = 'round';
+      if (!far) { ctx.lineCap = 'round'; ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.22; path(lift2 * 0.5, lift2); ctx.stroke(); }
+      // 枕木 → 桁 → 2 本のレール
+      ctx.lineCap = 'butt';
+      if (!veryFar) { ctx.strokeStyle = ink; ctx.lineWidth = z * 0.32; ctx.setLineDash([z * 0.07, z * 0.18]); path(0, 0); ctx.stroke(); ctx.setLineDash([]); }
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = ink; ctx.lineWidth = Math.max(2, z * 0.2); path(0, 0); ctx.stroke();
+      ctx.strokeStyle = punk ? (light ? '#c9ced3' : '#8a939c') : light ? '#e9e6da' : '#aeb6c2'; ctx.lineWidth = Math.max(1, z * 0.1); path(0, 0); ctx.stroke();
+      if (!far) { ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.8, z * 0.03); path(0, 0); ctx.stroke(); }
+      // 分岐点：転てつ器の印
+      for (let k = 0; k < junc.length; k += 2) {
+        ctx.beginPath(); ctx.arc(sx(junc[k]), sy(junc[k + 1]), z * 0.2, 0, Math.PI * 2);
+        ctx.fillStyle = P.hi; ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = lw(0.05); ctx.stroke();
+      }
     }
-    // 列車：それぞれの行き先の道のりに沿って進む
-    if (z >= 10) for (const tr of [e.tr, ...(e.xtr ?? [])]) {
-      if (!tr) continue;
-      const sc = screen.find((q) => `${q.r.dest.x},${q.r.dest.y}` === tr.to) ?? screen[0];
-      const { xs, ys } = sc, pts = sc.r.pts;
-      const segs = pts.slice(1).map((q, k) => Math.abs(q[0] - pts[k][0]) + Math.abs(q[1] - pts[k][1]));
-      let d = Math.max(0, Math.min(1, tr.p)) * segs.reduce((x, y) => x + y, 0), a = 0;
-      while (a < segs.length - 1 && d > segs[a]) { d -= segs[a]; a++; }
-      const f = segs[a] ? Math.min(1, d / segs[a]) : 0;
-      const tx = xs[a] + (xs[a + 1] - xs[a]) * f, ty = ys[a] + (ys[a + 1] - ys[a]) * f;
-      if (tx < -60 || tx > cw + 60 || ty < -60 || ty > ch + 60) continue;
-      const ang = Math.atan2(ys[a + 1] - ys[a], xs[a + 1] - xs[a]) + (tr.back ? Math.PI : 0);
-      ctx.save();
-      ctx.translate(tx, ty); ctx.rotate(ang);
-      const L = z * 0.95, Wd = z * 0.46;
-      ctx.fillStyle = punk ? 'rgba(0,0,0,0.4)' : P.shadow; rr(ctx, -L / 2 + z * 0.06, -Wd / 2 + z * 0.14, L, Wd, z * 0.08); ctx.fill();
-      rr(ctx, -L / 2, -Wd / 2, L, Wd, z * 0.08); ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = lw(0.05); ctx.stroke();
-      rr(ctx, -L / 2 + z * 0.08, -Wd / 2 + z * 0.07, L * 0.62, Wd - z * 0.14, z * 0.04); ctx.fillStyle = tr.cargo.length ? '#f3f1e8' : 'rgba(0,0,0,0.35)'; ctx.fill(); ctx.stroke();
-      ctx.fillStyle = punk ? '#14181d' : P.ink; ctx.fillRect(L / 2 - z * 0.2, -Wd / 2 + z * 0.06, z * 0.14, Wd - z * 0.12);
-      ctx.restore();
-      if (tr.cargo.length && z >= 22) { const s0 = tr.cargo[0]; ctx.drawImage(sprite(s0.startsWith('!') ? s0.slice(1) : s0), tx - z * 0.17 - Math.cos(ang) * z * 0.1, ty - z * 0.17 - Math.sin(ang) * z * 0.1, z * 0.34, z * 0.34); }
+    for (const e of w.ents.values()) {
+      if (e.kind !== 'station' || e.role !== 'in') continue;
+      const routes = stationRoutes(w, e);
+      if (!routes.length) continue;
+      const col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length];
+      const screen = routes.map((r) => ({ r, xs: r.pts.map((q) => sx(q[0])), ys: r.pts.map((q) => sy(q[1])) }));
+      ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
+      for (const { r, xs, ys } of screen) {
+        if (Math.max(...xs) < -50 || Math.min(...xs) > cw + 50 || Math.max(...ys) < -50 || Math.min(...ys) > ch + 50) continue;
+        const path = (ox: number, oy: number) => { ctx.beginPath(); xs.forEach((x, k) => (k ? ctx.lineTo(x + ox, ys[k] + oy) : ctx.moveTo(x + ox, ys[k] + oy))); };
+        if (r.custom) {
+          // 敷いた線路の上に、この駅の番線の色を細く重ねる（どの駅がどこを通るかがわかる）
+          ctx.globalAlpha = 0.75; ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, z * 0.045); path(0, 0); ctx.stroke(); ctx.globalAlpha = 1;
+          continue;
+        }
+        // 自動の仮線路：地面の影 → 枕木 → 桁 → 路線色
+        ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2; path(lift2 * 0.5, lift2); ctx.stroke();
+        ctx.strokeStyle = ink; ctx.lineWidth = z * 0.26; ctx.setLineDash([z * 0.07, z * 0.2]); path(0, 0); ctx.stroke(); ctx.setLineDash([]);
+        ctx.lineWidth = z * 0.13; path(0, 0); ctx.stroke();
+        ctx.strokeStyle = col; ctx.lineWidth = z * 0.07; path(0, 0); ctx.stroke();
+      }
+      // 列車：それぞれの行き先の道のりに沿って進む
+      if (z >= 10) for (const tr of [e.tr, ...(e.xtr ?? [])]) {
+        if (!tr) continue;
+        const sc = screen.find((q) => `${q.r.dest.x},${q.r.dest.y}` === tr.to) ?? screen[0];
+        const { xs, ys } = sc, pts = sc.r.pts;
+        const segs = pts.slice(1).map((q, k) => Math.abs(q[0] - pts[k][0]) + Math.abs(q[1] - pts[k][1]));
+        let d = Math.max(0, Math.min(1, tr.p)) * segs.reduce((x, y) => x + y, 0), a = 0;
+        while (a < segs.length - 1 && d > segs[a]) { d -= segs[a]; a++; }
+        const f = segs[a] ? Math.min(1, d / segs[a]) : 0;
+        const tx = xs[a] + (xs[a + 1] - xs[a]) * f, ty = ys[a] + (ys[a + 1] - ys[a]) * f;
+        if (tx < -60 || tx > cw + 60 || ty < -60 || ty > ch + 60) continue;
+        const ang = Math.atan2(ys[a + 1] - ys[a], xs[a + 1] - xs[a]) + (tr.back ? Math.PI : 0);
+        ctx.save();
+        ctx.translate(tx, ty); ctx.rotate(ang);
+        const L = z * 0.95, Wd = z * 0.46;
+        ctx.fillStyle = punk ? 'rgba(0,0,0,0.4)' : P.shadow; rr(ctx, -L / 2 + z * 0.06, -Wd / 2 + z * 0.14, L, Wd, z * 0.08); ctx.fill();
+        rr(ctx, -L / 2, -Wd / 2, L, Wd, z * 0.08); ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = lw(0.05); ctx.stroke();
+        rr(ctx, -L / 2 + z * 0.08, -Wd / 2 + z * 0.07, L * 0.62, Wd - z * 0.14, z * 0.04); ctx.fillStyle = tr.cargo.length ? '#f3f1e8' : 'rgba(0,0,0,0.35)'; ctx.fill(); ctx.stroke();
+        // 先頭の灯り：前の列車を待って止まっているときは赤
+        ctx.fillStyle = tr.held ? P.red : punk ? '#14181d' : P.ink; ctx.fillRect(L / 2 - z * 0.2, -Wd / 2 + z * 0.06, z * 0.14, Wd - z * 0.12);
+        ctx.restore();
+        if (tr.cargo.length && z >= 22) { const s0 = tr.cargo[0]; ctx.drawImage(sprite(s0.startsWith('!') ? s0.slice(1) : s0), tx - z * 0.17 - Math.cos(ang) * z * 0.1, ty - z * 0.17 - Math.sin(ang) * z * 0.1, z * 0.34, z * 0.34); }
+      }
     }
   }
 

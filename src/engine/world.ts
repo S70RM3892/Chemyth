@@ -83,8 +83,8 @@ export interface Ent {
   role?: 'in' | 'out';
   buf?: string[];
   /** 積む駅が走らせている列車。p：0 が自分の駅、1 が行き先。back：戻り。to：行き先の駅のキー */
-  tr?: { p: number; back: boolean; cargo: string[]; wait: number; to?: string };
-  /** 積む駅：自分で敷いた線路。曲がり角の座標（マスの中心）と、行き先の駅のキー。なければ自動で引く */
+  tr?: Train;
+  /** 古いセーブの、駅ごとの線路。読み込むときに地図の線路（World.rails）へ移す */
   rail?: [number, number][];
   railTo?: string;
   /** 検知器・弁：ch が信号の番号。検知器の test は 'jam'（詰まっている間）か 'is:物質'（その物質が通ったあと 3 秒）。
@@ -97,8 +97,10 @@ export interface Ent {
   pri?: Dir;
   /** 積む駅：走らせる編成の数（1〜3）と、2 編成目以降の列車 */
   cars?: number;
-  xtr?: { p: number; back: boolean; cargo: string[]; wait: number; to?: string }[];
+  xtr?: Train[];
 }
+/** 列車。p：0 が自分の駅、1 が行き先。back：戻り。to：行き先の駅のキー。held：前の列車を待って止まっている */
+export interface Train { p: number; back: boolean; cargo: string[]; wait: number; to?: string; held?: boolean }
 
 /** 有毒な気体と、無害にする方法。捨てても罰はないが、処理の反応は入試で問われる */
 export const TOXIC: Record<string, string> = {
@@ -179,6 +181,12 @@ export interface World {
   hold: number;
   /** 信号：番号ごとの、点いていられる残り秒数。保存しない */
   sig: number[];
+  /** 敷いた線路。キーはマス 'x,y'、値は 4 方向のつながり（ビット d が立っていれば、向き d の隣とつながる）。どの駅の列車も共有して走る */
+  rails: Map<string, number>;
+  /** 線路を敷き直すたびに増える番号（道筋の覚え書きを捨てるのに使う）。保存しない */
+  railRev: number;
+  /** 敷いた線路の上の列車の位置。キーは 'x,y,進む向き'。同じ向きの列車は前の列車を追い越せない。保存しない */
+  occ: Map<string, { o: object; t: number }>;
   /** 複数の物質を同時に求める指令で、物質ごとに納めた数 */
   multi: Record<string, number>;
   /** そのまま捨てた有毒な気体の数（物質ごとの累計） */
@@ -232,15 +240,128 @@ export const trainSpeed = (w: World) => 14 * (1 + 0.35 * w.up.belt) * (has(w, 'e
 /** 線路の長さ：横に進んでから縦に進む、直角の道のり（マス） */
 export const railLength = (a: Ent, b: Ent) => Math.max(1, Math.abs(b.x - a.x) + Math.abs(b.y - a.y));
 export const pathLength = (pts: [number, number][]) => Math.max(1, pts.slice(1).reduce((a, q, i) => a + Math.abs(q[0] - pts[i][0]) + Math.abs(q[1] - pts[i][1]), 0));
-/** 積む駅 e の線路：自分で敷いたものがあればそれ、なければ自動（横に進んでから縦に曲がる。駅ごとに少しずらす） */
-export function railOf(w: World, e: Ent, to?: Ent): { pts: [number, number][]; dest: Ent; len: number; custom: boolean } | null {
-  const own = e.rail && e.railTo ? w.ents.get(e.railTo) : undefined;
-  if (own && own.kind === 'station' && own.role === 'out' && own.ch === e.ch && e.rail!.length >= 2) return { pts: e.rail!, dest: own, len: pathLength(e.rail!), custom: true };
-  const dest = to ?? stationTarget(w, e);
-  if (!dest) return null;
+/** 敷いた線路の上では、自動の仮線路より速く走れる */
+export const RAIL_BOOST = 1.5;
+export interface Route {
+  /** 描くための折れ線（マスの中心。曲がり角だけ） */
+  pts: [number, number][];
+  /** 敷いた線路を通る道筋のマス。自動の線路では空 */
+  tiles: [number, number][];
+  dest: Ent;
+  len: number;
+  /** 敷いた線路を通るか */
+  custom: boolean;
+}
+const dirBetween = (a: [number, number], b: [number, number]): number => (b[0] === a[0] + 1 && b[1] === a[1] ? 0 : b[0] === a[0] && b[1] === a[1] + 1 ? 1 : b[0] === a[0] - 1 && b[1] === a[1] ? 2 : b[0] === a[0] && b[1] === a[1] - 1 ? 3 : -1);
+/** 隣り合う 2 マスを線路でつなぐ。つないだら true（すでにつながっていたら false） */
+export function addRail(w: World, a: [number, number], b: [number, number]): boolean {
+  const d = dirBetween(a, b);
+  if (d < 0 || floorOf(a[1]) || floorOf(b[1])) return false;
+  const ka = `${a[0]},${a[1]}`, kb = `${b[0]},${b[1]}`, ma = w.rails.get(ka) || 0, mb = w.rails.get(kb) || 0;
+  if ((ma >> d) & 1) return false;
+  w.rails.set(ka, ma | (1 << d));
+  w.rails.set(kb, mb | (1 << ((d + 2) % 4)));
+  w.railRev++;
+  return true;
+}
+/** そのマスの線路を取り除く。つながっていた隣からも外す */
+export function removeRail(w: World, x: number, y: number): boolean {
+  const m = w.rails.get(`${x},${y}`);
+  if (m === undefined) return false;
+  for (let d = 0; d < 4; d++) {
+    if (!((m >> d) & 1)) continue;
+    const nk = `${x + DX[d]},${y + DY[d]}`, nm = (w.rails.get(nk) || 0) & ~(1 << ((d + 2) % 4));
+    if (nm) w.rails.set(nk, nm); else w.rails.delete(nk);
+  }
+  w.rails.delete(`${x},${y}`);
+  w.railRev++;
+  return true;
+}
+/** 元に戻すために、マスの線路をそのまま書き戻す */
+export function setRailMask(w: World, k: string, m: number | undefined) {
+  if (m) w.rails.set(k, m); else w.rails.delete(k);
+  w.railRev++;
+}
+/** 角のマスを順に結んで線路を敷く（まっすぐな区間は自動で埋める） */
+export function layRail(w: World, corners: [number, number][]) {
+  for (let i = 1; i < corners.length; i++) {
+    let [x, y] = corners[i - 1];
+    const [tx, ty] = corners[i];
+    while (x !== tx || y !== ty) {
+      const nx = x !== tx ? x + Math.sign(tx - x) : x, ny = x !== tx ? y : y + Math.sign(ty - y);
+      addRail(w, [x, y], [nx, ny]);
+      x = nx; y = ny;
+    }
+  }
+}
+/** 駅が線路に触れているマス：駅の 4 マスと、その外周に接するマスのうち、線路があるもの */
+function stationTouch(w: World, e: Ent): string[] {
+  const out: string[] = [];
+  for (let dx = -1; dx <= 2; dx++) for (let dy = -1; dy <= 2; dy++) {
+    if ((dx === -1 || dx === 2) && (dy === -1 || dy === 2)) continue; // 斜めの角は触れていない
+    const k = `${e.x + dx},${e.y + dy}`;
+    if (w.rails.has(k)) out.push(k);
+  }
+  return out;
+}
+const routeCache = new WeakMap<World, { rev: number; m: Map<string, Route | null> }>();
+/** 駅 a から駅 b まで、敷いた線路をたどるいちばん短い道筋。つながっていなければ null */
+export function railRoute(w: World, a: Ent, b: Ent): Route | null {
+  let c = routeCache.get(w);
+  if (!c || c.rev !== w.railRev) { c = { rev: w.railRev, m: new Map() }; routeCache.set(w, c); }
+  const ck = `${a.x},${a.y}>${b.x},${b.y}`;
+  const hit = c.m.get(ck);
+  if (hit !== undefined) return hit ? (hit.dest === b ? hit : { ...hit, dest: b }) : null;
+  let found: Route | null = null;
+  const starts = w.rails.size ? stationTouch(w, a) : [], goals = new Set(starts.length ? stationTouch(w, b) : []);
+  if (starts.length && goals.size) {
+    // 幅優先で探す
+    const prev = new Map<string, string | null>();
+    let queue = starts.slice(), end: string | null = null;
+    for (const k of starts) prev.set(k, null);
+    search: while (queue.length) {
+      const next: string[] = [];
+      for (const k of queue) {
+        if (goals.has(k)) { end = k; break search; }
+        const m = w.rails.get(k)!, [x, y] = k.split(',').map(Number);
+        for (let d = 0; d < 4; d++) {
+          if (!((m >> d) & 1)) continue;
+          const nk = `${x + DX[d]},${y + DY[d]}`;
+          if (!prev.has(nk) && w.rails.has(nk)) { prev.set(nk, k); next.push(nk); }
+        }
+      }
+      queue = next;
+    }
+    if (end) {
+      const tiles: [number, number][] = [];
+      for (let k: string | null = end; k; k = prev.get(k) ?? null) tiles.unshift(k.split(',').map(Number) as [number, number]);
+      const full: [number, number][] = [[a.x + 1, a.y + 1], ...tiles.map(([x, y]) => [x + 0.5, y + 0.5] as [number, number]), [b.x + 1, b.y + 1]];
+      // 描くときは曲がり角だけ残す
+      const pts = full.filter((q, i) => i === 0 || i === full.length - 1 || !((full[i - 1][0] === q[0] && q[0] === full[i + 1][0]) || (full[i - 1][1] === q[1] && q[1] === full[i + 1][1])));
+      found = { pts, tiles, dest: b, len: pathLength(full), custom: true };
+    }
+  }
+  c.m.set(ck, found);
+  return found;
+}
+/** 自動の仮線路：横に進んでから縦に曲がる。駅ごとに少しずらす */
+function autoRoute(e: Ent, dest: Ent): Route {
   const off = ((((e.x * 7 + e.y * 13) % 5) + 5) % 5 - 2) * 0.24;
   const pts: [number, number][] = [[e.x + 1, e.y + 1 + off], [dest.x + 1 + off, e.y + 1 + off], [dest.x + 1 + off, dest.y + 1]];
-  return { pts, dest, len: railLength(e, dest), custom: false };
+  return { pts, tiles: [], dest, len: railLength(e, dest), custom: false };
+}
+/** 積む駅 e から降ろす駅 to（省くと、いちばん近い行き先）への線路。敷いた線路でつながっていればそれ、なければ自動の仮線路 */
+export function railOf(w: World, e: Ent, to?: Ent): Route | null {
+  const dest = to ?? stationRoutes(w, e)[0]?.dest;
+  if (!dest || dest.kind !== 'station' || dest.role !== 'out' || dest.ch !== e.ch) return null;
+  return railRoute(w, e, dest) ?? autoRoute(e, dest);
+}
+/** 積む駅 e の行き先すべて。敷いた線路でつながる降ろす駅があれば、そこだけへ送る（分岐点で枝分かれする）。
+ *  1 つもつながっていなければ、同じ番線のすべての降ろす駅へ、自動の仮線路で送る */
+export function stationRoutes(w: World, e: Ent): Route[] {
+  const ts = stationTargets(w, e);
+  const laid = ts.map((d) => railRoute(w, e, d)).filter((r): r is Route => !!r);
+  return laid.length ? laid : ts.map((d) => autoRoute(e, d));
 }
 
 export const key = (x: number, y: number) => `${x},${y}`;
@@ -296,7 +417,7 @@ export function newWorld(): World {
   const w: World = {
     ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
-    up: { extract: 0, belt: 0, machine: 0 }, research: [], solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, sig: [], buckets: [], playMs: 0, tick: 0, events: [], fx: [],
+    up: { extract: 0, belt: 0, machine: 0 }, research: [], solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, sig: [], rails: new Map(), railRev: 0, occ: new Map(), buckets: [], playMs: 0, tick: 0, events: [], fx: [],
   };
   for (const [x, y] of hubTiles(2)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
   return w;
@@ -871,6 +992,8 @@ export function step(w: World, dt: number) {
   }
   if (currentGoal(w)) { const gk = `${w.chapter}:${w.progress[w.chapter]}`; w.goalMs[gk] = (w.goalMs[gk] || 0) + dt * 1000; }
   for (let i = 1; i <= SIGNALS; i++) if (w.sig[i] > 0) w.sig[i] = Math.max(0, w.sig[i] - dt);
+  // 列車の位置の覚え書きは、古いものをときどき捨てる
+  if (w.tick % 600 === 0 && w.occ.size) for (const [k, o] of w.occ) if (o.t < w.tick - 2) w.occ.delete(k);
   const speed = beltSpeed(w), every = extractInterval(w), rate = machineRate(w), kU = 1 - Math.exp(-dt / UTIL_TAU);
   for (const e of w.ents.values()) {
     switch (e.kind) {
@@ -1003,26 +1126,42 @@ export function step(w: World, dt: number) {
             tr.wait += dt;
             // 満載か、少し待っても増えなければ発車する
             if (tr.cargo.length && (tr.cargo.length >= trainCap(w) || tr.wait > 2.5)) {
-              const own = railOf(w, e), ts = own?.custom ? [own.dest] : stationTargets(w, e);
-              if (ts.length) { e.rr = ((e.rr || 0) + 1) % ts.length; const to = ts[e.rr]; tr.to = key(to.x, to.y); tr.p = 1e-6; tr.wait = 0; }
+              const rs = stationRoutes(w, e);
+              if (rs.length) { e.rr = ((e.rr || 0) + 1) % rs.length; const to = rs[e.rr].dest; tr.to = key(to.x, to.y); tr.p = 1e-6; tr.wait = 0; }
             }
             continue;
           }
           const dest = tr.to ? w.ents.get(tr.to) : undefined;
           const ok = !!dest && dest.kind === 'station' && dest.role === 'out' && dest.ch === e.ch;
           if (!ok) tr.back = true; // 行き先がなくなった：引き返す
-          const v = (trainSpeed(w) * dt) / (ok ? (railOf(w, e, dest)?.len ?? railLength(e, dest!)) : 12);
+          const route = ok ? railOf(w, e, dest) : null;
+          const v = (trainSpeed(w) * (route?.custom ? RAIL_BOOST : 1) * dt) / (route?.len ?? 12);
+          // 敷いた線路は、ほかの駅の列車と共有する。同じ向きに走る前の列車がすぐ先にいれば、止まって待つ
+          const tiles = route?.custom ? route.tiles : null, n = tiles?.length ?? 0;
+          const idx = (p: number) => Math.max(0, Math.min(n - 1, Math.round(p * (n - 1))));
+          const dirAt = (i: number, fwd: boolean) => { if (n < 2) return 0; const k = Math.max(0, Math.min(n - 2, fwd ? i : i - 1)), d = dirBetween(tiles![k], tiles![k + 1]); return fwd ? d : (d + 2) % 4; };
+          let held = false;
+          if (tiles && n) {
+            const i = idx(tr.p), fwd = !tr.back;
+            for (const j of fwd ? [i + 1, i + 2] : [i - 1, i - 2]) {
+              if (j < 0 || j >= n) continue;
+              const o = w.occ.get(`${tiles[j][0]},${tiles[j][1]},${dirAt(j, fwd)}`);
+              if (o && o.o !== tr && o.t >= w.tick - 1) held = true;
+            }
+          }
+          tr.held = held || undefined;
           if (!tr.back) {
-            tr.p = Math.min(1, tr.p + v);
+            if (!held) tr.p = Math.min(1, tr.p + v);
             if (tr.p >= 1) {
               const db = (dest!.buf ??= []);
               while (tr.cargo.length && db.length < stationCap(w)) db.push(tr.cargo.shift()!);
               if (!tr.cargo.length) { tr.back = true; e.n = (e.n || 0) + 1; }
             }
           } else {
-            tr.p = Math.max(0, tr.p - v);
+            if (!held) tr.p = Math.max(0, tr.p - v);
             if (tr.p <= 0) { tr.p = 0; tr.back = false; if (tr.cargo.length) buf.unshift(...tr.cargo.splice(0)); }
           }
+          if (tiles && n && (tr.p > 0 || tr.back)) { const i = idx(tr.p); w.occ.set(`${tiles[i][0]},${tiles[i][1]},${dirAt(i, !tr.back)}`, { o: tr, t: w.tick }); }
         }
         break;
       }
@@ -1080,7 +1219,7 @@ export const SAVE_VERSION = 2;
 export function serialize(w: World): string {
   return JSON.stringify({
     v: SAVE_VERSION, ents: [...w.ents.values()].filter((e) => e.kind !== 'part'), chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
-    hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
+    rails: [...w.rails], hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
     discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, research: w.research, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
     playMs: Math.round(w.playMs), savedAt: Date.now(),
   });
@@ -1093,6 +1232,13 @@ export function deserialize(json: string): World | null {
     const w = newWorld();
     w.ents = new Map();
     for (const e of d.ents as Ent[]) if (e.kind !== 'part') restore(w, e);
+    if (Array.isArray(d.rails)) for (const row of d.rails) if (Array.isArray(row) && typeof row[0] === 'string' && Number.isInteger(row[1]) && row[1] > 0 && row[1] < 16) w.rails.set(row[0], row[1]);
+    // 古いセーブ：駅ごとに持っていた線路を、地図の線路へ移す
+    for (const e of w.ents.values()) {
+      if (e.rail && e.rail.length >= 2) layRail(w, e.rail.map(([x, y]) => [Math.floor(x), Math.floor(y)] as [number, number]));
+      e.rail = undefined; e.railTo = undefined;
+      for (const t2 of [e.tr, ...(e.xtr ?? [])]) if (t2) t2.held = undefined;
+    }
     for (const e of w.ents.values()) {
       if (e.recipe && !recipeById(e.recipe)) clearRecipe(e);
       if (e.item && !hasSub(e.item.s)) e.item = null;
