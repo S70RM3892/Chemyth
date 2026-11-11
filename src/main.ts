@@ -216,7 +216,7 @@ function boot(data: HotData) {
       h('button', { class: 'ghost', type: 'button', id: 'm-chapters', onclick: () => showChapters(panel()) }, '指令の一覧（章を切り替える）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-passages', onclick: () => showPassages(panel()) }, 'リード文課題（京大形式の空欄補充）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-drills', onclick: () => showDrills(panel()) }, '連鎖計算（京大形式の理論の大問。数値は毎回変わる）'),
-      h('button', { class: 'ghost', type: 'button', id: 'm-structure', onclick: () => showStructure(panel()) }, '配列決定（ペプチドのアミノ酸配列を実験事実から決める）'),
+      h('button', { class: 'ghost', type: 'button', id: 'm-structure', onclick: () => showStructure(panel()) }, '構造決定（異性体の数え上げ・構造の特定・ペプチドの配列）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-syllabus', onclick: () => showSyllabus(panel()) }, '範囲表（入試範囲のどこまで進んだか）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-log', onclick: () => showLog(panel()) }, '記録（間違えたところ）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-help', onclick: () => showHelp() }, '遊び方'),

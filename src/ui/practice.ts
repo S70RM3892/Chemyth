@@ -1,5 +1,8 @@
 import { DRILLS, checkStep, mulberry32, type Drill, type DrillGen } from '../content/drills';
+import { pretty } from '../chem/formula';
+import { specText, type Isomer } from '../chem/isomers';
 import { AMINOS, makePeptide } from '../content/peptide';
+import { makeCount, makeIdentify, type CountProblem, type IdentifyProblem } from '../content/structure';
 import { SYLLABUS } from '../content/syllabus';
 import type { World } from '../engine/world';
 import { h } from './dom';
@@ -109,10 +112,19 @@ function fmt(x: number): string {
 /** 初見の分子式から、異性体を数え上げる・実験事実から 1 つに絞る */
 export function showStructure(c: PanelCtx) {
   const { w } = c;
+  const cell = (kind: 'count' | 'id', lv: 1 | 2 | 3) => {
+    const id = `iso-${kind}-${lv}`, st = w.practice[id];
+    return h('button', { class: 'ghost drill', type: 'button', id, onclick: () => (kind === 'count' ? runCount(c, lv) : runIdentify(c, lv)) },
+      h('span', { class: 'drill-t' }, `${kind === 'count' ? '数え上げ' : '構造の特定'}　${LEVEL[lv]}`),
+      h('span', { class: 'muted' }, ['', 'C₃〜C₄ の脂肪族', 'C₅ とエステル', '芳香族を含む'][lv]),
+      h('span', { class: 'drill-n' + (st?.clean ? ' ok' : '') }, st ? `正解 ${st.clean} / ${st.tries} 回` : '未挑戦'));
+  };
   c.show(
     h('header', {}, h('h2', {}, '構造決定'), back('sheet-close', '閉じる', c.close)),
     h('p', {}, '京大の有機と天然高分子の大問は、初めて見る分子式や配列から構造を決める。ここでは、考えられる異性体や配列をその場で全部作り出して出題する。数え上げと特定は、答えがただ 1 つに決まることを機械的に確かめてある。'),
     h('p', { class: 'muted' }, '紙に構造式を書き出してから答えろ。頭の中だけで数えると必ず落とす。'),
+    h('h3', {}, '異性体を数え上げる'), h('div', { class: 'menu' }, ...([1, 2, 3] as const).map((lv) => cell('count', lv))),
+    h('h3', {}, '実験事実から 1 つに決める'), h('div', { class: 'menu' }, ...([1, 2, 3] as const).map((lv) => cell('id', lv))),
     h('h3', {}, 'ペプチドの配列を決める'), h('div', { class: 'menu' }, ...([1, 2, 3] as const).map((lv) => {
       const id = `pep-${lv}`, st = w.practice[id];
       return h('button', { class: 'ghost drill', type: 'button', id, onclick: () => runPeptide(c, lv) },
@@ -163,8 +175,74 @@ function runPeptide(c: PanelCtx, lv: 1 | 2 | 3) {
   c.show(
     h('header', {}, h('h2', {}, 'ペプチドの配列決定'), back('iso-back', '一覧へ', () => showStructure(c))),
     h('p', { class: 'qtext' }, q.text),
-    h('ol', { class: 'steps clues' }, ...q.clues.map((t) => h('li', {}, t.text))),
+    h('ol', { class: 'clues' }, ...q.clues.map((t) => h('li', {}, t.text))),
     h('p', { class: 'muted' }, 'アミノ酸を、N 末端から順にタップして並べろ。'),
     line, chips, h('div', { class: 'row' }, ok), fb,
+  );
+}
+
+const isoChip = (i: Isomer, extra = '') => h('span', { class: `iso ${extra}` }, h('span', { class: 'formula' }, pretty(i.formula)), i.name ? h('span', { class: 'muted' }, i.name) : null);
+
+function runCount(c: PanelCtx, lv: 1 | 2 | 3) {
+  const { w } = c;
+  const q: CountProblem = makeCount(mulberry32(seed()), lv);
+  let text = '';
+  const display = h('div', { class: 'slot on numslot', id: 'iso-display' }, '');
+  const paint = () => { display.textContent = text || '答えを入れる'; display.classList.toggle('empty', !text); };
+  const keys = numPad((k) => { if (k !== '.' && k !== '−') { text = typeNumber(text, k); sfx.tap(); paint(); } });
+  const ok = h('button', { class: 'primary', type: 'button', id: 'iso-ok' }, '答える');
+  const fb = h('div', { class: 'answer', hidden: true });
+  ok.onclick = () => {
+    const x = parseInt(text, 10);
+    if (Number.isNaN(x)) return;
+    const good = x === q.answer;
+    record(w, `iso-count-${lv}`, good);
+    if (good) { w.points += 8; sfx.ok(); c.actions.stamp('正解'); } else { sfx.bad(); w.mistakes.push({ machine: 'structure', recipe: `${specText(q.spec)} の数え上げ`, part: 'calc', t: Date.now() }); }
+    fb.replaceChildren(
+      h('p', {}, h('b', {}, good ? '正解。研究点 +8。' : '不正解。'), `答えは ${q.answer} 種類。`),
+      h('p', { class: 'note' }, q.how),
+      h('div', { class: 'isos' }, ...q.list.map((i) => isoChip(i))),
+      h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'iso-next', onclick: () => runCount(c, lv) }, '次の問題'), back('iso-list', '一覧へ', () => showStructure(c))));
+    fb.hidden = false;
+    keys.hidden = true; ok.hidden = true;
+    c.sheet.scrollTop = c.sheet.scrollHeight;
+  };
+  paint();
+  c.show(
+    h('header', {}, h('h2', {}, `数え上げ　${pretty(specText(q.spec))}`), back('iso-back', '一覧へ', () => showStructure(c))),
+    h('p', { class: 'qtext' }, q.text),
+    h('div', { class: 'row' }, display, h('span', { class: 'formula' }, '種類')), keys, h('div', { class: 'row' }, ok), fb,
+  );
+}
+
+function runIdentify(c: PanelCtx, lv: 1 | 2 | 3) {
+  const { w } = c;
+  const q: IdentifyProblem = makeIdentify(mulberry32(seed()), lv);
+  const fb = h('div', { class: 'answer', hidden: true });
+  const opts = h('div', { class: 'isos pick' }, ...q.options.map((i, n) => {
+    const b = h('button', { class: 'chip plain iso', type: 'button', id: `iso-opt-${n}` }, h('span', { class: 'formula' }, pretty(i.formula)));
+    b.dataset.right = String(i.key === q.answer);
+    b.onclick = () => {
+      const good = i.key === q.answer;
+      record(w, `iso-id-${lv}`, good);
+      if (good) { w.points += 8; sfx.ok(); c.actions.stamp('正解'); } else { sfx.bad(); w.mistakes.push({ machine: 'structure', recipe: `${specText(q.spec)} の特定`, part: 'calc', t: Date.now() }); }
+      for (const o of opts.children) { (o as HTMLButtonElement).disabled = true; o.classList.toggle('picked', (o as HTMLElement).dataset.right === 'true'); }
+      b.classList.toggle('wrong', !good);
+      const ans = q.options.find((o) => o.key === q.answer)!;
+      fb.replaceChildren(
+        h('p', {}, h('b', {}, good ? '正解。研究点 +8。' : '不正解。'), '答えは ', isoChip(ans)),
+        h('p', { class: 'note' }, q.how),
+        h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'iso-next', onclick: () => runIdentify(c, lv) }, '次の問題'), back('iso-list', '一覧へ', () => showStructure(c))));
+      fb.hidden = false;
+      c.sheet.scrollTop = c.sheet.scrollHeight;
+    };
+    return b;
+  }));
+  c.show(
+    h('header', {}, h('h2', {}, `構造の特定　${pretty(specText(q.spec))}`), back('iso-back', '一覧へ', () => showStructure(c))),
+    h('p', { class: 'qtext' }, q.text),
+    h('ol', { class: 'clues' }, ...q.clues.map((t) => h('li', {}, t))),
+    h('p', { class: 'muted' }, '候補を紙に全部書き出し、実験事実ごとに消していけ。残った 1 つを選べ。'),
+    opts, fb,
   );
 }

@@ -211,9 +211,11 @@ b { font-weight: 700; }
 .iso { display: inline-flex; flex-direction: column; gap: 0; border: 1px solid var(--rule); padding: 4px 10px; line-height: 1.35; }
 .iso .muted { font-size: 11px; }
 .isos.pick .iso { min-height: 48px; justify-content: center; font-size: 16px; }
-.clues li { margin: 4px 0; }
+.clues { margin: 0; padding-left: 1.7em; display: grid; gap: 6px; font-size: 15px; }
+.clues li { padding-left: 2px; }
+.clues li::marker { font-family: var(--font-mono); font-weight: 600; color: var(--red); }
 .pep-line { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.pep-line .slot { min-width: 0; flex: 0 1 auto; padding: 6px 10px; }
+.pep-line .slot { min-width: 0; flex: 0 1 auto; padding: 6px 10px; font-size: 16px; }
 .syl { border-bottom: 1px solid var(--rule); padding: 2px 0; }
 .syl summary { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: baseline; padding: 8px 0; cursor: pointer; list-style: none; min-height: 44px; }
 .syl summary::-webkit-details-marker { display: none; }
