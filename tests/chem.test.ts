@@ -7,9 +7,10 @@ import { HUB_TILES, MAP_H, MAP_W, ZONES, hubTiles, zoneAt, zoneSpots, type Zone 
 import { GOALS, CHAPTERS, chapterOf } from '../src/content/goals';
 import { QUESTIONS, isCorrect } from '../src/content/questions';
 import { MACHINES } from '../src/content/machines';
-import { at, autoDir, configure, currentGoal, growHub, hubLevel, requiredOf, deserialize, doneCount, dueIds, goalCount, judge, learn, newWorld, place, schedule, serialize, setChapter, step, toolUnlocked, type Answer } from '../src/engine/world';
+import { at, autoDir, inflow, configure, currentGoal, growHub, hubLevel, requiredOf, deserialize, doneCount, dueIds, goalCount, judge, learn, newWorld, place, schedule, serialize, setChapter, step, toolUnlocked, type Answer } from '../src/engine/world';
 import { REAGENTS, SETS, TESTS, isPositive } from '../src/content/samples';
 import { KNOWLEDGE } from '../src/content/knowledge';
+import { SYLLABUS, coverageOf } from '../src/content/syllabus';
 import { PASSAGES, checkBlank } from '../src/content/passages';
 
 const rec = (id: string) => RECIPES.find((r) => r.id === id)!;
@@ -79,8 +80,9 @@ describe('内容データ', () => {
   it('章と指令の対応', () => {
     expect(GOALS.length).toBe(CHAPTERS.reduce((a, c) => a + c.goals.length, 0));
     expect(chapterOf(0)?.name).toContain('第1章');
-    expect(chapterOf(GOALS.length - 1)?.name).toContain('第14章');
-    expect(CHAPTERS[13].goals.length).toBeGreaterThan(40);
+    expect(chapterOf(GOALS.length - 1)?.name).toContain('第19章');
+    expect(CHAPTERS[13].name).toContain('総合演習');
+    expect(CHAPTERS[13].goals.length).toBeGreaterThan(60);
     expect(chapterOf(GOALS.length)).toBeNull();
     expect(CHAPTERS[MACHINES.battery.chapter!].goals[0].s).toBe('e');
     for (const g of GOALS) if (g.strict) expect(SETS.find((x) => x.id === g.strict)!.members, g.s).toContain(g.s);
@@ -126,6 +128,34 @@ describe('分析の課題', () => {
     }
     const lead = PASSAGES.find((p) => p.id === 'lead')!.blanks.find((b) => b.type === 'formula')!;
     expect(checkBlank(lead, 'ＰｂＳＯ４')).toBe(lead.answer === 'PbSO4');
+  });
+});
+
+describe('学習指導要領との対応', () => {
+  it('化学基礎 14 項目と化学 20 項目がそろっている', () => {
+    expect(SYLLABUS.filter((u) => u.subject === '化学基礎').length).toBe(14);
+    expect(SYLLABUS.filter((u) => u.subject === '化学').length).toBe(20);
+    expect(new Set(SYLLABUS.map((u) => u.id)).size).toBe(SYLLABUS.length);
+  });
+  for (const u of SYLLABUS) {
+    it(`${u.subject}「${u.title}」に対応する内容がある`, () => {
+      const c = coverageOf(u);
+      // 参照している分野や試料が、実在するデータに 1 つ以上当たること
+      for (const k of u.recipes ?? []) expect(RECIPES.some((r) => r.id === k || r.source.includes(k)), `反応 ${k}`).toBe(true);
+      for (const k of u.sets ?? []) expect(SETS.some((x) => x.id === k), `試料 ${k}`).toBe(true);
+      for (const k of u.questions ?? []) expect(QUESTIONS.some((q) => q.topic === k), `計算 ${k}`).toBe(true);
+      for (const k of u.knowledge ?? []) expect(KNOWLEDGE.some((x) => x.topic === k), `知識 ${k}`).toBe(true);
+      for (const k of u.passages ?? []) expect(PASSAGES.some((x) => x.id === k), `リード文 ${k}`).toBe(true);
+      expect(c.total, '内容の数').toBeGreaterThanOrEqual(5);
+    });
+  }
+  it('どの内容も、いずれかの項目に属している', () => {
+    const all = SYLLABUS.map(coverageOf);
+    for (const r of RECIPES) expect(all.some((c) => c.recipes.includes(r)), `反応 ${r.id}（${r.source}）`).toBe(true);
+    for (const q of QUESTIONS) expect(all.some((c) => c.questions.includes(q)), `計算 ${q.id}（${q.topic}）`).toBe(true);
+    for (const k of KNOWLEDGE) expect(all.some((c) => c.knowledge.includes(k)), `知識 ${k.id}（${k.topic}）`).toBe(true);
+    for (const x of SETS) expect(all.some((c) => c.sets.includes(x)), `試料 ${x.id}`).toBe(true);
+    for (const x of PASSAGES) expect(all.some((c) => c.passages.includes(x)), `リード文 ${x.id}`).toBe(true);
   });
 });
 
@@ -425,5 +455,26 @@ describe('工場の動作', () => {
     const r = deserialize(serialize(w))!;
     expect(r.hubSize).toBe(4);
     expect(growHub(r)).toBe(false);
+  });
+
+  it('立体交差の先で曲がるベルトは、立体交差からの流れ込みを向きとして認識する', () => {
+    const w = newWorld();
+    place(w, 'belt', 10, 10, 0);     // → 立体交差へ
+    place(w, 'bridge', 11, 10, 0);
+    place(w, 'belt', 12, 10, 1);     // 立体交差の先で下へ曲がる
+    place(w, 'belt', 11, 9, 1);      // 縦の流れ
+    place(w, 'belt', 11, 11, 0);     // 立体交差の下で右へ曲がる
+    expect(inflow(w, 12, 10, 1)).toBe(0);
+    expect(inflow(w, 11, 11, 0)).toBe(1);
+    expect(autoDir(w, 'reactor', 12, 10)).toBe(0);
+    // 流れ込みのない向きは認識しない
+    place(w, 'bridge', 30, 30, 0);
+    place(w, 'belt', 31, 30, 1);
+    expect(inflow(w, 31, 30, 1)).toBeNull();
+    // 実際に物が曲がって流れる
+    at(w, 10, 10)!.item = { s: 'N2', p: 0, m: 0 };
+    place(w, 'belt', 12, 11, 1);
+    run(w, 1.6);
+    expect(at(w, 12, 11)!.item?.s ?? at(w, 12, 10)!.item?.s).toBe('N2');
   });
 });

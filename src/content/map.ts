@@ -2,7 +2,7 @@
 export const MAP_W = 84;
 export const MAP_H = 56;
 
-export type Zone = 'sea' | 'sulfur' | 'limestone' | 'iron' | 'coal' | 'bauxite' | 'copper' | 'zinc' | 'lead' | 'oil' | 'gas' | 'farm' | 'grove' | 'ranch' | 'rubber';
+export type Zone = 'sea' | 'sulfur' | 'limestone' | 'iron' | 'coal' | 'bauxite' | 'copper' | 'zinc' | 'lead' | 'oil' | 'gas' | 'farm' | 'grove' | 'ranch' | 'rubber' | 'phosphate' | 'sand' | 'fluorite' | 'forest';
 
 export interface ZoneInfo {
   name: string;
@@ -89,6 +89,26 @@ export const ZONES: Record<Zone, ZoneInfo> = {
     name: 'ゴム園', resource: 'rubber', form: '化合物', tint: ['#2e3a2a', '#5f9a6a'], at: [12, 45, 2.4],
     about: 'ゴムの木の樹液（ラテックス）を固めた生ゴムは、イソプレンが付加重合した形のポリイソプレンで、二重結合がシス形になっている。',
     exam: '天然ゴムの単量体はイソプレン。シス形だから弾性がある。硫黄を加えて加熱する加硫で架橋構造ができ、弾性と強度が増す。',
+  },
+  phosphate: {
+    name: 'リン鉱床', resource: 'Ca3(PO4)2', form: '化合物', tint: ['#3a3f2e', '#9aa56a'], at: [48, 38, 2.4],
+    about: 'リン鉱石の主成分はリン酸カルシウム Ca₃(PO₄)₂。リンは単体では産出しない。',
+    exam: 'リン鉱石・ケイ砂・コークスを電気炉で強熱して黄リンを得る。硫酸と反応させると過リン酸石灰（肥料）。黄リンと赤リンは同素体。',
+  },
+  sand: {
+    name: 'ケイ砂の浜', resource: 'SiO2', form: '化合物', tint: ['#4a4636', '#d6c79a'], at: [10, 36, 2.4],
+    about: 'ケイ砂や石英の主成分は二酸化ケイ素 SiO₂。共有結合の結晶で、硬く融点が高い。ケイ素は地殻中で酸素の次に多い元素。',
+    exam: 'コークスで還元してケイ素（半導体）、NaOH と融解してケイ酸ナトリウム、水ガラス、シリカゲル。フッ化水素酸だけがガラスを溶かす。',
+  },
+  fluorite: {
+    name: '蛍石鉱床', resource: 'CaF2', form: '化合物', tint: ['#2f3346', '#8f8ad0'], at: [66, 32, 2.2],
+    about: '蛍石の主成分はフッ化カルシウム CaF₂。',
+    exam: '濃硫酸と加熱してフッ化水素を得る。フッ化水素酸は弱酸で、ガラスを溶かすのでポリエチレンの容器に保存する。',
+  },
+  forest: {
+    name: '森林', resource: 'cellulose', form: '化合物', tint: ['#24372a', '#4f8a5a'], at: [26, 20, 2.8],
+    about: '木材や綿の主成分はセルロース。多数の β-グルコースが直線状につながった天然高分子で、分子どうしが水素結合で束になる。',
+    exam: '繰り返し単位に –OH が 3 個。再生繊維（レーヨン）、半合成繊維（アセテート）、トリニトロセルロース。デンプンとの構造の違い。',
   },
   ranch: {
     name: '牧場', resource: 'protein', form: '化合物', tint: ['#3a3326', '#a08a5c'], at: [28, 30, 2.4],

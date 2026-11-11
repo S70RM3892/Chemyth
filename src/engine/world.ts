@@ -259,6 +259,17 @@ export function portDir(dir: Dir, port: number): Dir {
   return ((dir + [0, 1, 3][port]) % 4) as Dir;
 }
 
+/** 立体交差 b を向き d に通り抜ける流れがあるか（立体交差が続いていてもたどる） */
+function through(w: World, b: Ent, d: Dir, depth = 0): boolean {
+  const n = at(w, b.x - DX[d], b.y - DY[d]);
+  if (!n || depth > 8) return false;
+  if ((n.kind === 'belt' || n.kind === 'extractor' || n.kind === 'depot' || n.kind === 'sampler') && n.dir === d) return true;
+  if (n.kind === 'bridge') return through(w, n, d, depth + 1);
+  if (n.kind === 'splitter') return [0, 1, 2].some((i) => portDir(n.dir, i) === d);
+  if (n.kind === 'analyzer') return [0, 1].some((i) => portDir(n.dir, i) === d);
+  return !!n.outOrder && n.outOrder.some((_, i) => portDir(n.dir, i) === d);
+}
+
 /** (x,y) へ流れ込んでくるものがあれば、その進行方向を返す。prefer の向きを優先する */
 export function inflow(w: World, x: number, y: number, prefer?: Dir): Dir | null {
   const order: Dir[] = prefer === undefined ? [0, 1, 2, 3] : [prefer, ((prefer + 1) % 4) as Dir, ((prefer + 3) % 4) as Dir];
@@ -267,7 +278,8 @@ export function inflow(w: World, x: number, y: number, prefer?: Dir): Dir | null
     if (!n) continue;
     if ((n.kind === 'belt' || n.kind === 'extractor' || n.kind === 'depot' || n.kind === 'sampler') && n.dir === d) return d;
     if (n.kind === 'analyzer' && [0, 1].some((i) => portDir(n.dir, i) === d)) return d;
-    if (n.kind === 'bridge' && d === prefer) return d;
+    // 立体交差は、その向こう側から同じ向きに流れ込んでいれば、こちらへ流れ出す
+    if (n.kind === 'bridge' && through(w, n, d)) return d;
     if (n.kind === 'splitter' && [0, 1, 2].some((i) => portDir(n.dir, i) === d)) return d;
     if (n.outOrder && n.outOrder.some((_, i) => portDir(n.dir, i) === d)) return d;
   }

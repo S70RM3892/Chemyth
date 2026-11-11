@@ -7,6 +7,7 @@ import { CHAPTERS } from '../content/goals';
 import { KNOWLEDGE } from '../content/knowledge';
 import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
+import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
 import { SRS_STEPS, UPGRADE_COST, beltSpeed, discover, dueIds, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { chip, equation, openConfig, type SheetActions } from './config';
@@ -188,6 +189,53 @@ export function showLog(c: PanelCtx) {
   );
 }
 
+// ---------------- 範囲表 ----------------
+
+/** 項目ごとの進み具合。反応は正しく設定できた数、計算は解いた数、知識は復習で正解した数、リード文は埋めた空欄の数 */
+export function unitProgress(w: World, u: Unit) {
+  const c = coverageOf(u);
+  const blanks = c.passages.flatMap((p) => p.blanks.map((b) => `${p.id}:${b.id}`));
+  const done = c.recipes.filter((r) => w.learned.includes(r.id)).length + c.questions.filter((q) => w.solved.includes(q.id)).length
+    + c.knowledge.filter((k) => (w.srs[`k:${k.id}`]?.iv ?? 0) >= 1).length + blanks.filter((b) => w.cleared.includes(b)).length;
+  const total = c.recipes.length + c.questions.length + c.knowledge.length + blanks.length;
+  return { c, done, total };
+}
+
+function bar(f: number): HTMLElement {
+  const i = h('i', {});
+  i.style.width = `${Math.round(f * 100)}%`;
+  return h('span', { class: 'syl-bar' }, i);
+}
+
+export function showSyllabus(c: PanelCtx) {
+  const { w } = c;
+  let all = 0, got = 0;
+  const groups = new Map<string, HTMLElement[]>();
+  for (const u of SYLLABUS) {
+    const { c: cov, done, total } = unitProgress(w, u);
+    all += total; got += done;
+    const parts = [cov.recipes.length ? `反応 ${cov.recipes.length}` : '', cov.sets.length ? `仕分け ${cov.sets.length} 組` : '', cov.questions.length ? `計算 ${cov.questions.length}` : '',
+      cov.knowledge.length ? `知識 ${cov.knowledge.length}` : '', cov.passages.length ? `リード文 ${cov.passages.length}` : ''].filter(Boolean).join('・');
+    const row = h('details', { class: 'syl' },
+      h('summary', {}, h('span', { class: 'syl-t' }, u.title), h('span', { class: 'syl-n' }, `${done} / ${total}`),
+        bar(total ? done / total : 0)),
+      h('p', { class: 'muted' }, u.points),
+      h('p', { class: 'note' }, parts),
+      cov.recipes.length ? h('p', { class: 'syl-list' }, ...cov.recipes.map((r) => h('span', { class: w.learned.includes(r.id) ? 'got' : '' }, r.name))) : null,
+      cov.sets.length ? h('p', { class: 'syl-list' }, ...cov.sets.map((x) => h('span', {}, `仕分け：${x.name}`))) : null,
+    );
+    const k = `${u.subject}　${u.section}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(row);
+  }
+  c.show(
+    h('header', {}, h('h2', {}, '範囲表'), closeBtn(c)),
+    h('p', {}, `高等学校学習指導要領の「化学基礎」14 項目と「化学」20 項目に、このゲームの内容を割り当てた表。全体の進み具合は `, h('b', {}, `${got} / ${all}`), '。'),
+    h('p', { class: 'muted' }, '数字は、正しく設定できた反応・解いた計算問題・復習で正解した知識問題・埋めたリード文の空欄の合計。項目をタップすると中身が開く。'),
+    ...[...groups].flatMap(([k, rows]) => [h('h3', {}, k), ...rows]),
+  );
+}
+
 // ---------------- 入力用のキー ----------------
 
 function numPad(press: (k: string) => void): HTMLElement {
@@ -233,7 +281,7 @@ export function showSampler(c: PanelCtx, e: Ent, extra: HTMLElement) {
 // ---------------- 分析器 ----------------
 
 export function showAnalyzer(c: PanelCtx, e: Ent, extra: HTMLElement) {
-  const GROUP = { organic: '有機化合物の検査', amino: 'アミノ酸・ペプチドの検査', nucleic: '核酸の塩基の検査', ion: '金属イオンの検査' } as const;
+  const GROUP = { theory: '原子・結合・結晶・溶液の検査', ion: '無機物質の検査', organic: '有機化合物・高分子の検査', amino: 'アミノ酸・ペプチドの検査', nucleic: '核酸の塩基の検査' } as const;
   const cur = testById(e.test);
   c.show(h('header', {}, h('h2', {}, '分析器'), closeBtn(c)),
     cur ? h('div', { class: 'answer' }, h('p', {}, h('b', {}, `いまの検査：${cur.name}`)), h('p', {}, `陽性（正面へ）：${cur.sees}`), h('p', { class: 'muted' }, 'そうならなかったものは陰性として右手へ出る。'),

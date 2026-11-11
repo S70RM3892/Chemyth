@@ -148,6 +148,71 @@ export const CHAPTERS: Chapter[] = [
   CHAPTERS.push({ name: '第14章 総合演習：仕分け', goals: pool });
 }
 
+// 総合演習より後ろに足す章（章の番号をずらさないため）
+CHAPTERS.push(
+  { name: '第15章 原子・結合・結晶', goals: [
+    { s: 'x-ar', n: 6, strict: 'R', hint: '試料 R は 6 種の原子。貴ガスだけを取り出せ。' },
+    { s: 'x-na', n: 6, strict: 'R', hint: '試料 R からナトリウムを。価電子が 1 個の原子は 2 つある。' },
+    { s: 'x-cl', n: 6, strict: 'R', hint: '試料 R から塩素を。' },
+    { s: 'x-h2o', n: 6, strict: 'Q', hint: '試料 Q は 5 種の分子。水だけを取り出せ。' },
+    { s: 'x-co2', n: 6, strict: 'Q', hint: '試料 Q から二酸化炭素を。結合に極性があっても、分子が無極性のことがある。' },
+    { s: 'x-ch4', n: 6, strict: 'Q', hint: '試料 Q からメタンを。' },
+    { s: 'x-nacl-s', n: 6, strict: 'P', hint: '試料 P は 5 種の固体。イオン結晶を取り出せ。' },
+    { s: 'x-diamond', n: 6, strict: 'P', hint: '試料 P からダイヤモンドを。' },
+    { s: 'x-graphite', n: 6, strict: 'P', hint: '試料 P から黒鉛を。電気を通す固体は 2 つある。' },
+  ] },
+  { name: '第16章 溶液・コロイド・塩', goals: [
+    { s: 'x-feoh3', n: 6, strict: 'Z', hint: '試料 Z から水酸化鉄(III)のコロイドを。帯電の符号を使え。' },
+    { s: 'x-gelatin', n: 6, strict: 'Z', hint: '試料 Z から親水コロイドを。' },
+    { s: 'x-brine', n: 6, strict: 'Z', hint: '試料 Z から真の溶液を。' },
+    { s: 'x-s-nh4cl', n: 6, strict: 'T', hint: '試料 T は 6 種の塩。塩化アンモニウムを。酸性を示す塩は 2 つある。' },
+    { s: 'x-s-nahco3', n: 6, strict: 'T', hint: '試料 T から炭酸水素ナトリウムを。酸性塩なのに水溶液は塩基性。' },
+    { s: 'x-s-acona', n: 6, strict: 'T', hint: '試料 T から酢酸ナトリウムを。' },
+  ] },
+  { name: '第17章 非金属と金属の続き', goals: [
+    { s: 'P4', n: 5, hint: '納品所の南東のリン鉱床。ケイ砂（西の浜）とコークスを一緒に強熱しろ。', zone: 'phosphate' },
+    { s: 'H3PO4', n: 5, hint: 'リンを燃やし、水と反応させろ。試薬棚のリン酸は数えない。' },
+    { s: 'Ca(H2PO4)2', n: 5, hint: 'リン鉱石を硫酸で処理して、水に溶ける肥料にしろ。' },
+    { s: 'Si', n: 5, hint: 'ケイ砂をコークスで還元しろ。', zone: 'sand' },
+    { s: 'H2SiO3', n: 5, hint: 'ケイ砂を水酸化ナトリウムと融解し、塩酸を加えろ。' },
+    { s: 'HF', n: 5, hint: '東の蛍石鉱床。濃硫酸と加熱しろ。', zone: 'fluorite' },
+    { s: 'CaCl(ClO)', n: 5, hint: '消石灰に塩素を吸収させろ。' },
+    { s: 'Br2', n: 5, hint: '試薬棚の臭化カリウムから、塩素で臭素を追い出せ。' },
+    { s: 'O3', n: 5, hint: '酸素だけから作れる同素体がある。' },
+    { s: 'NaAl(OH)4', n: 5, hint: 'アルミニウムは酸にも強塩基にも溶ける。' },
+    { s: 'FeCl3', n: 5, hint: '鉄を塩酸に溶かし、さらに塩素で酸化しろ。' },
+    { s: 'x-m-cu', n: 6, strict: 'S', hint: '試料 S は 6 種の金属。銅だけを取り出せ。' },
+    { s: 'x-m-au', n: 6, strict: 'S', hint: '試料 S から金を。' },
+    { s: 'x-cl2', n: 6, strict: 'U', hint: '試料 U はハロゲンの単体 4 種。塩素を。' },
+    { s: 'x-br2', n: 6, strict: 'U', hint: '試料 U から臭素を。' },
+  ] },
+  { name: '第18章 有機化合物の続き', goals: [
+    { s: 'CH3Cl', n: 5, hint: 'メタンと塩素。アルカンの反応は付加ではない。' },
+    { s: 'CH2BrCH2Br', n: 5, hint: 'エチレンに臭素（第17章で作った）を加えろ。' },
+    { s: 'C6H5SO3Na', n: 5, hint: 'ベンゼンを濃硫酸でスルホン化し、中和しろ。' },
+    { s: 'C6H5NHCOCH3', n: 5, hint: 'アニリンを無水酢酸でアセチル化しろ。' },
+    { s: 'vinylon', n: 5, hint: 'アセチレンと酢酸から 4 段階。ビニルアルコールは単離できない。' },
+    { s: 'PAN', n: 5, hint: 'アセチレンにシアン化水素（試薬棚）を付加させ、重合させろ。' },
+    { s: 'x-aniline', n: 6, strict: 'Y', hint: '試料 Y はエーテルに溶けた芳香族 4 種。アニリンを水層へ抜き出せ。' },
+    { s: 'x-benzoic', n: 6, strict: 'Y', hint: '試料 Y から安息香酸を。フェノールと一緒に動かない方法を選べ。' },
+    { s: 'x-phenol', n: 6, strict: 'Y', hint: '試料 Y からフェノールを。' },
+  ] },
+  { name: '第19章 高分子化合物の続き', goals: [
+    { s: 'nylon6', n: 5, hint: '試薬棚の ε-カプロラクタムの環を開いてつなげろ。' },
+    { s: 'urearesin', n: 5, hint: '尿素（試薬棚）とホルムアルデヒド。' },
+    { s: 'PMMA', n: 5, hint: '試薬棚のメタクリル酸メチルを重合させろ。' },
+    { s: 'rayon', n: 5, hint: '納品所の北西の森林のセルロースを、溶かして繊維に戻せ。', zone: 'forest' },
+    { s: 'nitrocellulose', n: 5, hint: 'セルロースの –OH を硝酸でエステルにしろ。' },
+    { s: 'fructose', n: 5, hint: 'スクロース（試薬棚）を酵素で分解しろ。' },
+    { s: 'x-suc', n: 6, strict: 'V', hint: '試料 V は糖 6 種。スクロースだけがどの検査にもかからない。' },
+    { s: 'x-fru', n: 6, strict: 'V', hint: '試料 V からフルクトースを。' },
+    { s: 'x-mal', n: 6, strict: 'V', hint: '試料 V からマルトースを。' },
+    { s: 'x-pvc', n: 6, strict: 'W', hint: '試料 W は合成高分子 5 種。ポリ塩化ビニルを。' },
+    { s: 'x-nylon', n: 6, strict: 'W', hint: '試料 W からナイロンを。' },
+    { s: 'x-bakelite', n: 6, strict: 'W', hint: '試料 W から熱硬化性樹脂を。' },
+  ] },
+);
+
 export const GOALS: Goal[] = CHAPTERS.flatMap((c) => c.goals);
 export function chapterOf(goalIndex: number): { name: string; index: number; of: number } | null {
   let i = goalIndex;

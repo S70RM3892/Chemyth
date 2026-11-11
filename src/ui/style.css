@@ -186,6 +186,21 @@ b { font-weight: 700; }
 .steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; counter-reset: s; }
 .steps li { counter-increment: s; display: grid; grid-template-columns: 30px 4.5em minmax(0, 1fr); gap: 8px; align-items: baseline; font-size: 14px; }
 .steps li::before { content: counter(s); font-family: var(--font-mono); border: var(--bw) solid var(--ink); border-radius: 50%; width: 26px; height: 26px; display: grid; place-items: center; font-size: 13px; font-weight: 600; }
+.syl { border-bottom: 1px solid var(--rule); padding: 2px 0; }
+.syl summary { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: baseline; padding: 8px 0; cursor: pointer; list-style: none; min-height: 44px; }
+.syl summary::-webkit-details-marker { display: none; }
+.syl-t { font-weight: 700; }
+.syl-t::before { content: "＋"; display: inline-block; width: 1.3em; color: var(--soft); font-weight: 500; }
+.syl[open] .syl-t::before { content: "－"; }
+.syl-n { font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; color: var(--soft); }
+.syl-bar { grid-column: 1 / -1; height: 5px; background: var(--card-2); border: 1px solid var(--rule); }
+.syl-bar i { display: block; height: 100%; background: var(--ok); }
+.syl p { margin: 4px 0 8px 1.3em; }
+.syl-list { display: flex; flex-wrap: wrap; gap: 4px 6px; font-size: 13px; }
+.syl-list span { border: 1px solid var(--rule); padding: 0 7px; color: var(--soft); }
+.syl-list span.got { color: var(--ink); border-color: var(--ok); box-shadow: inset 3px 0 0 var(--ok); }
+[data-skin="punk"] .syl-bar { height: 7px; background: var(--panel); }
+[data-skin="punk"] .syl-bar i { background: repeating-linear-gradient(90deg, var(--hi) 0 6px, transparent 6px 8px); }
 .log { width: 100%; border-collapse: collapse; font-size: 14px; }
 .log td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--rule); }
 .log .n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--red); font-family: var(--font-mono); }
