@@ -255,3 +255,141 @@ b { font-weight: 700; }
 .seg button.on { background: var(--ink); color: var(--on-ink); }
 
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* =====================================================================
+   工業スキン：鋼板、角を落とした札、危険表示の縞、ステンシルの見出し。
+   ライト＝光の炉（白い琺瑯と安全色、日が差す）。ダーク＝闇の炉（煤けた鉄と溶けた橙、走査線と残光）。
+   ===================================================================== */
+:root[data-skin="punk"] {
+  --paper: #c9ced2; --card: #f4f5f2; --card-2: #dfe3e5; --ink: #14181d; --soft: #4d5761; --rule: rgba(20, 24, 29, 0.3);
+  --red: #f04a12; --hi: #ffc400; --hi-soft: #ffe9a3; --ok: #178a4a; --shadow: rgba(10, 15, 20, 0.4); --on-ink: #f4f5f2;
+  --font-hand: "Dela Gothic One", "Hiragino Sans", "Yu Gothic", sans-serif;
+  --bw: 2px;
+  --cut: 10px;
+  --stripe: repeating-linear-gradient(-45deg, var(--hi) 0 9px, #14181d 9px 18px);
+  --glow: none;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-skin="punk"]:not([data-theme="light"]) {
+    --paper: #0c0e11; --card: #1d2127; --card-2: #2a2f37; --ink: #f0e9dc; --soft: #8d9198; --rule: rgba(255, 138, 31, 0.3);
+    --red: #ff3d2e; --hi: #ff8a1f; --hi-soft: #3d2410; --ok: #7ddc6a; --shadow: rgba(0, 0, 0, 0.65); --on-ink: #0c0e11;
+    --glow: 0 0 14px rgba(255, 122, 30, 0.55);
+    color-scheme: dark;
+  }
+}
+:root[data-skin="punk"][data-theme="dark"] {
+  --paper: #0c0e11; --card: #1d2127; --card-2: #2a2f37; --ink: #f0e9dc; --soft: #8d9198; --rule: rgba(255, 138, 31, 0.3);
+  --red: #ff3d2e; --hi: #ff8a1f; --hi-soft: #3d2410; --ok: #7ddc6a; --shadow: rgba(0, 0, 0, 0.65); --on-ink: #0c0e11;
+  --glow: 0 0 14px rgba(255, 122, 30, 0.55);
+  color-scheme: dark;
+}
+
+[data-skin="punk"] body { letter-spacing: 0.02em; }
+/* 角を落とす。切り欠きは影を切ってしまうので、影のかわりに太い縁で重さを出す */
+[data-skin="punk"] :is(.ghost, #topbtns button, .primary, .danger, .chip, .key, #act, #tools, #sheet, #toast, #tip, .slotcard, #cover, #title-panel, .seg, .stepper, .keypad, .blank, .track) {
+  border-radius: 0; box-shadow: none;
+  clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
+}
+[data-skin="punk"] :is(.chip, .key, .stepper, .blank, .track, #tip) { --cut: 6px; }
+[data-skin="punk"] :is(#sheet, #cover) { --cut: 22px; }
+[data-skin="punk"] :is(.ghost, #topbtns button) { background: var(--card); font-family: var(--font-hand); font-weight: 400; font-size: 14px; }
+[data-skin="punk"] .ghost.picked { background: var(--hi); color: #14181d; box-shadow: none; }
+[data-skin="punk"] .primary { background: var(--hi); color: #14181d; border-color: var(--hi); font-family: var(--font-hand); font-weight: 400; }
+[data-skin="punk"] .danger { font-family: var(--font-hand); font-weight: 400; color: #14181d; }
+
+/* 指令：危険表示の縞を載せた作業指示札 */
+[data-skin="punk"] #goal { transform: none; border-radius: 0; background: var(--card); border-width: 2px; padding-top: 22px; box-shadow: none;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 18px), calc(100% - 18px) 100%, 0 100%); }
+[data-skin="punk"] #goal::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 12px; background: var(--stripe); }
+[data-skin="punk"] #goal::after { content: "ORDER"; width: auto; height: auto; border-radius: 0; border-width: 2px; padding: 1px 8px; font-size: 12px; letter-spacing: 0.12em; transform: none; right: 26px; bottom: 10px; opacity: 1; }
+[data-skin="punk"] .goal-top { color: var(--red); letter-spacing: 0.08em; }
+[data-skin="punk"] #goal-name { font-weight: 400; font-size: 18px; }
+[data-skin="punk"] #goal-bar { background: var(--hi); box-shadow: var(--glow); }
+[data-skin="punk"] #b-speed.hot { background: var(--hi); color: #14181d; box-shadow: none; }
+
+[data-skin="punk"] #act { overflow: visible; }
+[data-skin="punk"] #act #act-open { background: var(--hi); color: #14181d; font-family: var(--font-hand); }
+[data-skin="punk"] #toast { transform: translateX(-50%); background: #14181d; color: var(--hi); border-color: var(--hi); font-weight: 400; }
+@keyframes rise-flat { from { opacity: 0; transform: translate(-50%, 8px); } }
+[data-skin="punk"] #toast { animation-name: rise-flat; }
+/* はんこは検査済みの刻印に */
+[data-skin="punk"] #stamp { border-radius: 0; width: 260px; height: 110px; margin: -55px 0 0 -130px; border-width: 6px; font-weight: 400; letter-spacing: 0.2em; color: var(--hi); border-color: var(--hi); background: color-mix(in srgb, #14181d 82%, transparent); text-shadow: var(--glow); }
+[data-skin="punk"] #stamp::before { border-radius: 0; inset: 6px; border-color: var(--hi); }
+
+/* 道具：鋲を打った工具棚 */
+[data-skin="punk"] #tools { background: var(--card); border-width: 2px; padding: 6px 14px; --cut: 14px; }
+[data-skin="punk"] .tool { border-radius: 0; }
+[data-skin="punk"] .tool .g { border-radius: 0; border-width: 2px; clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px); font-weight: 400; }
+[data-skin="punk"] .tool .l { letter-spacing: 0.04em; }
+[data-skin="punk"] .tool.on { background: #14181d; border-color: var(--hi); }
+[data-skin="punk"] .tool.on .l { color: var(--hi); box-shadow: none; }
+[data-skin="punk"] #tip { background: #14181d; color: #f0e9dc; border: 0; }
+[data-skin="punk"] #tip b { color: var(--hi); box-shadow: none; }
+
+/* シート：操作盤 */
+[data-skin="punk"] #modal { background: color-mix(in srgb, var(--paper) 60%, #000 25%); }
+[data-skin="punk"] #sheet { border-width: 2px; padding-top: 30px; position: relative; }
+[data-skin="punk"] #sheet::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 12px; background: var(--stripe); }
+[data-skin="punk"] #sheet header { border-bottom: 2px solid var(--ink); }
+[data-skin="punk"] #sheet :is(h1, h2) { font-weight: 400; letter-spacing: 0.04em; }
+[data-skin="punk"] #sheet h3 { font-weight: 400; font-size: 14px; box-shadow: none; background: var(--ink); color: var(--on-ink); padding: 2px 12px 2px 8px; clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%); }
+[data-skin="punk"] .eq, [data-skin="punk"] .qtext { border-left: 8px solid var(--hi); background: var(--card-2); }
+[data-skin="punk"] .chip.on { background: var(--hi); color: #14181d; box-shadow: none; }
+[data-skin="punk"] .slot { clip-path: none; border-color: var(--ink); }
+[data-skin="punk"] .slot.on { border-color: var(--hi); box-shadow: inset 0 -8px 0 var(--hi-soft); }
+[data-skin="punk"] .feedback { font-weight: 400; }
+[data-skin="punk"] .about dt { font-weight: 400; letter-spacing: 0.06em; }
+[data-skin="punk"] .diagram .core { border-radius: 0; }
+[data-skin="punk"] .pips i.on { background: var(--hi); }
+[data-skin="punk"] .steps li::before { border-radius: 0; background: var(--hi); color: #14181d; border-color: #14181d; }
+[data-skin="punk"] .seg button.on { background: var(--hi); color: #14181d; }
+[data-skin="punk"] .seg button { font-family: var(--font-hand); font-weight: 400; font-size: 13px; }
+
+/* タイトル：銘板 */
+[data-skin="punk"] #cover { border-width: 2px; padding: 40px 30px 26px 34px; }
+[data-skin="punk"] #cover::before { left: 0; right: 0; top: 0; bottom: auto; width: auto; height: 16px; background: var(--stripe); border-radius: 0; }
+[data-skin="punk"] #title h1 { font-weight: 400; text-transform: uppercase; letter-spacing: 0.04em; font-size: clamp(46px, 10vw, 84px); text-shadow: var(--glow); }
+[data-skin="punk"] #title h1 span { box-shadow: none; color: var(--ink); }
+[data-skin="punk"] #title .lead { font-family: var(--font-ui); font-weight: 700; }
+[data-skin="punk"] .label-box span:nth-child(even) { font-weight: 400; font-size: 12px; }
+[data-skin="punk"] .slotcard { border-left-width: 2px; border-width: 2px; position: relative; padding-left: 30px; }
+[data-skin="punk"] .slotcard::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 12px; background: var(--stripe); }
+[data-skin="punk"] .slotcard b { font-weight: 400; }
+
+/* 光と闇：スキンの外に、空気そのものを重ねる */
+#aspect { display: none; }
+[data-skin="punk"] #aspect { display: block; font-family: var(--font-hand); font-size: 13px; letter-spacing: 0.3em; color: var(--red); }
+#aspect .dark { display: none; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) #aspect .dark { display: inline; } :root:not([data-theme="light"]) #aspect .light { display: none; } }
+:root[data-theme="dark"] #aspect .dark { display: inline; }
+:root[data-theme="dark"] #aspect .light { display: none; }
+:root[data-theme="light"] #aspect .dark { display: none; }
+:root[data-theme="light"] #aspect .light { display: inline; }
+/* 闇の炉：画面全体に走査線と、ゆっくり脈打つ残光 */
+[data-skin="punk"] #app::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+@media (prefers-color-scheme: dark) {
+  :root[data-skin="punk"]:not([data-theme="light"]) #app::after { background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.16) 0 1px, transparent 1px 3px); animation: flicker 5s steps(1) infinite; }
+}
+:root[data-skin="punk"][data-theme="dark"] #app::after { background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.16) 0 1px, transparent 1px 3px); animation: flicker 5s steps(1) infinite; }
+@keyframes flicker { 0%, 100% { opacity: 1; } 47% { opacity: 0.86; } 48% { opacity: 1; } 71% { opacity: 0.92; } 72% { opacity: 1; } }
+/* 光の炉：画面部品の上を、反射がときどき横切る */
+:root[data-skin="punk"][data-theme="light"] #app::after { background: linear-gradient(105deg, transparent 42%, rgba(255, 255, 255, 0.28) 50%, transparent 58%); background-size: 300% 100%; animation: sheen 9s linear infinite; mix-blend-mode: soft-light; }
+@media (prefers-color-scheme: light) {
+  :root[data-skin="punk"]:not([data-theme="dark"]) #app::after { background: linear-gradient(105deg, transparent 42%, rgba(255, 255, 255, 0.28) 50%, transparent 58%); background-size: 300% 100%; animation: sheen 9s linear infinite; mix-blend-mode: soft-light; }
+}
+@keyframes sheen { from { background-position: 150% 0; } to { background-position: -150% 0; } }
+
+/* ---- ランキング ---- */
+.rank { width: 100%; border-collapse: collapse; font-size: 14px; }
+.rank td, .rank th { padding: 7px 8px; border-bottom: 1px solid var(--rule); text-align: left; }
+.rank th { color: var(--soft); font-size: 12px; font-weight: 700; }
+.rank .n { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.rank tr.me td { background: var(--hi-soft); font-weight: 700; }
+.namebox { flex: 1 1 180px; min-height: 46px; background: var(--paper); border: var(--bw) solid var(--ink); border-radius: 4px; padding: 6px 12px; font-size: 16px; user-select: text; -webkit-user-select: text; }
+
+/* 工業スキン：極太の見出し書体は大きい文字だけに使う。小さい文字は読める書体で */
+[data-skin="punk"] :is(.ghost, #topbtns button, .primary, .danger, .seg button, #act #act-open, #toast, .feedback, .about dt, .tool .g, .diagram .core, .label-box span:nth-child(even), #sheet h3) { font-family: var(--font-ui); font-weight: 700; }
+[data-skin="punk"] :is(.ghost, #topbtns button, .seg button) { font-size: 14px; letter-spacing: 0.04em; }
+[data-skin="punk"] .label-box span:nth-child(even) { font-size: 13px; }
+[data-skin="punk"] #aspect { font-size: 15px; }

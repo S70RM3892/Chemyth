@@ -1,15 +1,18 @@
-import { HUB_TILES, MAP_H, MAP_W, ZONES, zoneAt, type Zone } from '../content/map';
+import { ZONES, hubRect, zoneAt, zoneSpots, type Zone } from '../content/map';
 import { MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { beltSpeed, currentGoal, DX, DY, goalCount, inflow, isMachine, portDir, type Dir, type Ent, type World } from '../engine/world';
-import { mix, onThemeChange, palette, PALETTES, type Palette, type ThemeName } from './theme';
+import { beltSpeed, currentGoal, DX, DY, goalCount, inflow, isMachine, portDir, requiredOf, type Dir, type Ent, type World } from '../engine/world';
+import { mix, onThemeChange, palette, type Palette } from './theme';
 import { sprite } from './token';
 
 export interface Camera { x: number; y: number; z: number }
 export interface View { tool: string; selected: Ent | null }
 
 // 方眼ノートに描いた工場の図面。輪郭線と斜線で描き、ぼかしや発光は使わない
-const FONT_HAND = '"Klee One", "Hiragino Maru Gothic ProN", "Yu Gothic", sans-serif';
+let FONT_HAND = '"Klee One", sans-serif';
+/** 小さい文字用。工業スキンの極太書体は小さいと潰れるので使わない */
+let FONT_SMALL = FONT_HAND;
+const FONT_UI = '"Zen Kaku Gothic New", "Hiragino Sans", sans-serif';
 const FONT_MONO = '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace';
 
 const hash = (x: number, y: number) => {
@@ -17,30 +20,41 @@ const hash = (x: number, y: number) => {
   return n - Math.floor(n);
 };
 
-// ---- 地形は一度だけ描いて使い回す（テーマごと） ----
-const TS = 24, PAD = 2;
-const terrains = new Map<ThemeName, HTMLCanvasElement>();
-onThemeChange(() => terrains.clear());
+// ---- 地形は区画ごとに描いてためておく。地図に果てはないので、見えた所から作る ----
+const TS = 24, CH = 16, SIZE = TS * CH;
+const chunks = new Map<string, HTMLCanvasElement>();
+onThemeChange(() => chunks.clear());
+let scratch: HTMLCanvasElement | null = null;
+const ORDER = Object.keys(ZONES) as Zone[];
+const mod = (a: number, n: number) => ((a % n) + n) % n;
 
-function buildTerrain(P: Palette): HTMLCanvasElement {
-  const W = (MAP_W + PAD * 2) * TS, H = (MAP_H + PAD * 2) * TS;
+function buildChunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
   const cv = document.createElement('canvas');
-  cv.width = W; cv.height = H;
+  cv.width = cv.height = SIZE;
   const g = cv.getContext('2d')!;
-  const tmp = document.createElement('canvas');
-  tmp.width = W; tmp.height = H;
-  const t = tmp.getContext('2d')!;
-  const X = (tx: number) => (tx + PAD) * TS, Y = (ty: number) => (ty + PAD) * TS;
-  const base = PALETTES[P.name].paper.startsWith('#') ? P.paper : '#1f2d27';
+  scratch ??= Object.assign(document.createElement('canvas'), { width: SIZE, height: SIZE });
+  const t = scratch.getContext('2d')!;
+  const ox = cx * CH, oy = cy * CH, OX = ox * TS, OY = oy * TS;
+  const X = (tx: number) => (tx - ox) * TS, Y = (ty: number) => (ty - oy) * TS;
+  const punk = P.skin === 'punk', light = P.name === 'light';
+  const base = P.paper;
 
-  g.fillStyle = P.paper;
-  g.fillRect(0, 0, W, H);
+  g.fillStyle = base;
+  g.fillRect(0, 0, SIZE, SIZE);
+  if (punk) {
+    // 鋼板の床：ヘアラインの筋
+    g.strokeStyle = light ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.025)';
+    g.lineWidth = 1;
+    g.beginPath();
+    for (let y = 0; y < SIZE; y += 4) { const w0 = hash(cx * 31 + y, cy * 17) * SIZE; g.moveTo(w0, y + 0.5); g.lineTo(Math.min(SIZE, w0 + 60 + hash(y, cx) * 160), y + 0.5); }
+    g.stroke();
+  }
 
-  // 資源地ごとのマス。海は地図の左の外まで続く
+  // 区画にかかる資源地のマス（縁のにじみぶんだけ外側も見る）
   const tiles = new Map<Zone, [number, number][]>();
-  for (let y = -PAD; y < MAP_H + PAD; y++) for (let x = -PAD; x < MAP_W; x++) {
-    const zn = x < 0 ? ('sea' as Zone) : zoneAt(x, Math.min(MAP_H - 1, Math.max(0, y)));
-    if (!zn || (zn !== 'sea' && (y < 0 || y >= MAP_H))) continue;
+  for (let y = oy - 1; y <= oy + CH; y++) for (let x = ox - 1; x <= ox + CH; x++) {
+    const zn = zoneAt(x, y);
+    if (!zn) continue;
     if (!tiles.has(zn)) tiles.set(zn, []);
     tiles.get(zn)!.push([x + 0.5 + (hash(x, y) - 0.5) * 0.3, y + 0.5 + (hash(y, x) - 0.5) * 0.3]);
   }
@@ -49,55 +63,85 @@ function buildTerrain(P: Palette): HTMLCanvasElement {
     for (const [x, y] of list) { c.moveTo(X(x) + r * TS, Y(y)); c.arc(X(x), Y(y), r * TS, 0, Math.PI * 2); }
     c.fill();
   };
-  // 輪郭（すべての資源地）→ 塗り → 斜線、の順に重ねる。輪郭は外周にだけ残る
-  g.fillStyle = P.ink;
-  for (const list of tiles.values()) blobs(g, list, 0.86);
-  let k = 0;
+  // 輪郭 → 塗り → 模様、の順に重ねる。輪郭は外周にだけ残る
+  for (const [zn, list] of tiles) {
+    g.fillStyle = punk && !light ? mix(base, ZONES[zn].tint[1], 0.75) : P.ink;
+    blobs(g, list, punk ? 0.88 : 0.86);
+  }
   for (const [zn, list] of tiles) {
     const core = ZONES[zn].tint[1];
-    g.fillStyle = mix(base, core, P.name === 'light' ? 0.2 : 0.26);
+    g.fillStyle = mix(base, core, punk ? (light ? 0.5 : 0.22) : light ? 0.2 : 0.26);
     blobs(g, list, 0.78);
-    // 斜線は別の紙に描いて、資源地の形で切り抜く
     t.globalCompositeOperation = 'source-over';
-    t.clearRect(0, 0, W, H);
+    t.clearRect(0, 0, SIZE, SIZE);
     t.fillStyle = '#000';
     blobs(t, list, 0.72);
     t.globalCompositeOperation = 'source-in';
-    t.strokeStyle = mix(base, core, P.name === 'light' ? 0.62 : 0.7);
-    t.lineWidth = 1.4;
+    t.strokeStyle = punk ? (light ? mix(P.ink, core, 0.35) : mix(base, core, 0.6)) : mix(base, core, light ? 0.62 : 0.7);
+    t.lineWidth = punk ? 1.1 : 1.4;
     t.lineCap = 'round';
     t.beginPath();
     if (zn === 'sea') {
-      for (let y = 0; y < H; y += TS * 0.62) for (let x = ((y / TS) % 2) * TS * 0.5; x < W; x += TS * 1.1) {
-        t.moveTo(x, y);
-        t.quadraticCurveTo(x + TS * 0.2, y - TS * 0.16, x + TS * 0.4, y);
-        t.quadraticCurveTo(x + TS * 0.6, y + TS * 0.16, x + TS * 0.8, y);
+      const r = TS * 0.62, p = TS * 1.1;
+      for (let y = -mod(OY, r); y < SIZE + r; y += r) {
+        const row = Math.round((y + OY) / r);
+        for (let x = -mod(OX + (mod(row, 2) ? p / 2 : 0), p) - p; x < SIZE + p; x += p) {
+          t.moveTo(x, y);
+          t.quadraticCurveTo(x + TS * 0.2, y - TS * 0.16, x + TS * 0.4, y);
+          t.quadraticCurveTo(x + TS * 0.6, y + TS * 0.16, x + TS * 0.8, y);
+        }
       }
     } else {
-      const dir = k++ % 2 ? 1 : -1;
-      for (let d = -H; d < W + H; d += TS * 0.34) { t.moveTo(d, 0); t.lineTo(d + dir * H, H); }
+      const sp = TS * 0.34, dirs = punk ? [1, -1] : [ORDER.indexOf(zn) % 2 ? 1 : -1];
+      for (const dir of dirs) {
+        // 斜線は地図全体でつながるように、区画の位置からずらす
+        const off = mod(dir === 1 ? OX - OY : OX + OY, sp);
+        for (let d = -SIZE - off; d < SIZE * 2; d += sp) { t.moveTo(dir === 1 ? d : d + SIZE, 0); t.lineTo(dir === 1 ? d + SIZE : d, SIZE); }
+      }
     }
     t.stroke();
-    g.drawImage(tmp, 0, 0);
+    g.drawImage(scratch, 0, 0);
   }
 
-  // 方眼
-  for (const [step, color, w] of [[1, P.grid, 1], [5, P.gridBold, 1.2]] as const) {
-    g.strokeStyle = color;
-    g.lineWidth = w;
+  // 方眼（ノート）／鋼板の継ぎ目と鋲（工業）
+  const every = punk ? 4 : 5;
+  for (const bold of [false, true]) {
+    g.strokeStyle = bold ? P.gridBold : P.grid;
+    g.lineWidth = bold ? (punk ? 2 : 1.2) : 1;
     g.beginPath();
-    for (let x = 0; x <= MAP_W; x += step) { g.moveTo(X(x) + 0.5, Y(0)); g.lineTo(X(x) + 0.5, Y(MAP_H)); }
-    for (let y = 0; y <= MAP_H; y += step) { g.moveTo(X(0), Y(y) + 0.5); g.lineTo(X(MAP_W), Y(y) + 0.5); }
+    for (let i = 0; i <= CH; i++) {
+      if ((mod(ox + i, every) === 0) === bold) { g.moveTo(i * TS + 0.5, 0); g.lineTo(i * TS + 0.5, SIZE); }
+      if ((mod(oy + i, every) === 0) === bold) { g.moveTo(0, i * TS + 0.5); g.lineTo(SIZE, i * TS + 0.5); }
+    }
     g.stroke();
   }
-  // 図面の枠
-  g.strokeStyle = P.ink;
-  g.lineWidth = 2.5;
-  g.strokeRect(X(0), Y(0), MAP_W * TS, MAP_H * TS);
-  g.lineWidth = 1;
-  g.strokeRect(X(0) - 6, Y(0) - 6, MAP_W * TS + 12, MAP_H * TS + 12);
+  if (punk) {
+    for (let j = 0; j <= CH; j++) for (let i = 0; i <= CH; i++) {
+      if (mod(ox + i, every) || mod(oy + j, every)) continue;
+      for (const [dx, dy] of [[5, 5], [-5, 5], [5, -5], [-5, -5]]) {
+        g.fillStyle = light ? 'rgba(20,24,29,0.45)' : 'rgba(0,0,0,0.7)';
+        g.beginPath(); g.arc(i * TS + dx, j * TS + dy, 1.8, 0, Math.PI * 2); g.fill();
+        g.fillStyle = light ? 'rgba(255,255,255,0.7)' : 'rgba(255,170,90,0.25)';
+        g.beginPath(); g.arc(i * TS + dx - 0.5, j * TS + dy - 0.5, 0.8, 0, Math.PI * 2); g.fill();
+      }
+    }
+  }
   return cv;
 }
+
+function chunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
+  const k = `${P.key}:${cx},${cy}`;
+  let c = chunks.get(k);
+  if (c) { chunks.delete(k); chunks.set(k, c); return c; } // 最近使ったものを後ろへ
+  c = buildChunk(P, cx, cy);
+  chunks.set(k, c);
+  if (chunks.size > 220) chunks.delete(chunks.keys().next().value as string);
+  return c;
+}
+
+// 工業スキンの空気：光の側は日差しと塵、闇の側は火の粉
+interface Mote { x: number; y: number; v: number; s: number; ph: number }
+const motes: Mote[] = Array.from({ length: 46 }, (_, i) => ({ x: hash(i, 3), y: hash(i, 5), v: 0.02 + hash(i, 7) * 0.05, s: 0.6 + hash(i, 9) * 1.8, ph: hash(i, 11) * 6.28 }));
 
 interface Particle { x: number; y: number; vx: number; vy: number; age: number; life: number; color: string; text?: string; r: number }
 const particles: Particle[] = [];
@@ -134,16 +178,19 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   const sx = (x: number) => (x - cam.x) * z + cw / 2;
   const sy = (y: number) => (y - cam.y) * z + ch / 2;
   spawn(w, P);
-  let terrain = terrains.get(P.name);
-  if (!terrain) { terrain = buildTerrain(P); terrains.set(P.name, terrain); }
+  FONT_HAND = P.font;
+  FONT_SMALL = P.skin === 'punk' ? FONT_UI : P.font;
+  const punk = P.skin === 'punk', light = P.name === 'light';
 
   ctx.fillStyle = P.paper;
   ctx.fillRect(0, 0, cw, ch);
   ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(terrain, sx(-PAD), sy(-PAD), (MAP_W + PAD * 2) * z, (MAP_H + PAD * 2) * z);
+  const wx0 = cam.x - cw / 2 / z, wy0 = cam.y - ch / 2 / z, wx1 = cam.x + cw / 2 / z, wy1 = cam.y + ch / 2 / z;
+  for (let cy = Math.floor(wy0 / CH); cy <= Math.floor(wy1 / CH); cy++) for (let cx = Math.floor(wx0 / CH); cx <= Math.floor(wx1 / CH); cx++) {
+    ctx.drawImage(chunk(P, cx, cy), Math.floor(sx(cx * CH)), Math.floor(sy(cy * CH)), Math.ceil(CH * z) + 1, Math.ceil(CH * z) + 1);
+  }
 
-  const x0 = Math.max(0, Math.floor(cam.x - cw / 2 / z)), x1 = Math.min(MAP_W - 1, Math.ceil(cam.x + cw / 2 / z));
-  const y0 = Math.max(0, Math.floor(cam.y - ch / 2 / z)), y1 = Math.min(MAP_H - 1, Math.ceil(cam.y + ch / 2 / z));
+  const x0 = Math.floor(wx0), x1 = Math.ceil(wx1), y0 = Math.floor(wy0), y1 = Math.ceil(wy1);
   const inView = (e: Ent) => e.x >= x0 - 2 && e.x <= x1 + 2 && e.y >= y0 - 2 && e.y <= y1 + 2;
   const lw = (k: number) => Math.max(1.2, z * k);
 
@@ -163,10 +210,9 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   // ---- 資源地の名前 ----
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
-  for (const zn of Object.values(ZONES)) {
-    const [lx, ly] = zn.at;
-    if (sx(lx) < -200 || sx(lx) > cw + 200 || sy(ly) < -100 || sy(ly) > ch + 100) continue;
-    const fs = Math.max(12, z * 0.42);
+  for (const sp of zoneSpots(x0, y0, x1, y1)) {
+    const zn = ZONES[sp.zone], lx = sp.cx, ly = sp.cy;
+    const fs = Math.max(12, z * (punk ? 0.36 : 0.42));
     ctx.font = `600 ${fs}px ${FONT_HAND}`;
     ctx.lineWidth = fs * 0.3;
     ctx.lineJoin = 'round';
@@ -176,11 +222,11 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.fillText(zn.name, sx(lx), sy(ly));
     if (z >= 20) {
       const s2 = Math.max(10, z * 0.26), tx = `${sub(zn.resource).name}・${zn.form}`;
-      ctx.font = `400 ${s2}px ${FONT_HAND}`;
+      ctx.font = `500 ${s2}px "Zen Kaku Gothic New", sans-serif`;
       ctx.lineWidth = s2 * 0.3;
-      ctx.strokeText(tx, sx(lx), sy(ly) + s2 * 1.35);
+      ctx.strokeText(tx, sx(lx), sy(ly) + s2 * 1.4);
       ctx.fillStyle = P.soft;
-      ctx.fillText(tx, sx(lx), sy(ly) + s2 * 1.35);
+      ctx.fillText(tx, sx(lx), sy(ly) + s2 * 1.4);
     }
   }
   ctx.textBaseline = 'middle';
@@ -192,7 +238,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     if (tx < 0 || tx > cw || ty < 150 || ty > ch - 170) {
       const px = Math.min(cw - 80, Math.max(80, tx)), py = Math.min(ch - 190, Math.max(170, ty));
       const ang = Math.atan2(ty - py, tx - px);
-      ctx.font = `600 14px ${FONT_HAND}`;
+      ctx.font = `700 14px ${FONT_SMALL}`;
       const wd = ctx.measureText(zn.name).width + 22;
       ctx.fillStyle = P.plate;
       ctx.strokeStyle = P.ink;
@@ -232,8 +278,8 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   for (const b of belts) { ctx.lineWidth = z * WIDTH[st(b)] + edge; trace(b); ctx.stroke(); }
   for (const b of belts) { ctx.strokeStyle = P.line[st(b)]; ctx.lineWidth = z * WIDTH[st(b)]; trace(b); ctx.stroke(); }
   ctx.lineCap = 'butt';
-  ctx.strokeStyle = P.ink;
-  ctx.globalAlpha = P.name === 'light' ? 0.5 : 0.45;
+  ctx.strokeStyle = punk && !light ? P.hi : P.ink;
+  ctx.globalAlpha = punk ? (light ? 0.7 : 0.9) : light ? 0.5 : 0.45;
   ctx.lineDashOffset = -t * beltSpeed(w) * z * 0.5;
   for (const b of belts) {
     const s = st(b);
@@ -282,12 +328,37 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     machine(ctx, P, sx(e.x + 0.5), sy(e.y + 0.5), z * pop, z, e, t);
   }
 
-  const [hx, hy] = HUB_TILES[0];
-  hub(ctx, P, sx(hx), sy(hy), z, w);
+  // 闇の炉：稼働中の装置と納品所は、暗がりに光をこぼす
+  if (punk && !light) {
+    ctx.globalCompositeOperation = 'lighter';
+    const pool = (gx: number, gy: number, r: number, a: number) => {
+      const g = ctx.createRadialGradient(sx(gx), sy(gy), 0, sx(gx), sy(gy), r * z);
+      g.addColorStop(0, `rgba(${P.glow},${a})`);
+      g.addColorStop(1, `rgba(${P.glow},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(sx(gx) - r * z, sy(gy) - r * z, 2 * r * z, 2 * r * z);
+    };
+    const hr0 = hubRect(w.hubSize);
+    pool(hr0.x + hr0.s / 2, hr0.y + hr0.s / 2, hr0.s * 1.6 + 1, 0.2 + 0.04 * Math.sin(t * 2.3));
+    for (const e of w.ents.values()) if (e.busy && inView(e)) pool(e.x + 0.5, e.y + 0.5, 1.5, 0.22 + 0.06 * Math.sin(t * 9 + e.x));
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  const hr = hubRect(w.hubSize);
+  hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
 
   // ---- 選んだものは蛍光ペンで囲む ----
   if (view.selected && view.selected.kind !== 'hub') {
     const e = view.selected;
+    if (punk) {
+      // 照準の角
+      const cx0 = sx(e.x + 0.5), cy0 = sy(e.y + 0.5), r = z * (0.6 + 0.03 * Math.sin(t * 6)), L = z * 0.2;
+      ctx.strokeStyle = P.hi; ctx.lineWidth = lw(0.08); ctx.lineCap = 'butt';
+      ctx.beginPath();
+      for (const [ax, ay] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        ctx.moveTo(cx0 + ax * r, cy0 + ay * (r - L)); ctx.lineTo(cx0 + ax * r, cy0 + ay * r); ctx.lineTo(cx0 + ax * (r - L), cy0 + ay * r);
+      }
+      ctx.stroke();
+    } else {
     ctx.strokeStyle = P.hi;
     ctx.globalAlpha = 0.85;
     ctx.lineWidth = lw(0.12);
@@ -296,6 +367,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.arc(sx(e.x + 0.5), sy(e.y + 0.5), z * 0.62, -0.4 + Math.sin(t * 2) * 0.1, Math.PI * 2 - 0.9);
     ctx.stroke();
     ctx.globalAlpha = 1;
+    }
   }
 
   // ---- 粒子 ----
@@ -321,6 +393,52 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     }
   }
   ctx.globalAlpha = 1;
+
+  if (punk) ambient(ctx, P, cw, ch, t, dt);
+}
+
+/** 工業スキンの空気。光の炉は斜めに差す日差しと舞う塵、闇の炉は立ちのぼる火の粉と周辺の闇 */
+function ambient(ctx: CanvasRenderingContext2D, P: Palette, cw: number, ch: number, t: number, dt: number) {
+  const light = P.name === 'light';
+  if (light) {
+    // 天窓からの光の帯が、ゆっくり床を渡っていく
+    ctx.save();
+    ctx.globalCompositeOperation = 'soft-light';
+    ctx.translate(cw / 2, ch / 2);
+    ctx.rotate(-0.42);
+    const span = Math.hypot(cw, ch);
+    for (let i = 0; i < 4; i++) {
+      const x = mod(t * 14 + i * span * 0.31, span * 1.25) - span * 0.62, wd = span * (0.05 + 0.03 * (i % 2));
+      const g = ctx.createLinearGradient(x - wd, 0, x + wd, 0);
+      g.addColorStop(0, `rgba(${P.glow},0)`); g.addColorStop(0.5, `rgba(${P.glow},0.55)`); g.addColorStop(1, `rgba(${P.glow},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(x - wd, -span, wd * 2, span * 2);
+    }
+    ctx.restore();
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    for (const m of motes) {
+      m.y = mod(m.y - m.v * dt * 0.4, 1);
+      ctx.globalAlpha = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(t * 1.3 + m.ph));
+      ctx.fillRect(mod(m.x + Math.sin(t * 0.3 + m.ph) * 0.01, 1) * cw, m.y * ch, m.s, m.s);
+    }
+    ctx.globalAlpha = 1;
+  } else {
+    // 周辺は闇に沈む
+    const v = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.3, cw / 2, ch / 2, Math.max(cw, ch) * 0.72);
+    v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,0.6)');
+    ctx.fillStyle = v;
+    ctx.fillRect(0, 0, cw, ch);
+    ctx.globalCompositeOperation = 'lighter';
+    for (const m of motes) {
+      m.y = mod(m.y - m.v * dt * 1.6, 1);
+      const fl = 0.5 + 0.5 * Math.sin(t * 7 + m.ph * 3);
+      ctx.fillStyle = `rgba(${P.glow},${0.25 + 0.55 * fl * m.y})`;
+      ctx.beginPath();
+      ctx.arc(mod(m.x + Math.sin(t * 0.9 + m.ph) * 0.02, 1) * cw, m.y * ch, m.s * (0.6 + 0.6 * m.y), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
 }
 
 function token(ctx: CanvasRenderingContext2D, P: Palette, x: number, y: number, z: number, s: string) {
@@ -348,12 +466,30 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
 
-  // 台：紙に貼った札。影はずらした斜線ではなく、ずらしたベタ
+  const punk = P.skin === 'punk';
+  if (punk) {
+    // 角を落とした鋼板に四隅のボルト
+    ctx.fillStyle = P.shadow;
+    chamfer(ctx, cx - u * 0.43 + u * 0.05, cy - u * 0.43 + u * 0.07, u * 0.86, u * 0.86, u * 0.13);
+    ctx.fill();
+    chamfer(ctx, cx - u * 0.43, cy - u * 0.43, u * 0.86, u * 0.86, u * 0.13);
+    inked(P.plate);
+    ctx.strokeStyle = P.name === 'light' ? 'rgba(255,255,255,0.9)' : `rgba(${P.glow},${e.busy ? 0.7 : 0.25})`;
+    ctx.lineWidth = line * 0.6;
+    chamfer(ctx, cx - u * 0.37, cy - u * 0.37, u * 0.74, u * 0.74, u * 0.1);
+    ctx.stroke();
+    if (z >= 30) {
+      ctx.fillStyle = P.ink;
+      for (const [bx, by] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) { ctx.beginPath(); ctx.arc(cx + bx * u * 0.37, cy + by * u * 0.37, u * 0.022, 0, Math.PI * 2); ctx.fill(); }
+    }
+  } else {
+  // 台：紙に貼った札。影はずらしたベタ
   ctx.fillStyle = P.shadow;
   rr(ctx, cx - u * 0.42 + u * 0.05, cy - u * 0.42 + u * 0.06, u * 0.84, u * 0.84, u * 0.12);
   ctx.fill();
   rr(ctx, cx - u * 0.42, cy - u * 0.42, u * 0.84, u * 0.84, u * 0.12);
   inked(P.plate);
+  }
 
   const busy = !!e.busy;
   switch (e.kind) {
@@ -474,7 +610,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
   if (z >= 34 && !unset) {
     rr(ctx, cx - u * 0.46, cy - u * 0.46, u * 0.27, u * 0.27, u * 0.05); inked(info.color);
     ctx.fillStyle = '#ffffff';
-    ctx.font = `600 ${u * 0.17}px ${FONT_HAND}`;
+    ctx.font = `700 ${u * 0.17}px ${FONT_SMALL}`;
     ctx.textAlign = 'center';
     ctx.fillText(info.glyph, cx - u * 0.325, cy - u * 0.315);
   }
@@ -510,12 +646,13 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
       ctx.strokeStyle = P.red; ctx.lineWidth = line * 1.2;
       ctx.setLineDash([u * 0.12, u * 0.09]);
       ctx.lineDashOffset = -t * u * 0.2;
-      rr(ctx, cx - u * 0.42, cy - u * 0.42, u * 0.84, u * 0.84, u * 0.12); ctx.stroke();
+      if (punk) chamfer(ctx, cx - u * 0.43, cy - u * 0.43, u * 0.86, u * 0.86, u * 0.13); else rr(ctx, cx - u * 0.42, cy - u * 0.42, u * 0.84, u * 0.84, u * 0.12);
+      ctx.stroke();
       ctx.setLineDash([]);
     }
     disc(cx + u * 0.32, cy - u * 0.32, u * 0.15); inked(P.red);
     ctx.fillStyle = '#ffffff';
-    ctx.font = `600 ${u * 0.2}px ${FONT_HAND}`;
+    ctx.font = `700 ${u * 0.2}px ${FONT_SMALL}`;
     ctx.textAlign = 'center';
     ctx.fillText(jam ? '！' : '？', cx + u * 0.32, cy - u * 0.31);
   }
@@ -526,35 +663,70 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
   }
 }
 
-function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, z: number, w: World) {
-  const s = z * 2, m = z * 0.1, line = Math.max(1.5, z * 0.05);
+function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, z: number, size: number, w: World, t: number) {
+  const s = z * size, m = z * 0.1, line = Math.max(1.5, z * 0.05), u = s / 2; // u：2 マスのときの 1 マスぶん
+  const punk = P.skin === 'punk', light = P.name === 'light';
+  ctx.lineJoin = 'round';
   ctx.fillStyle = P.shadow;
-  rr(ctx, px + m + z * 0.07, py + m + z * 0.09, s - 2 * m, s - 2 * m, z * 0.12);
+  if (punk) chamfer(ctx, px + m + z * 0.08, py + m + z * 0.11, s - 2 * m, s - 2 * m, z * 0.3); else rr(ctx, px + m + z * 0.07, py + m + z * 0.09, s - 2 * m, s - 2 * m, z * 0.12);
   ctx.fill();
-  rr(ctx, px + m, py + m, s - 2 * m, s - 2 * m, z * 0.12);
-  ctx.fillStyle = P.name === 'light' ? P.hi : P.plate;
-  ctx.fill();
-  ctx.strokeStyle = P.name === 'light' ? P.ink : P.hi;
-  ctx.lineWidth = line;
-  ctx.stroke();
-  rr(ctx, px + m + z * 0.1, py + m + z * 0.1, s - 2 * m - z * 0.2, s - 2 * m - z * 0.2, z * 0.06);
-  ctx.lineWidth = line * 0.5;
-  ctx.stroke();
-  const ink = P.name === 'light' ? P.ink : P.hi;
+  let ink = P.ink;
+  if (punk) {
+    // 危険表示の縞で縁どった搬入口
+    chamfer(ctx, px + m, py + m, s - 2 * m, s - 2 * m, z * 0.3);
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = P.hi;
+    ctx.fillRect(px, py, s, s);
+    ctx.strokeStyle = '#14181d';
+    ctx.lineWidth = z * 0.16;
+    ctx.beginPath();
+    for (let d = -s + mod(t * z * 0.25, z * 0.46); d < s * 2; d += z * 0.46) { ctx.moveTo(px + d, py); ctx.lineTo(px + d - s, py + s); }
+    ctx.stroke();
+    ctx.restore();
+    chamfer(ctx, px + m, py + m, s - 2 * m, s - 2 * m, z * 0.3);
+    ctx.strokeStyle = light ? P.ink : '#000';
+    ctx.lineWidth = line;
+    ctx.stroke();
+    chamfer(ctx, px + m + z * 0.22, py + m + z * 0.22, s - 2 * m - z * 0.44, s - 2 * m - z * 0.44, z * 0.2);
+    ctx.fillStyle = light ? P.plate : '#0b0c0f';
+    ctx.fill();
+    ctx.stroke();
+    ink = light ? P.ink : P.hi;
+  } else {
+    rr(ctx, px + m, py + m, s - 2 * m, s - 2 * m, z * 0.12);
+    ctx.fillStyle = light ? P.hi : P.plate;
+    ctx.fill();
+    ctx.strokeStyle = light ? P.ink : P.hi;
+    ctx.lineWidth = line;
+    ctx.stroke();
+    rr(ctx, px + m + z * 0.1, py + m + z * 0.1, s - 2 * m - z * 0.2, s - 2 * m - z * 0.2, z * 0.06);
+    ctx.lineWidth = line * 0.5;
+    ctx.stroke();
+    ink = light ? P.ink : P.hi;
+  }
   ctx.textAlign = 'center';
   ctx.fillStyle = ink;
-  ctx.font = `600 ${z * 0.22}px ${FONT_HAND}`;
-  ctx.fillText('納品所', px + s / 2, py + z * 0.46);
+  ctx.font = `700 ${u * 0.2}px ${FONT_SMALL}`;
+  ctx.fillText('納品所', px + s / 2, py + s / 2 - u * 0.5);
   const goal = currentGoal(w);
   const gs = goal ? sub(goal.s) : null;
   const plain = !gs?.formula || !!gs.mask;
   const tx = !gs ? '完了' : plain ? (goal!.s === 'e' ? 'e⁻' : gs.name.replace(/（.*）| .*$/g, '')) : label(goal!.s);
-  ctx.font = `600 ${z * Math.min(0.46, 1.25 / Math.max(1, tx.length * (plain ? 1 : 0.62)))}px ${plain ? FONT_HAND : FONT_MONO}`;
-  ctx.fillText(tx, px + s / 2, py + z * 0.98);
+  ctx.font = `600 ${u * Math.min(0.44, 1.2 / Math.max(1, tx.length * (plain ? 1 : 0.62)))}px ${plain ? FONT_HAND : FONT_MONO}`;
+  ctx.fillText(tx, px + s / 2, py + s / 2 - u * 0.02);
   if (goal) {
-    ctx.font = `500 ${z * 0.22}px ${FONT_MONO}`;
-    ctx.fillText(`${goalCount(w)} / ${goal.n}`, px + s / 2, py + z * 1.48);
+    ctx.font = `500 ${u * 0.22}px ${FONT_MONO}`;
+    ctx.fillText(`${goalCount(w)} / ${requiredOf(w, goal)}`, px + s / 2, py + s / 2 + u * 0.46);
   }
+}
+
+/** 角を落とした四角 */
+function chamfer(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, c: number) {
+  ctx.beginPath();
+  ctx.moveTo(x + c, y); ctx.lineTo(x + w - c, y); ctx.lineTo(x + w, y + c); ctx.lineTo(x + w, y + h - c);
+  ctx.lineTo(x + w - c, y + h); ctx.lineTo(x + c, y + h); ctx.lineTo(x, y + h - c); ctx.lineTo(x, y + c);
+  ctx.closePath();
 }
 
 function rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {

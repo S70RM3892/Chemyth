@@ -3,11 +3,11 @@ import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula'
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
-import { HUB_TILES, MAP_H, MAP_W, ZONES, zoneAt, type Zone } from '../src/content/map';
+import { HUB_TILES, MAP_H, MAP_W, ZONES, hubTiles, zoneAt, zoneSpots, type Zone } from '../src/content/map';
 import { GOALS, CHAPTERS, chapterOf } from '../src/content/goals';
 import { QUESTIONS, isCorrect } from '../src/content/questions';
 import { MACHINES } from '../src/content/machines';
-import { at, autoDir, configure, currentGoal, deserialize, doneCount, dueIds, goalCount, judge, learn, newWorld, place, schedule, serialize, setChapter, step, toolUnlocked, type Answer } from '../src/engine/world';
+import { at, autoDir, configure, currentGoal, growHub, hubLevel, requiredOf, deserialize, doneCount, dueIds, goalCount, judge, learn, newWorld, place, schedule, serialize, setChapter, step, toolUnlocked, type Answer } from '../src/engine/world';
 import { REAGENTS, SETS, TESTS, isPositive } from '../src/content/samples';
 import { KNOWLEDGE } from '../src/content/knowledge';
 import { PASSAGES, checkBlank } from '../src/content/passages';
@@ -79,14 +79,15 @@ describe('内容データ', () => {
   it('章と指令の対応', () => {
     expect(GOALS.length).toBe(CHAPTERS.reduce((a, c) => a + c.goals.length, 0));
     expect(chapterOf(0)?.name).toContain('第1章');
-    expect(chapterOf(GOALS.length - 1)?.name).toContain('第12章');
+    expect(chapterOf(GOALS.length - 1)?.name).toContain('第14章');
+    expect(CHAPTERS[13].goals.length).toBeGreaterThan(40);
     expect(chapterOf(GOALS.length)).toBeNull();
     expect(CHAPTERS[MACHINES.battery.chapter!].goals[0].s).toBe('e');
     for (const g of GOALS) if (g.strict) expect(SETS.find((x) => x.id === g.strict)!.members, g.s).toContain(g.s);
   });
   it('運転条件の計算つきの反応は、問いと答えがそろっている', () => {
     const asks = RECIPES.filter((r) => r.ask);
-    expect(asks.length).toBe(3);
+    expect(asks.length).toBe(5);
     for (const r of asks) { expect(r.ask!.text.length).toBeGreaterThan(20); expect(Number.isFinite(r.ask!.answer)).toBe(true); }
   });
   it('計算問題の id が重複せず、答えは許容誤差つきで判定される', () => {
@@ -391,5 +392,38 @@ describe('工場の動作', () => {
     expect(dueIds(w, t0 + 60_000)).toEqual([]);
     schedule(w, 'r:contact', false, t0);
     expect(w.srs['r:contact'].iv).toBe(0);
+  });
+
+  it('地図に果てはなく、遠くにも資源地が現れる', () => {
+    const w = newWorld();
+    expect(place(w, 'extractor', 900, -700, 0)).toBeNull();
+    expect(place(w, 'belt', -50, 2000, 0)).toBeNull();
+    const far = zoneSpots(300, 300, 500, 500);
+    expect(far.length).toBeGreaterThan(20);
+    const kinds = new Set(zoneSpots(100, 100, 900, 900).map((s) => s.zone));
+    for (const z of Object.keys(ZONES)) expect(kinds.has(z as Zone), z).toBe(true);
+    const s0 = far.find((s) => s.zone !== 'sea')!;
+    expect(zoneAt(Math.floor(s0.cx), Math.floor(s0.cy))).toBe(s0.zone);
+    expect(zoneAt(-400, 123)).toBe('sea');
+  });
+
+  it('達成数が増えると納品所が大きくなり、要求数も増える', () => {
+    const w = newWorld();
+    const g = CHAPTERS[0].goals[0];
+    expect(requiredOf(w, g)).toBe(10);
+    place(w, 'belt', hx - 1, hy, 0);
+    place(w, 'reactor', hx - 2, hy, 0);
+    w.progress[0] = 3;
+    expect(growHub(w)).toBe(true);
+    expect(w.hubSize).toBe(4);
+    expect(hubLevel(w)).toBe(1);
+    expect(at(w, hx - 1, hy)!.kind).toBe('hub');   // 重なったベルトは納品所に置き換わる
+    expect(at(w, hx - 2, hy)!.kind).toBe('reactor'); // 外側は残る
+    expect(requiredOf(w, g)).toBe(15);
+    expect(requiredOf(w, CHAPTERS[9].goals[0])).toBe(8); // 仕分けは増やさない
+    expect([...w.ents.values()].filter((e) => e.kind === 'hub').length).toBe(hubTiles(4).length);
+    const r = deserialize(serialize(w))!;
+    expect(r.hubSize).toBe(4);
+    expect(growHub(r)).toBe(false);
   });
 });

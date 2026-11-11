@@ -4,7 +4,7 @@ import { deserialize, summarize } from '../engine/world';
 import { $, h } from './dom';
 import { setSound, sfx, soundOn } from './sound';
 import { drawElement } from './token';
-import { applyTheme, type ThemeChoice } from './theme';
+import { applySkin, applyTheme, skinName, type Skin, type ThemeChoice } from './theme';
 
 export const SLOTS = 3;
 const slotKey = (n: number) => `chemyth-v2-slot-${n}`;
@@ -15,8 +15,8 @@ export const store = {
   read(n: number): string | null { try { return localStorage.getItem(slotKey(n)); } catch { return null; } },
   write(n: number, json: string): boolean { try { localStorage.setItem(slotKey(n), json); return true; } catch { return false; } },
   erase(n: number) { try { localStorage.removeItem(slotKey(n)); } catch { /* 同上 */ } },
-  meta(): { sound?: boolean; theme?: ThemeChoice } { try { return JSON.parse(localStorage.getItem(META) || '{}'); } catch { return {}; } },
-  setMeta(m: { sound?: boolean; theme?: ThemeChoice }) { try { localStorage.setItem(META, JSON.stringify({ ...store.meta(), ...m })); } catch { /* 同上 */ } },
+  meta(): { sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string } { try { return JSON.parse(localStorage.getItem(META) || '{}'); } catch { return {}; } },
+  setMeta(m: { sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string }) { try { localStorage.setItem(META, JSON.stringify({ ...store.meta(), ...m })); } catch { /* 同上 */ } },
 };
 
 const fmtTime = (ms: number) => { const m = Math.floor(ms / 60000); return m >= 60 ? `${Math.floor(m / 60)} 時間 ${m % 60} 分` : `${m} 分`; };
@@ -24,11 +24,17 @@ const fmtDate = (t: number) => { if (!t) return ''; const d = new Date(t); retur
 
 export interface TitleApi { start(slot: number, json: string | null): void }
 
-/** テーマの切り替えボタン（自動・ノート・黒板） */
+/** 明暗の切り替えボタン。呼び名はスキンごとに違う（ノート／黒板、光／闇） */
 export function themeButtons(after: () => void): HTMLElement[] {
-  const cur = store.meta().theme ?? 'auto';
-  return ([['auto', '自動'], ['light', 'ノート'], ['dark', '黒板']] as [ThemeChoice, string][]).map(([id, name]) =>
+  const cur = store.meta().theme ?? 'auto', punk = skinName() === 'punk';
+  return ([['auto', '自動'], ['light', punk ? '光' : 'ノート'], ['dark', punk ? '闇' : '黒板']] as [ThemeChoice, string][]).map(([id, name]) =>
     h('button', { type: 'button', id: `theme-${id}`, class: cur === id ? 'on' : '', onclick: () => { store.setMeta({ theme: id }); applyTheme(id); sfx.tap(); after(); } }, name));
+}
+/** スキンの切り替えボタン */
+export function skinButtons(after: () => void): HTMLElement[] {
+  const cur = skinName();
+  return ([['note', '文具'], ['punk', '工業']] as [Skin, string][]).map(([id, name]) =>
+    h('button', { type: 'button', id: `skin-${id}`, class: cur === id ? 'on' : '', onclick: () => { store.setMeta({ skin: id }); applySkin(id); sfx.tap(); after(); } }, name));
 }
 
 export function initTitle(api: TitleApi) {
@@ -85,6 +91,7 @@ export function initTitle(api: TitleApi) {
     const snd = $('title-sound');
     snd.textContent = soundOn() ? '音：あり' : '音：なし';
     $('title-theme').replaceChildren(...themeButtons(paint));
+    $('title-skin').replaceChildren(...skinButtons(paint));
   };
 
   const exportFrom = (n: number, json: string) => {

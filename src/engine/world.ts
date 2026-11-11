@@ -1,5 +1,5 @@
 import { recipeById, RECIPES, CONDITIONS, electronsOf, productsOf, type MachineKind, type Recipe } from '../content/recipes';
-import { HUB_TILES, MAP_H, MAP_W, resourceAt } from '../content/map';
+import { HUB_AT, HUB_CENTER, HUB_DEMAND, HUB_SIZES, hubTiles, resourceAt } from '../content/map';
 import { CHAPTERS, TOTAL_GOALS, type Goal } from '../content/goals';
 import { hasSub, sub } from '../content/substances';
 import { isPositive, setById } from '../content/samples';
@@ -65,6 +65,10 @@ export interface World {
   counts: number[];
   /** これまでに開いた中でいちばん先の章 */
   seen: number;
+  /** 納品所の一辺のマス数。達成数が増えると大きくなり、要求数も増える */
+  hubSize: number;
+  /** 指令ごとにかかった時間（ミリ秒）。キーは '章:番号' */
+  goalMs: Record<string, number>;
   /** 復習の予定。キーは 'r:反応id' か 'k:知識id' */
   srs: Record<string, { due: number; iv: number }>;
   /** リード文課題で正解した空欄 */
@@ -107,6 +111,22 @@ export function schedule(w: World, id: string, correct: boolean, now = Date.now(
 export const dueIds = (w: World, now = Date.now()) => Object.keys(w.srs).filter((k) => w.srs[k].due <= now).sort((a, b) => w.srs[a].due - w.srs[b].due);
 
 export const currentGoal = (w: World): Goal | undefined => CHAPTERS[w.chapter]?.goals[w.progress[w.chapter]];
+/** 納品所の段階（0〜3） */
+export const hubLevel = (w: World) => Math.max(0, HUB_SIZES.indexOf(w.hubSize));
+/** いま要求される個数。仕分けの指令は増やさない */
+export const requiredOf = (w: World, g: Goal) => (g.strict ? g.n : Math.ceil(g.n * HUB_DEMAND[hubLevel(w)]));
+/** 達成数に見合う大きさまで納品所を広げる。広がった場所にあったものは取り除く。広がったら true */
+export function growHub(w: World): boolean {
+  const done = w.progress.reduce((a, n) => a + n, 0);
+  let lv = 0;
+  HUB_AT.forEach((n, i) => { if (done >= n) lv = i; });
+  const size = HUB_SIZES[lv];
+  if (size <= w.hubSize && at(w, HUB_CENTER[0], HUB_CENTER[1])?.kind === 'hub') return false;
+  const grew = size > w.hubSize;
+  w.hubSize = Math.max(size, w.hubSize);
+  for (const [x, y] of hubTiles(w.hubSize)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
+  return grew;
+}
 export const goalCount = (w: World) => w.counts[w.chapter] || 0;
 export const doneCount = (w: World) => w.progress.reduce((a, n) => a + n, 0);
 export function setChapter(w: World, i: number) {
@@ -119,11 +139,11 @@ export const toolUnlocked = (w: World, need: { done?: number; chapter?: number }
 
 export function newWorld(): World {
   const w: World = {
-    ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, srs: {}, cleared: [], delivered: {}, stock: {},
+    ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
     up: { extract: 0, belt: 0, machine: 0 }, solved: [], playMs: 0, tick: 0, events: [], fx: [],
   };
-  for (const [x, y] of HUB_TILES) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
+  for (const [x, y] of hubTiles(2)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
   return w;
 }
 
@@ -137,7 +157,6 @@ export function discover(w: World, s: string) {
 
 /** 置けない理由を返す。置けたら null */
 export function place(w: World, kind: Kind, x: number, y: number, dir: Dir): string | null {
-  if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return '地図の外だ';
   if (at(w, x, y)) return 'そこはもう埋まっている';
   const e: Ent = { kind, x, y, dir };
   if (kind === 'belt' || kind === 'splitter' || kind === 'analyzer') e.item = null;
@@ -266,8 +285,7 @@ export function autoDir(w: World, kind: Kind, x: number, y: number): Dir {
     const d = inflow(w, x, y);
     if (d !== null) return d;
   }
-  const [hx, hy] = HUB_TILES[0];
-  const dx = hx + 1 - (x + 0.5), dy = hy + 1 - (y + 0.5);
+  const dx = HUB_CENTER[0] - (x + 0.5), dy = HUB_CENTER[1] - (y + 0.5);
   return (Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 0 : 2) : dy >= 0 ? 1 : 3) as Dir;
 }
 
@@ -290,10 +308,11 @@ function deliver(w: World, s: string, x: number, y: number, rc?: boolean) {
   }
   w.counts[ch]++;
   w.points++;
-  if (w.counts[ch] >= g.n) {
+  if (w.counts[ch] >= requiredOf(w, g)) {
     w.progress[ch]++;
     w.counts[ch] = 0;
     w.points += 30;
+    if (growHub(w)) w.events.push('hub-grow');
     if (w.progress[ch] < CHAPTERS[ch].goals.length) { w.events.push('goal-done'); return; }
     // 章を終えたら、まだ残っている次の章へ進む
     const next = [...CHAPTERS.keys()].map((i) => (ch + 1 + i) % CHAPTERS.length).find((i) => w.progress[i] < CHAPTERS[i].goals.length);
@@ -349,6 +368,7 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): 
 export function step(w: World, dt: number) {
   w.tick++;
   w.playMs += dt * 1000;
+  if (currentGoal(w)) { const gk = `${w.chapter}:${w.progress[w.chapter]}`; w.goalMs[gk] = (w.goalMs[gk] || 0) + dt * 1000; }
   const speed = beltSpeed(w), every = extractInterval(w), rate = machineRate(w);
   for (const e of w.ents.values()) {
     switch (e.kind) {
@@ -454,7 +474,7 @@ export const SAVE_VERSION = 2;
 export function serialize(w: World): string {
   return JSON.stringify({
     v: SAVE_VERSION, ents: [...w.ents.values()], chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
-    srs: w.srs, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
+    hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
     discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved,
     playMs: Math.round(w.playMs), savedAt: Date.now(),
   });
@@ -472,7 +492,6 @@ export function deserialize(json: string): World | null {
       if (e.item) e.item.m = 0;
       if (e.items) e.items = e.items.map((it) => (it && hasSub(it.s) ? { ...it, m: 0 } : null));
     }
-    for (const [x, y] of HUB_TILES) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
     if (Array.isArray(d.progress)) {
       w.progress = CHAPTERS.map((c, i) => Math.min(c.goals.length, d.progress[i] | 0));
       w.counts = CHAPTERS.map((_, i) => d.counts?.[i] | 0);
@@ -489,6 +508,12 @@ export function deserialize(json: string): World | null {
       });
     }
     w.seen = Math.max(d.seen | 0, w.chapter);
+    w.goalMs = d.goalMs || {};
+    // 納品所は保存された大きさで置き直す。達成数に足りなければ広げる（古いセーブ）
+    for (const [k, e] of w.ents) if (e.kind === 'hub') w.ents.delete(k);
+    w.hubSize = HUB_SIZES.includes(d.hubSize) ? d.hubSize : 2;
+    for (const [x, y] of hubTiles(w.hubSize)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
+    if (growHub(w)) w.events.push('hub-grow');
     w.srs = d.srs || {};
     w.cleared = d.cleared || [];
     for (const id of d.learned || []) if (!w.srs[`r:${id}`] && recipeById(id)) w.srs[`r:${id}`] = { iv: 0, due: Date.now() };

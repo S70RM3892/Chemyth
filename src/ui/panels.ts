@@ -229,7 +229,7 @@ export function showSampler(c: PanelCtx, e: Ent, extra: HTMLElement) {
 // ---------------- 分析器 ----------------
 
 export function showAnalyzer(c: PanelCtx, e: Ent, extra: HTMLElement) {
-  const GROUP = { organic: '有機化合物の検査', amino: 'アミノ酸・ペプチドの検査', ion: '金属イオンの検査' } as const;
+  const GROUP = { organic: '有機化合物の検査', amino: 'アミノ酸・ペプチドの検査', nucleic: '核酸の塩基の検査', ion: '金属イオンの検査' } as const;
   const cur = testById(e.test);
   c.show(h('header', {}, h('h2', {}, '分析器'), closeBtn(c)),
     cur ? h('div', { class: 'answer' }, h('p', {}, h('b', {}, `いまの検査：${cur.name}`)), h('p', {}, `陽性（正面へ）：${cur.sees}`), h('p', { class: 'muted' }, 'そうならなかったものは陰性として右手へ出る。'),

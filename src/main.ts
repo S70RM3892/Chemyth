@@ -1,8 +1,8 @@
 import { CHAPTERS, TOTAL_GOALS } from './content/goals';
-import { HUB_TILES, LAND, MAP_H, MAP_W, ZONES, resourceAt, zoneAt } from './content/map';
+import { HUB_CENTER, LAND, ZONES, hubRect, resourceAt, zoneAt } from './content/map';
 import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
-import { at, autoDir, configure, currentGoal, deserialize, doneCount, goalCount, isMachine, key, newWorld, place, remove, serialize, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { at, autoDir, configure, currentGoal, deserialize, doneCount, goalCount, requiredOf, isMachine, key, newWorld, place, remove, serialize, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
 import { recipeById } from './content/recipes';
 import { about, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
@@ -10,8 +10,9 @@ import { attachInput, Z_MIN } from './ui/input';
 import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showUpgrades, type PanelCtx } from './ui/panels';
 import { draw, type Camera } from './ui/render';
 import { setSound, sfx, soundOn } from './ui/sound';
-import { initTitle, store, themeButtons } from './ui/title';
-import { applyTheme } from './ui/theme';
+import { initTitle, skinButtons, store, themeButtons } from './ui/title';
+import { applySkin, applyTheme } from './ui/theme';
+import { showRanking, submitScore } from './ui/ranking';
 import { drawToken } from './ui/token';
 
 type Placeable = Exclude<Kind, 'hub'>;
@@ -49,12 +50,13 @@ function boot(data: HotData) {
   const app = $('app');
   const cv = $<HTMLCanvasElement>('cv');
   const ctx = cv.getContext('2d')!;
-  const [hubX, hubY] = HUB_TILES[0];
-  const cam: Camera = { x: hubX + 1, y: hubY + 1, z: 48 };
+  const [hubCX, hubCY] = HUB_CENTER;
+  const cam: Camera = { x: hubCX, y: hubCY, z: 48 };
   let cw = 0, ch = 0;
 
   setSound(store.meta().sound !== false);
   applyTheme(store.meta().theme ?? 'auto');
+  applySkin(store.meta().skin ?? 'note');
   const save = () => { if (slot) store.write(slot, serialize(world)); };
   hot?.snapshot?.(() => (slot ? { slot, save: serialize(world) } : {}));
 
@@ -67,7 +69,14 @@ function boot(data: HotData) {
   new ResizeObserver(resize).observe(cv);
   resize();
   const nearZoom = () => Math.max(40, Math.min(54, cw / 24));
-  const fitZoom = () => Math.max(Z_MIN, Math.min(cw / (MAP_W + 1), (ch - 150) / (MAP_H + 1)));
+  /** 建てたもの全体が収まる視野 */
+  const fitView = (): Camera => {
+    const hr = hubRect(world.hubSize);
+    let x0 = hr.x, y0 = hr.y, x1 = hr.x + hr.s, y1 = hr.y + hr.s;
+    for (const e of world.ents.values()) { x0 = Math.min(x0, e.x); y0 = Math.min(y0, e.y); x1 = Math.max(x1, e.x + 1); y1 = Math.max(y1, e.y + 1); }
+    const w0 = Math.max(60, x1 - x0 + 16), h0 = Math.max(40, y1 - y0 + 16);
+    return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 + 2, z: Math.max(Z_MIN, Math.min(nearZoom(), cw / w0, (ch - 150) / h0)) };
+  };
 
   // ---- トースト ----
   const toastEl = $('toast');
@@ -162,7 +171,8 @@ function boot(data: HotData) {
       const g = currentGoal(world);
       showSheet(h('header', {}, h('h2', {}, '納品所'), closeBtn()),
         h('p', {}, '指定された物質をここへ運ぶ。どの側からでも受け取る。指定と違う物質も受け取って在庫にする。在庫は「搬出口」で取り出せる。'),
-        h('p', { class: 'muted' }, g ? `いまの指令：${sub(g.s).name} を ${g.n} 個（${goalCount(world)} 個 納品済み）` : 'この章の指令は終えた。'),
+        h('p', { class: 'muted' }, g ? `いまの指令：${sub(g.s).name} を ${requiredOf(world, g)} 個（${goalCount(world)} 個 納品済み）` : 'この章の指令は終えた。'),
+        h('p', { class: 'muted' }, `いまの大きさは ${world.hubSize}×${world.hubSize} マス。指令を達成していくと大きくなり、受け取れる口が増える。そのぶん 1 つの指令で求められる数も増える。`),
         h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', onclick: () => showChapters(panel()) }, '指令の一覧を開く')));
       return;
     }
@@ -177,7 +187,6 @@ function boot(data: HotData) {
   };
 
   const showZone = (x: number, y: number) => {
-    if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return;
     const zn = zoneAt(x, y);
     const z = zn ? ZONES[zn] : LAND;
     showSheet(h('header', {}, h('h2', {}, z.name), closeBtn()),
@@ -207,7 +216,8 @@ function boot(data: HotData) {
       h('button', { class: 'ghost', type: 'button', id: 'm-passages', onclick: () => showPassages(panel()) }, 'リード文課題（京大形式の空欄補充）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-log', onclick: () => showLog(panel()) }, '記録（間違えたところ）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-help', onclick: () => showHelp() }, '遊び方'),
-      h('div', { class: 'row' }, h('span', { class: 'muted' }, '見た目'), h('span', { class: 'seg' }, ...themeButtons(showMenu))),
+      h('div', { class: 'row' }, h('span', { class: 'muted' }, '見た目'), h('span', { class: 'seg' }, ...skinButtons(showMenu)), h('span', { class: 'seg' }, ...themeButtons(showMenu))),
+      h('button', { class: 'ghost', type: 'button', id: 'm-rank', onclick: () => showRanking(panel()) }, 'ランキング'),
       h('button', { class: 'ghost', type: 'button', id: 'm-sound', onclick: () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); showMenu(); } }, soundOn() ? '音：あり' : '音：なし'),
       h('button', { class: 'ghost', type: 'button', id: 'm-title', onclick: () => { modal.hidden = true; sheet.replaceChildren(); toTitle(); } }, '保存してタイトルへ戻る'),
     ),
@@ -274,15 +284,16 @@ function boot(data: HotData) {
     actTurn.hidden = actErase.hidden = hub;
     actCopy.hidden = !copyable(selected);
     act.hidden = false;
-    const ax = (selected.x + (hub ? 1 : 0.5) - cam.x) * cam.z + cw / 2;
-    const ay = (selected.y - cam.y) * cam.z + ch / 2 - 14;
+    const hr = hubRect(world.hubSize);
+    const ax = ((hub ? hr.x + hr.s / 2 : selected.x + 0.5) - cam.x) * cam.z + cw / 2;
+    const ay = ((hub ? hr.y : selected.y) - cam.y) * cam.z + ch / 2 - 14;
     act.style.transform = `translate(${Math.round(Math.min(cw - 110, Math.max(110, ax)))}px, ${Math.round(Math.max(64, ay))}px) translate(-50%, -100%)`;
   };
 
   $('b-fit').onclick = () => {
-    const fit = fitZoom();
-    const wide = cam.z > fit * 1.15;
-    camTo = wide ? { x: MAP_W / 2, y: MAP_H / 2 + 2, z: fit } : { x: hubX + 1, y: hubY + 1, z: nearZoom() };
+    const fit = fitView();
+    const wide = cam.z > fit.z * 1.15;
+    camTo = wide ? fit : { x: hubCX, y: hubCY, z: nearZoom() };
     $('b-fit').textContent = wide ? '近く' : '全体';
   };
 
@@ -344,7 +355,7 @@ function boot(data: HotData) {
     $('pts').textContent = String(world.points);
     const due = reviewCount(world);
     $('due').textContent = due ? String(due) : '';
-    const sig = `${world.chapter}:${world.progress[world.chapter]}`;
+    const sig = `${world.chapter}:${world.progress[world.chapter]}:${world.hubSize}`;
     if (shownGoal !== sig) {
       shownGoal = sig;
       const c2 = goalIco.getContext('2d')!;
@@ -353,11 +364,11 @@ function boot(data: HotData) {
       goalIco.hidden = !g;
       $('goal-step').textContent = `${ch2.name}　${Math.min(world.progress[world.chapter] + 1, ch2.goals.length)} / ${ch2.goals.length}`;
       const s2 = g ? sub(g.s) : null;
-      $('goal-name').textContent = g && s2 ? `${s2.name}${s2.formula && !s2.mask ? ' ' + label(g.s) : g.s === 'e' ? ' e⁻' : ''} を ${g.n} 個` : doneCount(world) >= TOTAL_GOALS ? 'すべての指令を終えた' : 'この章は完了。ここを押して別の章へ';
+      $('goal-name').textContent = g && s2 ? `${s2.name}${s2.formula && !s2.mask ? ' ' + label(g.s) : g.s === 'e' ? ' e⁻' : ''} を ${requiredOf(world, g)} 個` : doneCount(world) >= TOTAL_GOALS ? 'すべての指令を終えた' : 'この章は完了。ここを押して別の章へ';
       $('goal-hint').textContent = g ? g.hint : '記録を開いて、間違えた反応を紙に書き出して確認しろ。';
     }
-    $('goal-count').textContent = g ? `${goalCount(world)} / ${g.n}` : '';
-    $('goal-bar').style.width = g ? `${(goalCount(world) / g.n) * 100}%` : '100%';
+    $('goal-count').textContent = g ? `${goalCount(world)} / ${requiredOf(world, g)}` : '';
+    $('goal-bar').style.width = g ? `${Math.min(100, (goalCount(world) / requiredOf(world, g)) * 100)}%` : '100%';
   };
 
   // ---- タイトルと開始 ----
@@ -366,7 +377,7 @@ function boot(data: HotData) {
       world = (json && deserialize(json)) || newWorld();
       slot = n;
       undo.length = 0; group = null; selected = null; undoBtn.disabled = true; shownGoal = ''; speed = 1; paintSpeed(); clone = null;
-      cam.x = hubX + 1; cam.y = hubY + 1; cam.z = nearZoom(); camTo = null;
+      cam.x = hubCX; cam.y = hubCY; cam.z = nearZoom(); camTo = null;
       $('b-fit').textContent = '全体';
       title.hide();
       app.classList.remove('in-title');
@@ -396,6 +407,8 @@ function boot(data: HotData) {
       }
       for (const ev of world.events.splice(0)) {
         if (ev === 'goal-done') { stamp('納品済'); toast('納品完了。研究点 +30。次の指令が出た。', 3500); sfx.goal(); refreshTools(true); }
+        if (ev === 'hub-grow') { toast(`納品所が ${world.hubSize}×${world.hubSize} に広がった。重なった設備は撤去され、求められる数も増える。`, 6000); selected = null; }
+        if (ev === 'goal-done' || ev === 'chapter-done' || ev === 'all-done') void submitScore(world);
         if (ev === 'chapter-done') { stamp('修了'); toast(`章を終えた。${CHAPTERS[world.chapter].name} へ進む。`, 5000); sfx.goal(); refreshTools(true); }
         if (ev === 'wrong-sample' && now - lastWrong > 2500) { lastWrong = now; toast('違う物質が納品所に入った。2 個減点。検査を見直せ。', 3200); sfx.bad(); }
         if (ev === 'all-done') { toast('すべての指令を終えた。', 6000); sfx.goal(); }

@@ -1,3 +1,4 @@
+/** 最初の区画の大きさ。地図そのものに果てはない */
 export const MAP_W = 84;
 export const MAP_H = 56;
 
@@ -109,15 +110,75 @@ const blob = (x: number, y: number, cx: number, cy: number, r: number) => {
 };
 const BLOBS = (Object.keys(ZONES) as Zone[]).filter((z) => z !== 'sea');
 
+/** 海岸線。西はどこまでも海 */
+const coast = (y: number) => 6 + 1.6 * Math.sin(y * 0.3) + 0.8 * Math.sin(y * 0.9 + 1);
+
+// ---- 地図に果てはない。最初の区画（MAP_W × MAP_H）の外には、同じ種類の資源地が不規則に現れ続ける ----
+const CELL = 22;
+const hash2 = (x: number, y: number, k: number) => {
+  const n = Math.sin(x * 127.1 + y * 311.7 + k * 74.7) * 43758.5453;
+  return n - Math.floor(n);
+};
+export interface ZoneSpot { zone: Zone; cx: number; cy: number; r: number }
+const cells = new Map<string, ZoneSpot | null>();
+/** 区画ごとに、資源地が 1 つあるかどうかが決まっている */
+function spotOf(gx: number, gy: number): ZoneSpot | null {
+  const k = `${gx},${gy}`;
+  let s = cells.get(k);
+  if (s !== undefined) return s;
+  s = null;
+  const x0 = gx * CELL, y0 = gy * CELL;
+  const inCore = x0 < MAP_W + 4 && x0 + CELL > -4 && y0 < MAP_H + 4 && y0 + CELL > -4;
+  if (!inCore && x0 > 12 && hash2(gx, gy, 1) < 0.72) {
+    s = {
+      zone: BLOBS[Math.floor(hash2(gx, gy, 2) * BLOBS.length)],
+      cx: x0 + 5 + hash2(gx, gy, 3) * (CELL - 10), cy: y0 + 5 + hash2(gx, gy, 4) * (CELL - 10), r: 2.2 + hash2(gx, gy, 5) * 1.3,
+    };
+  }
+  cells.set(k, s);
+  return s;
+}
+
 export function zoneAt(x: number, y: number): Zone | null {
-  if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return null;
-  if (x + 0.5 < 6 + 1.6 * Math.sin(y * 0.3) + 0.8 * Math.sin(y * 0.9 + 1)) return 'sea';
-  for (const z of BLOBS) { const [cx, cy, r] = ZONES[z].at; if (blob(x, y, cx, cy, r)) return z; }
-  return null;
+  if (x + 0.5 < coast(y)) return 'sea';
+  if (x >= 0 && y >= 0 && x < MAP_W && y < MAP_H) {
+    for (const z of BLOBS) { const [cx, cy, r] = ZONES[z].at; if (blob(x, y, cx, cy, r)) return z; }
+    return null;
+  }
+  const s = spotOf(Math.floor(x / CELL), Math.floor(y / CELL));
+  return s && blob(x, y, s.cx, s.cy, s.r) ? s.zone : null;
+}
+
+/** 範囲内にある資源地の中心（名前を書く位置） */
+export function zoneSpots(x0: number, y0: number, x1: number, y1: number): ZoneSpot[] {
+  const out: ZoneSpot[] = [];
+  for (const z of Object.keys(ZONES) as Zone[]) {
+    const [cx, cy, r] = ZONES[z].at;
+    if (z === 'sea') { const yy = Math.round((y0 + y1) / 2 / 40) * 40 + 20; out.push({ zone: z, cx: 1.6, cy: yy, r: 0 }); }
+    else if (cx >= x0 - 4 && cx <= x1 + 4 && cy >= y0 - 4 && cy <= y1 + 4) out.push({ zone: z, cx, cy, r });
+  }
+  for (let gy = Math.floor(y0 / CELL); gy <= Math.floor(y1 / CELL); gy++) for (let gx = Math.floor(x0 / CELL); gx <= Math.floor(x1 / CELL); gx++) {
+    const s = spotOf(gx, gy);
+    if (s) out.push(s);
+  }
+  return out;
 }
 
 /** そのマスで採取機が出すもの */
 export const resourceAt = (x: number, y: number): string => { const z = zoneAt(x, y); return z ? ZONES[z].resource : LAND.resource; };
 
-/** 納品所が占めるマス */
-export const HUB_TILES: [number, number][] = [[41, 27], [42, 27], [41, 28], [42, 28]];
+/** 納品所の中心（マスの角）。指令を達成していくと、ここを中心に大きくなる */
+export const HUB_CENTER: [number, number] = [42, 28];
+export const HUB_SIZES = [2, 4, 6, 8];
+/** 達成数がこれ以上になると次の大きさになる */
+export const HUB_AT = [0, 3, 12, 30];
+/** 大きさごとの、要求数の倍率 */
+export const HUB_DEMAND = [1, 1.5, 2, 3];
+export const hubRect = (size: number) => ({ x: HUB_CENTER[0] - size / 2, y: HUB_CENTER[1] - size / 2, s: size });
+export function hubTiles(size: number): [number, number][] {
+  const { x, y } = hubRect(size), out: [number, number][] = [];
+  for (let j = 0; j < size; j++) for (let i = 0; i < size; i++) out.push([x + i, y + j]);
+  return out;
+}
+/** 最初の大きさの納品所が占めるマス */
+export const HUB_TILES: [number, number][] = hubTiles(2);

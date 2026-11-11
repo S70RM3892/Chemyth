@@ -1,4 +1,6 @@
 import type { Zone } from './map';
+import { SETS, TESTS, isPositive } from './samples';
+import { sub } from './substances';
 
 export interface Goal {
   s: string;
@@ -119,7 +121,32 @@ export const CHAPTERS: Chapter[] = [
     { s: 'cylN2', n: 5, hint: '窒素をボンベに詰めろ。設定のあとに、圧力を計算する。' },
     { s: 'I2', n: 5, hint: 'ヨウ化水素（試薬棚）を熱分解しろ。設定のあとに、速度の変化を計算する。' },
   ] },
+  { name: '第13章 核酸と元素分析', goals: [
+    { s: 'nucleotide', n: 5, hint: '試薬棚のリン酸・デオキシリボース・核酸塩基から、水をとってつなげろ。' },
+    { s: 'DNA', n: 5, hint: 'ヌクレオチドどうしをつなげろ。' },
+    { s: 'x-G', n: 8, strict: 'N', hint: '試料 N は 5 種の塩基。グアニンだけを取り出せ。環の数と水素結合の数。' },
+    { s: 'x-U', n: 8, strict: 'N', hint: '試料 N から、RNA にしか含まれない塩基を。' },
+    { s: 'x-A', n: 8, strict: 'N', hint: '試料 N からアデニンを。検査を 2 つ重ねる。' },
+    { s: 'x-benzene', n: 8, strict: 'L', hint: '試料 L は分子式の違う 5 種。燃やして出る CO₂ と H₂O の量を比べろ。' },
+    { s: 'x-acetic', n: 8, strict: 'L', hint: '試料 L から酢酸を。燃焼の結果だけでは決まらない。' },
+    { s: 'x-hexane', n: 8, strict: 'L', hint: '試料 L からヘキサンを。' },
+  ] },
 ];
+
+// 総合演習：すべての試料から、検査で他と区別できる物質を自動で拾い、順番を混ぜて指令にする
+{
+  const pool: Goal[] = [];
+  const sig = (id: string) => TESTS.map((t) => (isPositive(id, t.id) ? '1' : '0')).join('');
+  for (const set of SETS) for (const m of set.members) {
+    if (set.members.some((o) => o !== m && sig(o) === sig(m))) continue;
+    pool.push({ s: m, n: 6, strict: set.id, hint: `${set.name}。${sub(m).name}だけを取り出せ。どの検査を使うかは自分で決めろ。` });
+  }
+  // 並びは毎回同じ（決まった種で混ぜる）
+  let seed = 20261112;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  CHAPTERS.push({ name: '第14章 総合演習：仕分け', goals: pool });
+}
 
 export const GOALS: Goal[] = CHAPTERS.flatMap((c) => c.goals);
 export function chapterOf(goalIndex: number): { name: string; index: number; of: number } | null {

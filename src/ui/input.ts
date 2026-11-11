@@ -1,4 +1,3 @@
-import { MAP_H, MAP_W } from '../content/map';
 import type { Camera } from './render';
 
 export interface InputHandlers {
@@ -29,10 +28,7 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
     const r = rect();
     return [Math.floor(cam.x + (px - r.left - r.width / 2) / cam.z), Math.floor(cam.y + (py - r.top - r.height / 2) / cam.z)];
   };
-  const clamp = () => {
-    cam.x = Math.min(MAP_W, Math.max(0, cam.x));
-    cam.y = Math.min(MAP_H, Math.max(0, cam.y));
-  };
+  const clamp = () => { /* 地図に果てはない */ };
   const zoomAt = (px: number, py: number, factor: number) => {
     const r = rect();
     const ox = px - r.left - r.width / 2, oy = py - r.top - r.height / 2;

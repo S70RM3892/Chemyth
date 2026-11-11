@@ -73,6 +73,9 @@ export const SUBSTANCES: Substance[] = [
   M('hardfat', '硬化油', 'solid', ['C', 'H', 'O'], true),
   M('resinNa', '陽イオン交換樹脂（Na 型）', 'solid', ['C', 'S', 'Na'], true),
   M('cylN2', '窒素ボンベ', 'solid', ['N', 'N'], true),
+  M('base', '核酸塩基', 'solid', ['C', 'N', 'H']),
+  M('nucleotide', 'ヌクレオチド', 'solid', ['P', 'C', 'N', 'O'], true),
+  M('DNA', 'DNA（ポリヌクレオチド）', 'solid', ['P', 'C', 'N'], true),
   M('peptide', 'ポリペプチド', 'solid', ['C', 'H', 'O', 'N'], true),
   M('aa', 'α-アミノ酸', 'solid', ['C', 'H', 'N', 'O'], true),
   M('PET', 'ポリエチレンテレフタラート', 'solid', ['C', 'C', 'H', 'O'], true),
@@ -106,6 +109,7 @@ export const SUBSTANCES: Substance[] = [
   F('CH3COONa', '酢酸ナトリウム', 'solid'),
   F('AgNO3', '硝酸銀', 'solid'), F('AgCl', '塩化銀', 'solid'), F('NaNO3', '硝酸ナトリウム', 'solid'),
   F('HI', 'ヨウ化水素', 'gas'), F('I2', 'ヨウ素', 'solid'),
+  F('H3PO4', 'リン酸', 'liquid'), F('C5H10O4', 'デオキシリボース', 'solid'),
   F('CH2CHCHCH2', '1,3-ブタジエン', 'gas', ['C4H6']),
   // ---- 有機（脂肪族） ----
   F('CH4', 'メタン', 'gas'),
@@ -186,6 +190,18 @@ export const SUBSTANCES: Substance[] = [
   X('x-dipeptide', 'ジペプチド（Gly-Ala）', 'ペプチド', 'ペプチド結合 1 つ', ['chiral'], AMI),
   X('x-tripeptide', 'トリペプチド（Gly-Gly-Ala）', 'ペプチド', 'ペプチド結合 2 つ', ['chiral', 'biuret'], AMI),
   X('x-ala2', 'アラニン（単独）', 'ペプチド', 'アミノ酸 1 分子', ['chiral'], AMI),
+  // ---- 核酸の塩基 ----
+  X('x-A', 'アデニン（A）', '核酸の塩基', 'プリン塩基。T（U）と水素結合 2 本', ['purine'], AMI),
+  X('x-G', 'グアニン（G）', '核酸の塩基', 'プリン塩基。C と水素結合 3 本', ['purine', 'pair3'], AMI),
+  X('x-C', 'シトシン（C）', '核酸の塩基', 'ピリミジン塩基。G と水素結合 3 本', ['pair3'], AMI),
+  X('x-T', 'チミン（T）', '核酸の塩基', 'ピリミジン塩基。DNA だけに含まれる', ['dna_only'], AMI),
+  X('x-U', 'ウラシル（U）', '核酸の塩基', 'ピリミジン塩基。RNA だけに含まれる', ['rna_only'], AMI),
+  // ---- 元素分析で見分ける有機化合物 ----
+  X('x-benzene', 'ベンゼン', '有機化合物', 'C₆H₆', ['burn_c'], ORG),
+  X('x-hexane', 'ヘキサン', '有機化合物', 'C₆H₁₄', ['burn_h'], ORG),
+  X('x-ethanol', 'エタノール', '有機化合物', 'C₂H₅OH', ['burn_h', 'na', 'iodoform', 'oxid', 'oxald'], ORG),
+  X('x-acetic', '酢酸', '有機化合物', 'CH₃COOH', ['burn_eq', 'na', 'nahco3'], ORG),
+  X('x-acetaldehyde', 'アセトアルデヒド', '有機化合物', 'CH₃CHO', ['burn_eq', 'silver', 'iodoform', 'oxid'], ORG),
   // ---- 金属イオン ----
   X('x-Ag', '銀イオン Ag⁺', '金属イオン', 'Ag⁺（無色）', ['hcl', 'h2s_acid', 'h2s_base', 'nh3_few', 'naoh_ex', 'co3'], ION),
   X('x-Pb', '鉛(II)イオン Pb²⁺', '金属イオン', 'Pb²⁺（無色）', ['hcl', 'h2s_acid', 'h2s_base', 'nh3_few', 'nh3_ex', 'h2so4', 'co3'], ION),

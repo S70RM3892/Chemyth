@@ -3,7 +3,7 @@ import { sub } from './substances';
 /** 分析器で行う検査。陽性なら正面、陰性なら右手へ流れる */
 export interface Test {
   id: string;
-  group: 'organic' | 'amino' | 'ion';
+  group: 'organic' | 'amino' | 'ion' | 'nucleic';
   /** 行う操作 */
   name: string;
   /** 陽性のときに見えること */
@@ -29,6 +29,13 @@ export const TESTS: Test[] = [
   T('cistrans', 'organic', '立体異性体の有無を調べる', 'シス-トランス異性体が存在する', '二重結合の両方の炭素に、それぞれ異なる 2 つの原子・基がついている。1-ブテンや 2-メチルプロペンにはない。'),
   T('hyd_silver', 'organic', '加水分解し、得られたカルボン酸の銀鏡反応を調べる', '得られた酸が銀鏡反応を示す', 'ギ酸のエステル。ギ酸はホルミル基をもつので還元性を示す。'),
   T('hyd_iodoform', 'organic', '加水分解し、得られたアルコールのヨードホルム反応を調べる', '得られたアルコールがヨードホルム反応を示す', 'アルコール部分がエタノールか 2-プロパノールなど、CH₃CH(OH)– をもつもの。'),
+  T('burn_eq', 'organic', '完全燃焼させ、生じた CO₂ と H₂O の物質量を比べる（等しいか）', 'CO₂ と H₂O の物質量が等しい', 'C : H = 1 : 2。CₙH₂ₙOₓ の形で、アルケン、アルデヒド、ケトン、カルボン酸、エステルなど。元素分析では、CO₂ から C、H₂O から H の質量を出し、残りを O とする。'),
+  T('burn_c', 'organic', '完全燃焼させ、生じた CO₂ と H₂O の物質量を比べる（CO₂ が多いか）', 'CO₂ の物質量が H₂O より多い', 'H の数が C の 2 倍より少ない。不飽和度が高い。ベンゼン C₆H₆ なら CO₂ : H₂O = 6 : 3。'),
+  T('burn_h', 'organic', '完全燃焼させ、生じた CO₂ と H₂O の物質量を比べる（H₂O が多いか）', 'H₂O の物質量が CO₂ より多い', 'H の数が C の 2 倍より多い。鎖式の飽和化合物（アルカン CₙH₂ₙ₊₂、飽和の一価アルコールなど）。'),
+  T('purine', 'nucleic', '塩基の環の数を調べる', '環が 2 つつながっている', 'プリン塩基（アデニン、グアニン）。環が 1 つのものはピリミジン塩基（シトシン、チミン、ウラシル）。対は必ずプリンとピリミジンでできる。'),
+  T('pair3', 'nucleic', '対をつくる相手との水素結合を数える', '水素結合 3 本で対をつくる', 'グアニンとシトシン。アデニンとチミン（ウラシル）は 2 本。'),
+  T('dna_only', 'nucleic', 'DNA と RNA のどちらに含まれるか調べる（DNA だけか）', 'DNA にだけ含まれる', 'チミン。DNA は A・T・G・C。'),
+  T('rna_only', 'nucleic', 'DNA と RNA のどちらに含まれるか調べる（RNA だけか）', 'RNA にだけ含まれる', 'ウラシル。RNA は A・U・G・C で、糖はリボース。'),
   T('xantho', 'amino', '濃硝酸を加えて加熱し、冷やしてアンモニア水を加える', '黄色になり、さらに橙黄色に変わる', 'ベンゼン環をもつ（キサントプロテイン反応）。フェニルアラニン、チロシンなど。'),
   T('sulfur', 'amino', 'NaOH 水溶液と加熱し、酢酸鉛(II)水溶液を加える', '黒色沈殿 PbS が生じる', '硫黄を含む。システイン、メチオニン。'),
   T('anode', 'amino', 'pH 6 の緩衝液にひたしたろ紙で電気泳動する（陽極側を見る）', '陽極側へ移動する', '酸性アミノ酸。側鎖にカルボキシ基をもち、pH 6 では全体として負に帯電する。'),
@@ -63,6 +70,8 @@ export const SETS: SampleSet[] = [
   { id: 'D', name: '試料 D：分子式 C₄H₈O₂', about: 'カルボン酸 1 種とエステル 3 種。', members: ['x-butyric', 'x-ethylacetate', 'x-methylpropionate', 'x-formate'] },
   { id: 'J', name: '試料 J：分子式 C₄H₈', about: 'アルケン 3 種とシクロアルカン 1 種。', members: ['x-1-butene', 'x-2-butene', 'x-isobutene', 'x-cyclobutane'] },
   { id: 'K', name: '試料 K：分子式 C₄H₈O₂ のエステル', about: 'エステル 4 種。加水分解して調べる。', members: ['x-formate', 'x-isopropylformate', 'x-ethylacetate', 'x-methylpropionate'] },
+  { id: 'L', name: '試料 L：有機化合物（元素分析）', about: '分子式の違う 5 種。燃やして生じる CO₂ と H₂O の量から絞り込む。', members: ['x-benzene', 'x-hexane', 'x-ethanol', 'x-acetic', 'x-acetaldehyde'] },
+  { id: 'N', name: '試料 N：核酸の塩基', about: 'DNA と RNA をつくる 5 種の塩基。', members: ['x-A', 'x-G', 'x-C', 'x-T', 'x-U'] },
   { id: 'E', name: '試料 E：α-アミノ酸', about: '6 種の α-アミノ酸。', members: ['x-gly', 'x-ala', 'x-phe', 'x-cys', 'x-glu', 'x-lys'] },
   { id: 'F', name: '試料 F：アミノ酸とペプチド', about: 'アミノ酸、ジペプチド、トリペプチド。', members: ['x-ala2', 'x-dipeptide', 'x-tripeptide'] },
   { id: 'G', name: '試料 G：金属イオン（Ag⁺・Cu²⁺・Fe³⁺・Na⁺）', about: '4 種の金属イオンの水溶液。', members: ['x-Ag', 'x-Cu', 'x-Fe', 'x-Na'] },
@@ -75,4 +84,4 @@ export const setsOf = (substance: string) => SETS.filter((s) => s.members.includ
 
 /** 試薬棚から出せる実験室の試薬。ここから出したものを納品しても指令には数えない */
 export const REAGENTS = ['H2O2', 'MnO2', 'KClO3', 'NH4Cl', 'Ca(OH)2', 'CaCO3', 'NaCl', 'FeS', 'Zn', 'Cu', 'HCl', 'H2SO4', 'HNO3', 'NaOH',
-  'NaNO2', 'CH3COOH', 'C6H5NH2', 'C6H5ONa', 'HOOC(CH2)4COOH', 'H2N(CH2)6NH2', 'CH2CHCHCH2', 'resinH', 'AgNO3', 'HI'];
+  'NaNO2', 'CH3COOH', 'C6H5NH2', 'C6H5ONa', 'HOOC(CH2)4COOH', 'H2N(CH2)6NH2', 'CH2CHCHCH2', 'resinH', 'AgNO3', 'HI', 'H3PO4', 'C5H10O4', 'base'];
