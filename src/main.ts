@@ -10,7 +10,7 @@ import { attachInput, Z_MIN } from './ui/input';
 import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showUpgrades, type PanelCtx } from './ui/panels';
 import { draw, type Camera } from './ui/render';
 import { setSound, sfx, soundOn } from './ui/sound';
-import { initTitle, skinButtons, store, themeButtons } from './ui/title';
+import { initTitle, skinButtons, slotName, store, themeButtons } from './ui/title';
 import { applySkin, applyTheme } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
 import { drawToken } from './ui/token';
@@ -221,7 +221,7 @@ function boot(data: HotData) {
       h('button', { class: 'ghost', type: 'button', id: 'm-sound', onclick: () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); showMenu(); } }, soundOn() ? '音：あり' : '音：なし'),
       h('button', { class: 'ghost', type: 'button', id: 'm-title', onclick: () => { modal.hidden = true; sheet.replaceChildren(); toTitle(); } }, '保存してタイトルへ戻る'),
     ),
-    h('p', { class: 'muted' }, `ノート ${slot} 冊目。この端末に自動で保存している。`),
+    h('p', { class: 'muted' }, `${slotName(slot)}。この端末に自動で保存している。`),
   );
 
   $('b-menu').onclick = showMenu;
@@ -243,7 +243,7 @@ function boot(data: HotData) {
     if (!keepClone) clone = null;
     const t = TOOLS.find((x) => x.id === id)!;
     for (const [k, el] of buttons) { el.classList.toggle('on', k === tool); el.setAttribute('aria-pressed', String(k === tool)); }
-    tip.replaceChildren(h('b', {}, clone ? `${t.name}を複製` : t.name), clone ? 'タップした場所に、同じ設定の装置を置く。ほかの道具を選ぶと複製をやめる。' : t.tip);
+    tip.replaceChildren(h('b', {}, clone ? `${t.name}をコピー中` : t.name), clone ? 'タップした場所に、同じ設定のものを貼りつける。ほかの道具を選ぶとやめる。' : t.tip);
   };
   for (const t of TOOLS) {
     const b = h('button', { type: 'button', id: `tool-${t.id}`, class: 'tool' }, h('span', { class: 'g' }, t.glyph), h('span', { class: 'l' }, t.name));

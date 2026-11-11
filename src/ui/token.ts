@@ -102,9 +102,19 @@ export function drawToken(ctx: CanvasRenderingContext2D, id: string, x: number, 
     ctx.restore();
     return;
   }
+  const punk = P.skin === 'punk';
   ctx.beginPath();
   if (id === 'e') ctx.arc(0, 0, 0.9, 0, Math.PI * 2);
-  else if (s.state === 'solid') {
+  else if (punk && s.state === 'solid') {
+    // 工業：固体は角を落とした木箱
+    const a = 0.9, c = 0.3;
+    ctx.moveTo(-a + c, -a); ctx.lineTo(a - c, -a); ctx.lineTo(a, -a + c); ctx.lineTo(a, a - c); ctx.lineTo(a - c, a); ctx.lineTo(-a + c, a); ctx.lineTo(-a, a - c); ctx.lineTo(-a, -a + c);
+    ctx.closePath();
+  } else if (punk && s.state === 'gas') {
+    // 気体は八角のボンベの口金
+    for (let i = 0; i < 8; i++) ctx.lineTo(Math.cos(Math.PI / 8 + (i * Math.PI) / 4), Math.sin(Math.PI / 8 + (i * Math.PI) / 4));
+    ctx.closePath();
+  } else if (s.state === 'solid') {
     const a = 0.9, c = 0.34;
     ctx.moveTo(-a + c, -a); ctx.lineTo(a - c, -a); ctx.quadraticCurveTo(a, -a, a, -a + c); ctx.lineTo(a, a - c); ctx.quadraticCurveTo(a, a, a - c, a);
     ctx.lineTo(-a + c, a); ctx.quadraticCurveTo(-a, a, -a, a - c); ctx.lineTo(-a, -a + c); ctx.quadraticCurveTo(-a, -a, -a + c, -a);
@@ -113,13 +123,21 @@ export function drawToken(ctx: CanvasRenderingContext2D, id: string, x: number, 
     ctx.bezierCurveTo(1.35, -0.1, 0.95, 1, 0, 1);
     ctx.bezierCurveTo(-0.95, 1, -1.35, -0.1, 0, -1.18);
   } else ctx.arc(0, 0, 1, 0, Math.PI * 2);
-  ctx.fillStyle = P.plate;
+  ctx.fillStyle = punk && P.name === 'dark' ? '#101317' : P.plate;
   ctx.fill();
-  ctx.lineWidth = 0.1;
-  ctx.lineJoin = 'round';
-  ctx.strokeStyle = P.ink;
-  if (!s.formula && id !== 'e') ctx.setLineDash([0.22, 0.16]); // 混合物・高分子は破線
-  ctx.stroke();
+  ctx.lineJoin = punk ? 'miter' : 'round';
+  if (punk) {
+    // 太い黒縁の内側に、物質の色の細い縁
+    ctx.lineWidth = 0.2; ctx.strokeStyle = '#0b0d10'; ctx.stroke();
+    ctx.lineWidth = 0.07; ctx.strokeStyle = P.name === 'dark' ? s.color : '#f4f5f2';
+    if (!s.formula && id !== 'e') ctx.setLineDash([0.22, 0.16]);
+    ctx.stroke();
+  } else {
+    ctx.lineWidth = 0.1;
+    ctx.strokeStyle = P.ink;
+    if (!s.formula && id !== 'e') ctx.setLineDash([0.22, 0.16]); // 混合物・高分子は破線
+    ctx.stroke();
+  }
   ctx.setLineDash([]);
   const dy = s.state === 'liquid' && id !== 'e' ? 0.1 : 0;
   for (const a of layoutOf(id)) drawElement(ctx, a.sym, a.x * 0.9, a.y * 0.9 + dy, a.r * 0.9, a.n);

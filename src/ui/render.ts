@@ -29,6 +29,7 @@ const ORDER = Object.keys(ZONES) as Zone[];
 const mod = (a: number, n: number) => ((a % n) + n) % n;
 
 function buildChunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
+  if (P.skin === 'punk') return buildChunkPunk(P, cx, cy);
   const cv = document.createElement('canvas');
   cv.width = cv.height = SIZE;
   const g = cv.getContext('2d')!;
@@ -36,7 +37,7 @@ function buildChunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
   const t = scratch.getContext('2d')!;
   const ox = cx * CH, oy = cy * CH, OX = ox * TS, OY = oy * TS;
   const X = (tx: number) => (tx - ox) * TS, Y = (ty: number) => (ty - oy) * TS;
-  const punk = P.skin === 'punk', light = P.name === 'light';
+  const punk = (P.skin as string) === 'punk', light = P.name === 'light';
   const base = P.paper;
 
   g.fillStyle = base;
@@ -129,6 +130,112 @@ function buildChunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
   return cv;
 }
 
+/** 工業スキンの床：縞鋼板、鋼板の継ぎ目と鋲、油じみ。資源地は角ばった採掘区画で、縁は危険表示 */
+function buildChunkPunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = SIZE;
+  const g = cv.getContext('2d')!;
+  const ox = cx * CH, oy = cy * CH, light = P.name === 'light', base = P.paper;
+  g.fillStyle = base;
+  g.fillRect(0, 0, SIZE, SIZE);
+  // 鋼板 1 枚ごとに、わずかに色が違う
+  const PANEL = 4;
+  for (let j = 0; j < CH / PANEL; j++) for (let i = 0; i < CH / PANEL; i++) {
+    const h0 = hash(ox / PANEL + i, oy / PANEL + j);
+    g.fillStyle = light ? `rgba(255,255,255,${h0 * 0.22})` : `rgba(255,255,255,${h0 * 0.04})`;
+    g.fillRect(i * PANEL * TS, j * PANEL * TS, PANEL * TS, PANEL * TS);
+  }
+  // 縞鋼板のすべり止め
+  const tread = (dx: number, color: string) => {
+    g.strokeStyle = color; g.lineWidth = 1.6; g.lineCap = 'round';
+    g.beginPath();
+    for (let y = 6; y < SIZE; y += 12) for (let x = 6; x < SIZE; x += 12) {
+      const d = ((x - 6) / 12 + (y - 6) / 12) % 2 ? 1 : -1;
+      g.moveTo(x - 2.4 + dx, y - 2.4 * d + dx); g.lineTo(x + 2.4 + dx, y + 2.4 * d + dx);
+    }
+    g.stroke();
+  };
+  tread(0, light ? 'rgba(20,24,29,0.09)' : 'rgba(0,0,0,0.5)');
+  tread(-1, light ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.035)');
+  // 油じみと擦り傷
+  for (let k = 0; k < 3; k++) {
+    const x = hash(cx * 7 + k, cy * 13) * SIZE, y = hash(cx * 11, cy * 5 + k) * SIZE, r = 30 + hash(cx + k, cy - k) * 70;
+    const grd = g.createRadialGradient(x, y, 0, x, y, r);
+    grd.addColorStop(0, light ? 'rgba(20,24,29,0.13)' : 'rgba(0,0,0,0.5)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = grd; g.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  g.strokeStyle = light ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.06)'; g.lineWidth = 1;
+  g.beginPath();
+  for (let k = 0; k < 7; k++) {
+    const x = hash(cx * 3 + k, cy * 19) * SIZE, y = hash(cx * 23, cy * 3 + k) * SIZE, a = hash(k, cx + cy) * 6.28, l = 20 + hash(k, cx) * 60;
+    g.moveTo(x, y); g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l);
+  }
+  g.stroke();
+
+  // 採掘区画
+  const INK = '#0b0d10';
+  for (let ty = 0; ty < CH; ty++) for (let tx = 0; tx < CH; tx++) {
+    const x = ox + tx, y = oy + ty, zn = zoneAt(x, y);
+    if (!zn) continue;
+    const core = ZONES[zn].tint[1], px = tx * TS, py = ty * TS, sea = zn === 'sea';
+    g.fillStyle = sea ? (light ? '#62aebf' : '#06202b') : mix(base, core, light ? 0.62 : 0.36);
+    g.fillRect(px, py, TS, TS);
+    if (sea) {
+      // 貯水槽の水面
+      g.strokeStyle = light ? 'rgba(255,255,255,0.55)' : 'rgba(90,220,255,0.22)'; g.lineWidth = 1.5;
+      g.beginPath();
+      for (let k = 0; k < 2; k++) { const wx = px + hash(x + k * 9, y) * (TS - 10), wy = py + 5 + hash(x, y + k * 7) * (TS - 10); g.moveTo(wx, wy); g.lineTo(wx + 8, wy); }
+      g.stroke();
+    } else {
+      // 鉱石のかけら
+      for (let k = 0; k < 3; k++) {
+        const qx = px + 3 + hash(x + k * 5, y) * (TS - 6), qy = py + 3 + hash(x, y + k * 5) * (TS - 6), r = 2.5 + hash(x + k, y + k) * 4, a = hash(x - k, y + k) * 6.28;
+        g.fillStyle = mix(core, k % 2 ? '#ffffff' : '#000000', light ? 0.25 : 0.3);
+        g.beginPath();
+        for (let v = 0; v < 3; v++) g.lineTo(qx + Math.cos(a + v * 2.1) * r, qy + Math.sin(a + v * 2.1) * r * 0.8);
+        g.closePath(); g.fill();
+      }
+    }
+    // 区画の縁：黒い太線と、危険表示の破線。闇では鉱石の色がにじむ
+    for (const [dx, dy, x1, y1, x2, y2] of [[1, 0, px + TS, py, px + TS, py + TS], [-1, 0, px, py, px, py + TS], [0, 1, px, py + TS, px + TS, py + TS], [0, -1, px, py, px + TS, py]]) {
+      if (zoneAt(x + dx, y + dy) === zn) continue;
+      if (!light && !sea) {
+        g.strokeStyle = core; g.globalAlpha = 0.3; g.lineWidth = 10;
+        g.beginPath(); g.moveTo(x1 - dx * 4, y1 - dy * 4); g.lineTo(x2 - dx * 4, y2 - dy * 4); g.stroke();
+        g.globalAlpha = 1;
+      }
+      g.lineCap = 'butt';
+      g.strokeStyle = INK; g.lineWidth = 5;
+      g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+      g.strokeStyle = sea ? (light ? '#f4f5f2' : '#3aa7c2') : P.hi; g.lineWidth = 2;
+      g.setLineDash([6, 6]);
+      g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+      g.setLineDash([]);
+    }
+  }
+
+  // 鋼板の継ぎ目：溝と、その縁のハイライト
+  for (let i = 0; i <= CH; i += PANEL) {
+    g.fillStyle = light ? 'rgba(20,24,29,0.42)' : 'rgba(0,0,0,0.85)';
+    g.fillRect(i * TS - 1, 0, 2, SIZE); g.fillRect(0, i * TS - 1, SIZE, 2);
+    g.fillStyle = light ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.07)';
+    g.fillRect(i * TS + 1, 0, 1, SIZE); g.fillRect(0, i * TS + 1, SIZE, 1);
+  }
+  // マス目は角の小さな十字だけ
+  g.fillStyle = light ? 'rgba(20,24,29,0.22)' : 'rgba(255,255,255,0.09)';
+  for (let j = 0; j <= CH; j++) for (let i = 0; i <= CH; i++) { if (i % PANEL === 0 || j % PANEL === 0) continue; g.fillRect(i * TS - 2, j * TS, 5, 1); g.fillRect(i * TS, j * TS - 2, 1, 5); }
+  // 鋲
+  for (let j = 0; j <= CH; j += PANEL) for (let i = 0; i <= CH; i += PANEL) {
+    for (const [dx, dy] of [[6, 6], [-6, 6], [6, -6], [-6, -6]]) {
+      g.fillStyle = light ? '#59626b' : '#000';
+      g.beginPath(); g.arc(i * TS + dx, j * TS + dy, 2.4, 0, Math.PI * 2); g.fill();
+      g.fillStyle = light ? '#f4f5f2' : `rgba(${P.glow},0.35)`;
+      g.beginPath(); g.arc(i * TS + dx - 0.7, j * TS + dy - 0.7, 1, 0, Math.PI * 2); g.fill();
+    }
+  }
+  return cv;
+}
+
 function chunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
   const k = `${P.key}:${cx},${cy}`;
   let c = chunks.get(k);
@@ -154,7 +261,7 @@ function spawn(w: World, P: Palette) {
     } else if (f.type === 'spill') {
       particles.push({ x: f.x + 0.5, y: f.y + 0.5, vx: (Math.random() - 0.5) * 0.8, vy: 0.5, age: 0, life: 0.5, color: P.red, r: 0.06 });
     } else {
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < (P.skin === 'punk' ? 9 : 4); i++) {
         const a = Math.random() * Math.PI * 2;
         particles.push({ x: f.x + 0.5, y: f.y + 0.25, vx: Math.cos(a) * 0.3, vy: -0.5 - Math.random() * 0.4, age: 0, life: 0.6 + Math.random() * 0.3, color: P.soft, r: 0.06 + Math.random() * 0.05 });
       }
@@ -212,7 +319,24 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   ctx.textBaseline = 'alphabetic';
   for (const sp of zoneSpots(x0, y0, x1, y1)) {
     const zn = ZONES[sp.zone], lx = sp.cx, ly = sp.cy;
-    const fs = Math.max(12, z * (punk ? 0.36 : 0.42));
+    if (punk) {
+      // 鉱区の標識板
+      const fs = Math.max(11, z * 0.3), sub2 = `${sub(zn.resource).name} / ${zn.form}`;
+      ctx.font = `400 ${fs}px ${FONT_HAND}`;
+      const w1 = ctx.measureText(zn.name).width;
+      ctx.font = `700 ${fs * 0.62}px ${FONT_UI}`;
+      const w2 = z >= 20 ? ctx.measureText(sub2).width : 0;
+      const bw = Math.max(w1, w2) + fs * 1.5, bh = fs * (z >= 20 ? 2.5 : 1.7), bx = sx(lx) - bw / 2, by = sy(ly) - fs * 1.15;
+      chamfer(ctx, bx, by, bw, bh, fs * 0.35);
+      ctx.fillStyle = '#0b0d10'; ctx.fill();
+      ctx.strokeStyle = P.hi; ctx.lineWidth = Math.max(1.2, fs * 0.09); ctx.stroke();
+      ctx.fillStyle = P.hi;
+      ctx.font = `400 ${fs}px ${FONT_HAND}`;
+      ctx.fillText(zn.name, sx(lx), sy(ly));
+      if (z >= 20) { ctx.fillStyle = '#c9ced2'; ctx.font = `700 ${fs * 0.62}px ${FONT_UI}`; ctx.fillText(sub2, sx(lx), sy(ly) + fs * 0.95); }
+      continue;
+    }
+    const fs = Math.max(12, z * 0.42);
     ctx.font = `600 ${fs}px ${FONT_HAND}`;
     ctx.lineWidth = fs * 0.3;
     ctx.lineJoin = 'round';
@@ -273,6 +397,43 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   const DASH = { solid: [0.04, 0.21], liquid: [0.18, 0.32], gas: [0.03, 0.22], none: [0.1, 0.4] };
   const st = (b: (typeof belts)[number]) => b.e.st ?? 'none';
   const edge = lw(0.045) * 2;
+  if (punk) {
+    // 工業：固体はゴムのベルトに鋼の側板、液体と気体は継ぎ手のある配管
+    const PW = { solid: 0.62, liquid: 0.44, gas: 0.3, none: 0.5 };
+    const casing = '#0b0d10', rail = light ? '#8d969e' : '#4d545c', rubber = light ? '#33383e' : '#16191d';
+    const pipe = (b: (typeof belts)[number]) => st(b) === 'liquid' || st(b) === 'gas';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = casing;
+    for (const b of belts) { ctx.lineWidth = z * PW[st(b)] + lw(0.055) * 2; trace(b); ctx.stroke(); }
+    for (const b of belts) { ctx.strokeStyle = pipe(b) ? P.line[st(b)] : rail; ctx.lineWidth = z * PW[st(b)]; trace(b); ctx.stroke(); }
+    for (const b of belts) {
+      // 配管は円筒に見えるよう中央にハイライト、ベルトは中央がゴム
+      ctx.strokeStyle = pipe(b) ? `rgba(255,255,255,${light ? 0.55 : 0.2})` : rubber;
+      ctx.lineWidth = z * PW[st(b)] * (pipe(b) ? 0.26 : 0.7);
+      trace(b); ctx.stroke();
+    }
+    ctx.lineCap = 'butt';
+    ctx.lineDashOffset = -t * beltSpeed(w) * z * 0.5;
+    if (!light) ctx.globalCompositeOperation = 'lighter';
+    for (const b of belts) {
+      const k = st(b);
+      if (k === 'liquid') { ctx.strokeStyle = light ? 'rgba(255,255,255,0.9)' : 'rgba(90,220,255,0.85)'; ctx.lineWidth = lw(0.07); ctx.setLineDash([z * 0.2, z * 0.3]); }
+      else if (k === 'gas') { ctx.strokeStyle = light ? 'rgba(20,24,29,0.6)' : `rgba(${P.glow},0.8)`; ctx.lineWidth = lw(0.05); ctx.setLineDash([z * 0.04, z * 0.21]); }
+      else { ctx.strokeStyle = light ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)'; ctx.lineWidth = z * PW[k] * 0.7; ctx.setLineDash([z * 0.04, z * 0.21]); }
+      trace(b); ctx.stroke();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.setLineDash([]);
+    // 配管の継ぎ手
+    ctx.strokeStyle = casing;
+    ctx.lineWidth = lw(0.08);
+    for (const b of belts) {
+      if (!pipe(b)) continue;
+      const jx = sx(b.e.x + 0.5 + b.c.ax), jy = sy(b.e.y + 0.5 + b.c.ay), hw = z * (PW[st(b)] / 2 + 0.07);
+      const px = b.c.ax ? 0 : 1, py = b.c.ax ? 1 : 0;
+      ctx.beginPath(); ctx.moveTo(jx - px * hw, jy - py * hw); ctx.lineTo(jx + px * hw, jy + py * hw); ctx.stroke();
+    }
+  } else {
   ctx.lineCap = 'round';
   ctx.strokeStyle = P.ink;
   for (const b of belts) { ctx.lineWidth = z * WIDTH[st(b)] + edge; trace(b); ctx.stroke(); }
@@ -289,6 +450,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   }
   ctx.setLineDash([]);
   ctx.globalAlpha = 1;
+  }
 
   // 立体交差：縦の管の上を横の管がまたぐ
   for (const e of w.ents.values()) {
@@ -384,6 +546,14 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       ctx.fillStyle = p.color;
       ctx.font = `600 ${z * 0.4}px ${FONT_HAND}`;
       ctx.fillText(p.text, sx(p.x), sy(p.y));
+    } else if (punk) {
+      // 火花
+      ctx.strokeStyle = light ? P.red : P.hi;
+      ctx.lineWidth = lw(0.04);
+      ctx.beginPath();
+      ctx.moveTo(sx(p.x), sy(p.y));
+      ctx.lineTo(sx(p.x - p.vx * 0.22), sy(p.y - p.vy * 0.22));
+      ctx.stroke();
     } else {
       ctx.strokeStyle = p.color;
       ctx.lineWidth = lw(0.03);
@@ -394,48 +564,82 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   }
   ctx.globalAlpha = 1;
 
-  if (punk) ambient(ctx, P, cw, ch, t, dt);
+  if (punk) ambient(ctx, P, cw, ch, t, dt, sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), z);
 }
 
-/** 工業スキンの空気。光の炉は斜めに差す日差しと舞う塵、闇の炉は立ちのぼる火の粉と周辺の闇 */
-function ambient(ctx: CanvasRenderingContext2D, P: Palette, cw: number, ch: number, t: number, dt: number) {
-  const light = P.name === 'light';
+/** 工業スキンの空気。同じ工場の「光の側」と「闇の側」。
+ *  光：雲の影が流れ、その切れ間から日が差し、塵が光る。
+ *  闇：煙が漂って視界を奪い、納品所の警告灯が回り、火の粉が立ちのぼる。 */
+function ambient(ctx: CanvasRenderingContext2D, P: Palette, cw: number, ch: number, t: number, dt: number, hx: number, hy: number, z: number) {
+  const light = P.name === 'light', big = Math.max(cw, ch);
+  const blob = (x: number, y: number, r: number, rgba: (a: number) => string, a: number) => {
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, rgba(a)); g.addColorStop(1, rgba(0));
+    ctx.fillStyle = g;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  };
   if (light) {
-    // 天窓からの光の帯が、ゆっくり床を渡っていく
-    ctx.save();
+    // 雲の影（闇）と、その切れ間の日だまり（光）
+    for (let i = 0; i < 4; i++) {
+      const x = (mod(i * 0.37 + t * 0.006, 1.4) - 0.2) * cw, y = (0.15 + 0.7 * hash(i, 41)) * ch;
+      blob(x, y, big * (0.28 + 0.1 * hash(i, 43)), (a) => `rgba(18,28,40,${a})`, 0.16);
+    }
     ctx.globalCompositeOperation = 'soft-light';
+    for (let i = 0; i < 3; i++) {
+      const x = (mod(i * 0.41 + 0.2 + t * 0.006, 1.4) - 0.2) * cw, y = (0.2 + 0.6 * hash(i, 47)) * ch;
+      blob(x, y, big * 0.26, (a) => `rgba(255,248,225,${a})`, 0.75);
+    }
+    // 天窓からの光の帯
+    ctx.save();
     ctx.translate(cw / 2, ch / 2);
     ctx.rotate(-0.42);
     const span = Math.hypot(cw, ch);
     for (let i = 0; i < 4; i++) {
       const x = mod(t * 14 + i * span * 0.31, span * 1.25) - span * 0.62, wd = span * (0.05 + 0.03 * (i % 2));
       const g = ctx.createLinearGradient(x - wd, 0, x + wd, 0);
-      g.addColorStop(0, `rgba(${P.glow},0)`); g.addColorStop(0.5, `rgba(${P.glow},0.55)`); g.addColorStop(1, `rgba(${P.glow},0)`);
+      g.addColorStop(0, `rgba(${P.glow},0)`); g.addColorStop(0.5, `rgba(${P.glow},0.7)`); g.addColorStop(1, `rgba(${P.glow},0)`);
       ctx.fillStyle = g;
       ctx.fillRect(x - wd, -span, wd * 2, span * 2);
     }
     ctx.restore();
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#ffffff';
     for (const m of motes) {
       m.y = mod(m.y - m.v * dt * 0.4, 1);
-      ctx.globalAlpha = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(t * 1.3 + m.ph));
+      ctx.globalAlpha = 0.3 + 0.5 * (0.5 + 0.5 * Math.sin(t * 1.3 + m.ph));
       ctx.fillRect(mod(m.x + Math.sin(t * 0.3 + m.ph) * 0.01, 1) * cw, m.y * ch, m.s, m.s);
     }
     ctx.globalAlpha = 1;
   } else {
+    // 回る警告灯
+    ctx.globalCompositeOperation = 'lighter';
+    for (let k = 0; k < 2; k++) {
+      const ang = t * 1.1 + k * Math.PI, R = z * 16;
+      const g = ctx.createRadialGradient(hx, hy, 0, hx, hy, R);
+      g.addColorStop(0, 'rgba(255,60,36,0.28)'); g.addColorStop(1, 'rgba(255,60,36,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.moveTo(hx, hy); ctx.arc(hx, hy, R, ang - 0.17, ang + 0.17); ctx.closePath(); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    // 漂う煙
+    for (let i = 0; i < 5; i++) {
+      const x = (mod(i * 0.29 + t * 0.011, 1.4) - 0.2) * cw, y = (0.1 + 0.8 * hash(i, 53)) * ch + Math.sin(t * 0.2 + i) * 20;
+      blob(x, y, big * (0.22 + 0.1 * hash(i, 59)), (a) => `rgba(4,5,7,${a})`, 0.42);
+    }
     // 周辺は闇に沈む
-    const v = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.3, cw / 2, ch / 2, Math.max(cw, ch) * 0.72);
-    v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,0.6)');
+    const v = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.28, cw / 2, ch / 2, big * 0.72);
+    v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,0.68)');
     ctx.fillStyle = v;
     ctx.fillRect(0, 0, cw, ch);
+    // 火の粉
     ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
     for (const m of motes) {
-      m.y = mod(m.y - m.v * dt * 1.6, 1);
-      const fl = 0.5 + 0.5 * Math.sin(t * 7 + m.ph * 3);
-      ctx.fillStyle = `rgba(${P.glow},${0.25 + 0.55 * fl * m.y})`;
-      ctx.beginPath();
-      ctx.arc(mod(m.x + Math.sin(t * 0.9 + m.ph) * 0.02, 1) * cw, m.y * ch, m.s * (0.6 + 0.6 * m.y), 0, Math.PI * 2);
-      ctx.fill();
+      m.y = mod(m.y - m.v * dt * 1.8, 1);
+      const fl = 0.5 + 0.5 * Math.sin(t * 7 + m.ph * 3), x = mod(m.x + Math.sin(t * 0.9 + m.ph) * 0.02, 1) * cw, y = m.y * ch;
+      ctx.strokeStyle = `rgba(${P.glow},${0.3 + 0.6 * fl * m.y})`;
+      ctx.lineWidth = m.s * (0.7 + 0.6 * m.y);
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.sin(t + m.ph) * 2, y + 5 * m.s); ctx.stroke();
     }
     ctx.globalCompositeOperation = 'source-over';
   }
@@ -458,6 +662,7 @@ function token(ctx: CanvasRenderingContext2D, P: Palette, x: number, y: number, 
 }
 
 function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, z: number, e: Ent, t: number) {
+  if (P.skin === 'punk') { machinePunk(ctx, P, cx, cy, u, z, e, t); return; }
   const info = MACHINES[e.kind as keyof typeof MACHINES];
   const unset = isMachine(e.kind) && !e.recipe;
   const line = Math.max(1.5, u * 0.045);
@@ -466,7 +671,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
 
-  const punk = P.skin === 'punk';
+  const punk = (P.skin as string) === 'punk';
   if (punk) {
     // 角を落とした鋼板に四隅のボルト
     ctx.fillStyle = P.shadow;
@@ -491,6 +696,186 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
   inked(P.plate);
   }
 
+  const busy = !!e.busy;
+  glyph(ctx, P, e, cx, cy, u, t, line);
+
+  // 名札
+  if (z >= 34 && !unset) {
+    rr(ctx, cx - u * 0.46, cy - u * 0.46, u * 0.27, u * 0.27, u * 0.05); inked(info.color);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `700 ${u * 0.17}px ${FONT_SMALL}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(info.glyph, cx - u * 0.325, cy - u * 0.315);
+  }
+
+  // 出口の矢じり
+  const port = (d: number, color: string, text?: string) => {
+    ctx.save();
+    ctx.translate(cx + DX[d] * u * 0.42, cy + DY[d] * u * 0.42);
+    ctx.rotate((d * Math.PI) / 2);
+    ctx.beginPath();
+    ctx.moveTo(u * 0.15, 0); ctx.lineTo(-u * 0.03, -u * 0.12); ctx.lineTo(-u * 0.03, u * 0.12);
+    ctx.closePath();
+    inked(color);
+    ctx.restore();
+    if (text && z >= 48) {
+      ctx.font = `600 ${u * 0.13}px ${FONT_MONO}`;
+      ctx.fillStyle = P.ink;
+      ctx.textAlign = 'center';
+      ctx.fillText(text, cx + DX[d] * u * 0.2 + (DY[d] ? u * 0.26 : 0), cy + DY[d] * u * 0.25 + (DX[d] ? u * 0.3 : 0));
+    }
+  };
+  if (e.kind === 'extractor' || e.kind === 'depot' || e.kind === 'sampler') port(e.dir, P.plate);
+  else if (e.kind === 'analyzer') { port(portDir(e.dir, 0), '#7fc06a', '陽'); port(portDir(e.dir, 1), P.red, '陰'); }
+  else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), P.plate);
+  else if (e.outOrder) e.outOrder.forEach((s, i) => port(portDir(e.dir, i), sub(s).color, label(s)));
+  else if (unset) port(e.dir, P.plate);
+
+  // 赤ペンの印：設定が要る「？」、詰まっている「！」
+  const jam = (e.stuck || 0) > 2.5;
+  const needs = unset || (e.kind === 'analyzer' && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
+  if (needs || jam) {
+    if (needs) {
+      ctx.strokeStyle = P.red; ctx.lineWidth = line * 1.2;
+      ctx.setLineDash([u * 0.12, u * 0.09]);
+      ctx.lineDashOffset = -t * u * 0.2;
+      if (punk) chamfer(ctx, cx - u * 0.43, cy - u * 0.43, u * 0.86, u * 0.86, u * 0.13); else rr(ctx, cx - u * 0.42, cy - u * 0.42, u * 0.84, u * 0.84, u * 0.12);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    disc(cx + u * 0.32, cy - u * 0.32, u * 0.15); inked(P.red);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `700 ${u * 0.2}px ${FONT_SMALL}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(jam ? '！' : '？', cx + u * 0.32, cy - u * 0.31);
+  }
+  if (busy) {
+    // 進み具合は蛍光ペンの下線
+    ctx.strokeStyle = P.hi; ctx.lineWidth = u * 0.07; ctx.lineCap = 'butt';
+    ctx.beginPath(); ctx.moveTo(cx - u * 0.34, cy + u * 0.36); ctx.lineTo(cx - u * 0.34 + u * 0.68 * (e.prog || 0), cy + u * 0.36); ctx.stroke();
+  }
+}
+
+/** 工業スキンの装置：機種の色で塗った厚い筐体、黒い計器盤、四隅のボルト、状態を示すランプ */
+function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, z: number, e: Ent, t: number) {
+  const info = MACHINES[e.kind as keyof typeof MACHINES], light = P.name === 'light';
+  const unset = isMachine(e.kind) && !e.recipe;
+  const needs = unset || (e.kind === 'analyzer' && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
+  const jam = (e.stuck || 0) > 2.5, busy = !!e.busy;
+  const line = Math.max(1.5, u * 0.05), a = u * 0.46, c = u * 0.14, INK = '#0b0d10';
+  ctx.lineJoin = 'miter';
+  ctx.lineCap = 'butt';
+
+  // 出口：筐体から突き出た管
+  const port = (d: number, color: string, text?: string) => {
+    ctx.save();
+    ctx.translate(cx + DX[d] * a, cy + DY[d] * a);
+    ctx.rotate((d * Math.PI) / 2);
+    ctx.fillStyle = light ? '#8d969e' : '#4d545c';
+    ctx.strokeStyle = INK; ctx.lineWidth = line * 0.8;
+    ctx.fillRect(-u * 0.02, -u * 0.13, u * 0.1, u * 0.26); ctx.strokeRect(-u * 0.02, -u * 0.13, u * 0.1, u * 0.26);
+    ctx.beginPath(); ctx.moveTo(u * 0.2, 0); ctx.lineTo(u * 0.08, -u * 0.1); ctx.lineTo(u * 0.08, u * 0.1); ctx.closePath();
+    ctx.fillStyle = color; ctx.fill(); ctx.stroke();
+    ctx.restore();
+    if (text && z >= 48) {
+      ctx.font = `600 ${u * 0.12}px ${FONT_MONO}`;
+      ctx.textAlign = 'center';
+      const tx = cx + DX[d] * u * 0.22 + (DY[d] ? u * 0.2 : 0), ty = cy + DY[d] * u * 0.25 + (DX[d] ? u * 0.25 : 0);
+      ctx.fillStyle = '#eef0ea';
+      ctx.fillText(text, tx, ty);
+    }
+  };
+  const ports = () => {
+    if (e.kind === 'extractor' || e.kind === 'depot' || e.kind === 'sampler') port(e.dir, '#eef0ea');
+    else if (e.kind === 'analyzer') { port(portDir(e.dir, 0), '#7fc06a', '陽'); port(portDir(e.dir, 1), P.red, '陰'); }
+    else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), '#eef0ea');
+    else if (e.outOrder) e.outOrder.forEach((s, i) => port(portDir(e.dir, i), sub(s).color, label(s)));
+    else if (unset) port(e.dir, '#eef0ea');
+  };
+
+  // 影と筐体
+  ctx.fillStyle = P.shadow;
+  chamfer(ctx, cx - a + u * 0.06, cy - a + u * 0.09, a * 2, a * 2, c); ctx.fill();
+  chamfer(ctx, cx - a, cy - a, a * 2, a * 2, c);
+  ctx.fillStyle = mix(info.color, '#0b0d10', light ? 0.1 : 0.42); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = line; ctx.stroke();
+  // 面取りの光と影
+  ctx.lineWidth = line * 0.7;
+  ctx.strokeStyle = `rgba(255,255,255,${light ? 0.6 : 0.2})`;
+  ctx.beginPath(); ctx.moveTo(cx - a + line, cy + a - c); ctx.lineTo(cx - a + line, cy - a + c); ctx.lineTo(cx - a + c, cy - a + line); ctx.lineTo(cx + a - c, cy - a + line); ctx.stroke();
+  ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+  ctx.beginPath(); ctx.moveTo(cx + a - line, cy - a + c); ctx.lineTo(cx + a - line, cy + a - c); ctx.lineTo(cx + a - c, cy + a - line); ctx.lineTo(cx - a + c, cy + a - line); ctx.stroke();
+
+  // 計器盤
+  const b = u * 0.335;
+  chamfer(ctx, cx - b, cy - b, b * 2, b * 2, u * 0.07);
+  ctx.fillStyle = '#0e1115'; ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = line * 0.8; ctx.stroke();
+  if (busy) {
+    // 稼働中は内側から機種の色で光る
+    ctx.save();
+    chamfer(ctx, cx - b, cy - b, b * 2, b * 2, u * 0.07); ctx.clip();
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, b * 1.4);
+    g.addColorStop(0, mix(info.color, '#ffffff', 0.25)); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.globalAlpha = 0.5 + 0.2 * Math.sin(t * 9 + e.x);
+    ctx.fillStyle = g; ctx.fillRect(cx - b, cy - b, b * 2, b * 2);
+    ctx.restore();
+  }
+  glyph(ctx, { ...P, ink: '#eef0ea', plate: '#2c333c', soft: '#9aa3ab' }, e, cx, cy, u * 0.74, t, line * 0.75);
+  ports();
+
+  if (z >= 30) {
+    // 四隅のボルト
+    for (const [bx, by] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      ctx.beginPath(); ctx.arc(cx + bx * u * 0.385, cy + by * u * 0.385, u * 0.03, 0, Math.PI * 2);
+      ctx.fillStyle = light ? '#f4f5f2' : '#6b727a'; ctx.fill();
+      ctx.strokeStyle = INK; ctx.lineWidth = line * 0.5; ctx.stroke();
+    }
+    // 機種名の刻印
+    ctx.fillStyle = P.hi;
+    ctx.fillRect(cx - a + u * 0.1, cy - a + u * 0.02, u * 0.22, u * 0.1);
+    ctx.fillStyle = INK;
+    ctx.font = `700 ${u * 0.1}px ${FONT_UI}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(info.name.slice(0, 2), cx - a + u * 0.21, cy - a + u * 0.075);
+  }
+  // 状態ランプ：緑＝稼働、橙＝待機、赤の点滅＝設定待ち・詰まり
+  const lamp = needs || jam ? (Math.sin(t * 10) > 0 ? P.red : '#3a1410') : busy ? '#58e06a' : e.recipe || e.test || e.sub || e.kind === 'extractor' ? '#ffb020' : '#3b4048';
+  ctx.beginPath(); ctx.arc(cx + a - u * 0.14, cy - a + u * 0.07, u * 0.045, 0, Math.PI * 2);
+  ctx.fillStyle = lamp; ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = line * 0.5; ctx.stroke();
+  if (!light && lamp !== '#3b4048' && lamp !== '#3a1410') {
+    ctx.globalCompositeOperation = 'lighter';
+    const g = ctx.createRadialGradient(cx + a - u * 0.14, cy - a + u * 0.07, 0, cx + a - u * 0.14, cy - a + u * 0.07, u * 0.3);
+    g.addColorStop(0, lamp + '88'); g.addColorStop(1, lamp + '00');
+    ctx.fillStyle = g; ctx.fillRect(cx + a - u * 0.44, cy - a - u * 0.23, u * 0.6, u * 0.6);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  if (needs || jam) {
+    ctx.strokeStyle = P.red; ctx.lineWidth = line * 1.3;
+    ctx.setLineDash([u * 0.12, u * 0.09]);
+    ctx.lineDashOffset = -t * u * 0.25;
+    chamfer(ctx, cx - a - u * 0.03, cy - a - u * 0.03, a * 2 + u * 0.06, a * 2 + u * 0.06, c); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = P.red;
+    ctx.font = `700 ${u * 0.34}px ${FONT_UI}`;
+    ctx.textAlign = 'center';
+    if (Math.sin(t * 6) > -0.3) ctx.fillText(jam ? '！' : '？', cx, cy + u * 0.02);
+  }
+  if (busy) {
+    // 進み具合は盤の下のランプ列
+    for (let i = 0; i < 8; i++) {
+      ctx.fillStyle = i < Math.ceil((e.prog || 0) * 8) ? P.hi : 'rgba(255,255,255,0.14)';
+      ctx.fillRect(cx - b + u * 0.03 + i * ((b * 2 - u * 0.06) / 8), cy + b - u * 0.08, (b * 2 - u * 0.06) / 8 - u * 0.012, u * 0.045);
+    }
+  }
+}
+
+/** 装置の中身の絵。台は呼ぶ側が描く */
+function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy: number, u: number, t: number, line: number) {
+  const info = MACHINES[e.kind as keyof typeof MACHINES];
+  const disc = (x: number, y: number, r: number) => { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); };
+  const inked = (fill: string) => { ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = P.ink; ctx.lineWidth = line; ctx.stroke(); };
   const busy = !!e.busy;
   switch (e.kind) {
     case 'extractor': {
@@ -605,62 +990,6 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
       break;
     }
   }
-
-  // 名札
-  if (z >= 34 && !unset) {
-    rr(ctx, cx - u * 0.46, cy - u * 0.46, u * 0.27, u * 0.27, u * 0.05); inked(info.color);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `700 ${u * 0.17}px ${FONT_SMALL}`;
-    ctx.textAlign = 'center';
-    ctx.fillText(info.glyph, cx - u * 0.325, cy - u * 0.315);
-  }
-
-  // 出口の矢じり
-  const port = (d: number, color: string, text?: string) => {
-    ctx.save();
-    ctx.translate(cx + DX[d] * u * 0.42, cy + DY[d] * u * 0.42);
-    ctx.rotate((d * Math.PI) / 2);
-    ctx.beginPath();
-    ctx.moveTo(u * 0.15, 0); ctx.lineTo(-u * 0.03, -u * 0.12); ctx.lineTo(-u * 0.03, u * 0.12);
-    ctx.closePath();
-    inked(color);
-    ctx.restore();
-    if (text && z >= 48) {
-      ctx.font = `600 ${u * 0.13}px ${FONT_MONO}`;
-      ctx.fillStyle = P.ink;
-      ctx.textAlign = 'center';
-      ctx.fillText(text, cx + DX[d] * u * 0.2 + (DY[d] ? u * 0.26 : 0), cy + DY[d] * u * 0.25 + (DX[d] ? u * 0.3 : 0));
-    }
-  };
-  if (e.kind === 'extractor' || e.kind === 'depot' || e.kind === 'sampler') port(e.dir, P.plate);
-  else if (e.kind === 'analyzer') { port(portDir(e.dir, 0), '#7fc06a', '陽'); port(portDir(e.dir, 1), P.red, '陰'); }
-  else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), P.plate);
-  else if (e.outOrder) e.outOrder.forEach((s, i) => port(portDir(e.dir, i), sub(s).color, label(s)));
-  else if (unset) port(e.dir, P.plate);
-
-  // 赤ペンの印：設定が要る「？」、詰まっている「！」
-  const jam = (e.stuck || 0) > 2.5;
-  const needs = unset || (e.kind === 'analyzer' && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
-  if (needs || jam) {
-    if (needs) {
-      ctx.strokeStyle = P.red; ctx.lineWidth = line * 1.2;
-      ctx.setLineDash([u * 0.12, u * 0.09]);
-      ctx.lineDashOffset = -t * u * 0.2;
-      if (punk) chamfer(ctx, cx - u * 0.43, cy - u * 0.43, u * 0.86, u * 0.86, u * 0.13); else rr(ctx, cx - u * 0.42, cy - u * 0.42, u * 0.84, u * 0.84, u * 0.12);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-    disc(cx + u * 0.32, cy - u * 0.32, u * 0.15); inked(P.red);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `700 ${u * 0.2}px ${FONT_SMALL}`;
-    ctx.textAlign = 'center';
-    ctx.fillText(jam ? '！' : '？', cx + u * 0.32, cy - u * 0.31);
-  }
-  if (busy) {
-    // 進み具合は蛍光ペンの下線
-    ctx.strokeStyle = P.hi; ctx.lineWidth = u * 0.07; ctx.lineCap = 'butt';
-    ctx.beginPath(); ctx.moveTo(cx - u * 0.34, cy + u * 0.36); ctx.lineTo(cx - u * 0.34 + u * 0.68 * (e.prog || 0), cy + u * 0.36); ctx.stroke();
-  }
 }
 
 function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, z: number, size: number, w: World, t: number) {
@@ -718,6 +1047,30 @@ function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, 
   if (goal) {
     ctx.font = `500 ${u * 0.22}px ${FONT_MONO}`;
     ctx.fillText(`${goalCount(w)} / ${requiredOf(w, goal)}`, px + s / 2, py + s / 2 + u * 0.46);
+  }
+  if (punk) {
+    // 進み具合は区切りのあるランプ列
+    if (goal) {
+      const n = Math.min(20, requiredOf(w, goal)), lit = Math.floor((goalCount(w) / requiredOf(w, goal)) * n), bw = (s - z * 0.9) / n;
+      for (let i = 0; i < n; i++) {
+        ctx.fillStyle = i < lit ? P.hi : light ? 'rgba(20,24,29,0.18)' : 'rgba(255,255,255,0.1)';
+        ctx.fillRect(px + z * 0.45 + i * bw, py + s / 2 + u * 0.64, bw * 0.7, u * 0.09);
+      }
+    }
+    // 四隅の警告灯は交互に点滅する
+    [[0.2, 0.2], [size - 0.2, 0.2], [size - 0.2, size - 0.2], [0.2, size - 0.2]].forEach(([ox, oy], i) => {
+      const on = Math.sin(t * 5 + i * Math.PI) > 0;
+      ctx.beginPath(); ctx.arc(px + ox * z, py + oy * z, z * 0.09, 0, Math.PI * 2);
+      ctx.fillStyle = on ? P.red : '#3a1410'; ctx.fill();
+      ctx.strokeStyle = '#000'; ctx.lineWidth = line * 0.6; ctx.stroke();
+      if (on && !light) {
+        ctx.globalCompositeOperation = 'lighter';
+        const g = ctx.createRadialGradient(px + ox * z, py + oy * z, 0, px + ox * z, py + oy * z, z * 0.7);
+        g.addColorStop(0, 'rgba(255,60,36,0.5)'); g.addColorStop(1, 'rgba(255,60,36,0)');
+        ctx.fillStyle = g; ctx.fillRect(px + (ox - 0.7) * z, py + (oy - 0.7) * z, z * 1.4, z * 1.4);
+        ctx.globalCompositeOperation = 'source-over';
+      }
+    });
   }
 }
 

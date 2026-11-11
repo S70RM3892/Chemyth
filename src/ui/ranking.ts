@@ -4,7 +4,7 @@ import { doneCount, summarize, type World } from '../engine/world';
 import { h } from './dom';
 import type { PanelCtx } from './panels';
 import { sfx } from './sound';
-import { SLOTS, store } from './title';
+import { SLOTS, slotName, store } from './title';
 
 interface Row { rank: number; name: string; done: number; points: number; play_ms: number; me: boolean }
 
@@ -54,7 +54,7 @@ function table(rows: Row[]): HTMLElement {
 /** この端末のノート同士の順位 */
 function localRows(): Row[] {
   const rows = Array.from({ length: SLOTS }, (_, i) => ({ n: i + 1, sum: summarize(store.read(i + 1)) })).filter((x) => x.sum)
-    .map((x) => ({ rank: 0, name: `ノート ${x.n} 冊目`, done: x.sum!.done, points: x.sum!.points, play_ms: x.sum!.playMs, me: false }));
+    .map((x) => ({ rank: 0, name: slotName(x.n), done: x.sum!.done, points: x.sum!.points, play_ms: x.sum!.playMs, me: false }));
   rows.sort((a, b) => b.done - a.done || b.points - a.points || a.play_ms - b.play_ms);
   rows.forEach((r, i) => { r.rank = i + 1; });
   return rows;
