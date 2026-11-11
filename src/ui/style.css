@@ -626,3 +626,75 @@ b { font-weight: 700; }
   :root[data-skin="punk"]:not([data-theme="dark"]) #app::after { background: linear-gradient(105deg, transparent 40%, rgba(255, 255, 255, 0.38) 50%, transparent 60%); background-size: 300% 100%; animation: sheen 8s linear infinite; mix-blend-mode: soft-light; }
 }
 @keyframes sheen { from { background-position: 150% 0; } to { background-position: -150% 0; } }
+
+/* =====================================================================
+   魔術スキン。錬金術師の実験録：羊皮紙にセピアのインク、真鍮の金具、青く光る液。
+   部品の作りは文具スキンのまま、色と縁取りと書体を替える。
+   ===================================================================== */
+.arcane-only { display: none; }
+:root[data-skin="arcane"] {
+  --paper: #eadfc4; --card: #f7f0dc; --card-2: #e9dcbc; --ink: #3b2a1a; --soft: #7c6850; --rule: rgba(90, 62, 26, 0.28);
+  --red: #a3322b; --hi: #35aef2; --hi-soft: #cfeafa; --ok: #3f7d4c; --shadow: rgba(70, 45, 15, 0.28); --on-ink: #f7f0dc;
+  --brass: #b8913f; --brass-dark: #6b4f1f; --glow: 53, 174, 242;
+  --font-hand: "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-skin="arcane"]:not([data-theme="light"]) {
+    --paper: #14121e; --card: #221c30; --card-2: #2c2540; --ink: #efe5cc; --soft: #a99b83; --rule: rgba(196, 154, 78, 0.3);
+    --red: #ff7a66; --hi: #5ccaff; --hi-soft: #1d3a52; --ok: #8fd49a; --shadow: rgba(0, 0, 0, 0.55); --on-ink: #14121e;
+    --brass: #c9a04e; --brass-dark: #7a5a22; --glow: 92, 202, 255;
+    color-scheme: dark;
+  }
+}
+:root[data-skin="arcane"][data-theme="dark"] {
+  --paper: #14121e; --card: #221c30; --card-2: #2c2540; --ink: #efe5cc; --soft: #a99b83; --rule: rgba(196, 154, 78, 0.3);
+  --red: #ff7a66; --hi: #5ccaff; --hi-soft: #1d3a52; --ok: #8fd49a; --shadow: rgba(0, 0, 0, 0.55); --on-ink: #14121e;
+  --brass: #c9a04e; --brass-dark: #7a5a22; --glow: 92, 202, 255;
+  color-scheme: dark;
+}
+[data-skin="arcane"] .note-only { display: none; }
+[data-skin="arcane"] .arcane-only { display: inline; }
+/* 真鍮の二重の縁 */
+[data-skin="arcane"] :is(.ghost, #topbtns button, .chip, .key, .slot, .stepper) { border: 1.5px solid var(--brass-dark); box-shadow: inset 0 0 0 1.5px var(--brass), 2px 2px 0 var(--shadow); border-radius: 3px; }
+[data-skin="arcane"] :is(.ghost, #topbtns button, .primary) { font-family: var(--font-hand); font-weight: 700; letter-spacing: 0.04em; }
+[data-skin="arcane"] .primary { border: 1.5px solid var(--brass-dark); box-shadow: inset 0 0 0 1.5px var(--brass), 0 0 12px rgba(var(--glow), 0.45); border-radius: 3px; }
+[data-skin="arcane"] :is(.chip, .ghost).on, [data-skin="arcane"] .ghost.picked { box-shadow: inset 0 0 0 1.5px var(--hi), 0 0 10px rgba(var(--glow), 0.5); border-color: var(--hi); }
+[data-skin="arcane"] #topbtns button.hot, [data-skin="arcane"] #b-speed.hot { box-shadow: inset 0 0 0 1.5px var(--hi), 0 0 10px rgba(var(--glow), 0.55); }
+/* 指令：封蝋つきの羊皮紙 */
+[data-skin="arcane"] #goal { transform: none; background: linear-gradient(180deg, var(--card), var(--card-2)); border: 2px solid var(--brass-dark); border-radius: 4px; box-shadow: inset 0 0 0 2px var(--brass), 4px 4px 0 var(--shadow); }
+[data-skin="arcane"] #goal::after { content: "勅"; border: 0; background: radial-gradient(circle at 35% 30%, #cf4b40, #7a1f1a); color: #f7e9c8; opacity: 0.95; box-shadow: 1px 2px 0 rgba(0, 0, 0, 0.3), inset 0 0 0 3px rgba(0, 0, 0, 0.12); font-size: 17px; }
+[data-skin="arcane"] #goal-name { letter-spacing: 0.04em; font-weight: 700; }
+[data-skin="arcane"] .track { border-color: var(--brass-dark); background: rgba(0, 0, 0, 0.08); }
+[data-skin="arcane"] #goal-bar { background: linear-gradient(90deg, var(--hi), #a8e4ff); box-shadow: 0 0 8px rgba(var(--glow), 0.8); }
+[data-skin="arcane"] #goal-rate { color: var(--hi); }
+/* 道具の棚：真鍮の板と、丸い座金 */
+[data-skin="arcane"] #bar { border: 2px solid var(--brass-dark); box-shadow: inset 0 0 0 2px var(--brass), 3px 3px 0 var(--shadow); background: linear-gradient(180deg, var(--card), var(--card-2)); }
+[data-skin="arcane"] .tool .g { border-radius: 50%; border: 2px solid var(--brass-dark); box-shadow: inset 0 0 0 1.5px var(--brass); font-family: var(--font-hand); font-weight: 800; }
+[data-skin="arcane"] .tool.on { background: var(--hi-soft); border-color: var(--hi); box-shadow: 0 0 10px rgba(var(--glow), 0.6); }
+[data-skin="arcane"] .tool.on .g { box-shadow: inset 0 0 0 1.5px var(--brass), 0 0 8px rgba(var(--glow), 0.9); }
+[data-skin="arcane"] #tabs button { border-color: var(--brass-dark); font-family: var(--font-hand); }
+[data-skin="arcane"] #tabs button.on { background: var(--brass-dark); color: #f7f0dc; border-color: var(--brass-dark); box-shadow: inset 0 0 0 1px var(--brass); }
+[data-skin="arcane"] #opts button { border-color: var(--brass-dark); }
+[data-skin="arcane"] #opts button.on { border-color: var(--hi); box-shadow: 0 0 8px rgba(var(--glow), 0.5); }
+[data-skin="arcane"] #tip { border-color: var(--brass-dark); box-shadow: inset 0 0 0 1px var(--brass); font-family: var(--font-hand); }
+[data-skin="arcane"] #tip b { box-shadow: none; color: var(--hi); }
+[data-skin="arcane"] :is(#act, #area-act) { border: 2px solid var(--brass-dark); box-shadow: inset 0 0 0 1.5px var(--brass), 3px 3px 0 var(--shadow); }
+/* 本文の紙 */
+[data-skin="arcane"] #sheet { border: 2px solid var(--brass-dark); border-radius: 4px; box-shadow: inset 0 0 0 2px var(--brass), 0 14px 44px rgba(0, 0, 0, 0.4); background: linear-gradient(180deg, var(--card), var(--card-2)); }
+[data-skin="arcane"] #sheet h2 { font-family: var(--font-hand); font-weight: 800; letter-spacing: 0.1em; }
+[data-skin="arcane"] #sheet h2::before { content: "✦ "; color: var(--hi); text-shadow: 0 0 8px rgba(var(--glow), 0.9); }
+[data-skin="arcane"] #sheet h3 { font-family: var(--font-hand); letter-spacing: 0.06em; color: var(--brass-dark); }
+[data-skin="arcane"][data-theme="dark"] #sheet h3 { color: var(--brass); }
+[data-skin="arcane"] .eq { border-left-color: var(--hi); box-shadow: inset 0 0 0 1px var(--rule); }
+[data-skin="arcane"] :is(.scene, .rs-card) { border-color: var(--brass-dark); box-shadow: inset 0 0 0 1px var(--brass); }
+[data-skin="arcane"] .rs-card.done { box-shadow: inset 0 0 0 1px var(--hi), 0 0 8px rgba(var(--glow), 0.4); }
+[data-skin="arcane"] #toast { transform: translateX(-50%); color: var(--ink); border: 1.5px solid var(--hi); box-shadow: inset 0 0 0 1.5px var(--brass), 0 0 16px rgba(var(--glow), 0.6); font-weight: 700; }
+[data-skin="arcane"] #stamp { border-color: var(--hi); color: var(--hi); text-shadow: 0 0 12px rgba(var(--glow), 0.9); box-shadow: 0 0 24px rgba(var(--glow), 0.5), inset 0 0 24px rgba(var(--glow), 0.25); }
+[data-skin="arcane"] #stamp::before { border-color: var(--brass); }
+[data-skin="arcane"] #pts { color: var(--hi); }
+/* 表紙 */
+[data-skin="arcane"] #cover { border: 2px solid var(--brass-dark); box-shadow: inset 0 0 0 3px var(--brass), 6px 6px 0 var(--shadow); background: linear-gradient(160deg, var(--card), var(--card-2)); border-radius: 4px; }
+[data-skin="arcane"] #cover h1 { font-family: var(--font-hand); font-weight: 800; letter-spacing: 0.12em; text-shadow: 0 0 18px rgba(var(--glow), 0.55); }
+[data-skin="arcane"] #cover h1 span { box-shadow: none; }
+[data-skin="arcane"] .kicker { letter-spacing: 0.3em; color: var(--brass-dark); }

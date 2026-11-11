@@ -25,18 +25,18 @@ const fmtDate = (t: number) => { if (!t) return ''; const d = new Date(t); retur
 export interface TitleApi { start(slot: number, json: string | null): void }
 
 /** セーブ枠の呼び名。文具スキンではノート、工業スキンでは生産ライン */
-export const slotName = (n: number) => (skinName() === 'punk' ? `第 ${n} ライン` : `ノート ${n} 冊目`);
+export const slotName = (n: number) => (skinName() === 'punk' ? `第 ${n} ライン` : skinName() === 'arcane' ? `実験録 第 ${n} 巻` : `ノート ${n} 冊目`);
 
 /** 明暗の切り替えボタン。呼び名はスキンごとに違う（ノート／黒板、光／闇） */
 export function themeButtons(after: () => void): HTMLElement[] {
-  const cur = store.meta().theme ?? 'auto', punk = skinName() === 'punk';
-  return ([['auto', '自動'], ['light', punk ? '光' : 'ノート'], ['dark', punk ? '闇' : '黒板']] as [ThemeChoice, string][]).map(([id, name]) =>
+  const cur = store.meta().theme ?? 'auto', punk = skinName() === 'punk', arcane = skinName() === 'arcane';
+  return ([['auto', '自動'], ['light', punk ? '光' : arcane ? '羊皮紙' : 'ノート'], ['dark', punk ? '闇' : arcane ? '夜' : '黒板']] as [ThemeChoice, string][]).map(([id, name]) =>
     h('button', { type: 'button', id: `theme-${id}`, class: cur === id ? 'on' : '', onclick: () => { store.setMeta({ theme: id }); applyTheme(id); sfx.tap(); after(); } }, name));
 }
 /** スキンの切り替えボタン */
 export function skinButtons(after: () => void): HTMLElement[] {
   const cur = skinName();
-  return ([['note', '文具'], ['punk', '工業']] as [Skin, string][]).map(([id, name]) =>
+  return ([['note', '文具'], ['punk', '工業'], ['arcane', '魔術']] as [Skin, string][]).map(([id, name]) =>
     h('button', { type: 'button', id: `skin-${id}`, class: cur === id ? 'on' : '', onclick: () => { store.setMeta({ skin: id }); applySkin(id); sfx.tap(); after(); } }, name));
 }
 

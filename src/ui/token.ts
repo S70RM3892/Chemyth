@@ -2,7 +2,7 @@ import { parseFormula } from '../chem/formula';
 import { element } from '../content/elements';
 import { sub } from '../content/substances';
 import { layoutOf } from '../content/tokenlayout';
-import { onThemeChange, palette } from './theme';
+import { BRASS, BRASS_DARK, onThemeChange, palette } from './theme';
 
 /** 物質の絵柄。元素ごとの固有の形を、分子のように並べて描く */
 
@@ -95,8 +95,14 @@ export function drawToken(ctx: CanvasRenderingContext2D, id: string, x: number, 
     if (!s.formula && id !== 'e') ctx.setLineDash([0.22, 0.16]);
     ctx.stroke();
   } else {
-    ctx.lineWidth = 0.1;
-    ctx.strokeStyle = P.ink;
+    if (P.skin === 'arcane') {
+      // 魔術：真鍮の輪にはめた札
+      ctx.lineWidth = 0.17; ctx.strokeStyle = BRASS_DARK; ctx.stroke();
+      ctx.lineWidth = 0.08; ctx.strokeStyle = BRASS;
+    } else {
+      ctx.lineWidth = 0.1;
+      ctx.strokeStyle = P.ink;
+    }
     if (!s.formula && id !== 'e') ctx.setLineDash([0.22, 0.16]); // 混合物・高分子は破線
     ctx.stroke();
   }

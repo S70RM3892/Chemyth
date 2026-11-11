@@ -3,7 +3,7 @@ import { ELEMENTS } from '../content/elements';
 import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
 import { FLOOR_DY, TANK_CAP, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
-import { mix, onThemeChange, palette, type Palette } from './theme';
+import { BRASS, BRASS_DARK, mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 import { districtsOf, type District } from '../engine/districts';
 import { equationOf, hexOf, reactionLookById } from '../content/looks';
@@ -328,7 +328,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   spawn(w, P);
   FONT_HAND = P.font;
   FONT_SMALL = P.skin === 'punk' ? FONT_UI : P.font;
-  const punk = P.skin === 'punk', light = P.name === 'light';
+  const punk = P.skin === 'punk', arcane = P.skin === 'arcane', light = P.name === 'light';
 
   ctx.fillStyle = P.paper;
   ctx.fillRect(0, 0, cw, ch);
@@ -533,6 +533,39 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       }
       ctx.stroke();
     }
+  } else if (arcane) {
+    // 魔術：ガラス管。真鍮色の細い縁、淡いガラス、中を流れる液、青い光の筋。マスの継ぎ目ごとに真鍮の輪
+    const GW = { solid: 0.56, liquid: 0.48, gas: 0.4, none: 0.46 };
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = light ? BRASS_DARK : '#07060d';
+    pass((k) => { ctx.lineWidth = z * GW[k] + edge * 0.9; });
+    pass((k) => { ctx.strokeStyle = light ? '#eef6fa' : '#1b2436'; ctx.lineWidth = z * GW[k]; });
+    pass((k) => { ctx.strokeStyle = mix(P.line[k], light ? '#ffffff' : '#0c1220', 0.25); ctx.lineWidth = z * GW[k] * 0.66; });
+    if (!veryFar) {
+      ctx.lineCap = 'round';
+      if (!light) ctx.globalCompositeOperation = 'lighter';
+      ctx.lineDashOffset = -t * beltSpeed(w) * z * 0.5;
+      pass((k) => { ctx.strokeStyle = `rgba(${P.glow},${light ? 0.8 : 0.85})`; ctx.lineWidth = lw(k === 'solid' ? 0.05 : 0.075); ctx.setLineDash([z * 0.2, z * 0.3]); });
+      ctx.lineDashOffset = -t * beltSpeed(w) * z * 0.82 + z * 0.17;
+      pass(() => { ctx.strokeStyle = light ? 'rgba(255,255,255,0.9)' : 'rgba(210,240,255,0.7)'; ctx.lineWidth = lw(0.028); ctx.setLineDash([z * 0.07, z * 0.43]); });
+      ctx.setLineDash([]);
+      ctx.globalCompositeOperation = 'source-over';
+      // ガラスの映り込み
+      if (!far) { ctx.save(); ctx.translate(-z * 0.035, -z * 0.085); ctx.globalAlpha = light ? 0.75 : 0.28; ctx.strokeStyle = '#ffffff'; pass(() => { ctx.lineWidth = lw(0.03); }); ctx.restore(); ctx.globalAlpha = 1; }
+    }
+    if (!far) {
+      // 真鍮の輪：管が次のマスへ入る所に 1 つ
+      ctx.lineCap = 'butt';
+      for (const b of belts) {
+        const kx = b.c.ax, ky = b.c.ay, gx = sx(b.e.x + 0.5) + kx * z * 0.94, gy = sy(b.e.y + 0.5) + ky * z * 0.94, half = z * (GW[st(b)] / 2 + 0.07);
+        // 継ぎ目は流れに直角：入口がマスの左右なら縦、上下なら横
+        const px = Math.abs(kx) > Math.abs(ky) ? 0 : 1, py = 1 - px;
+        ctx.beginPath(); ctx.moveTo(gx - px * half, gy - py * half); ctx.lineTo(gx + px * half, gy + py * half);
+        ctx.strokeStyle = light ? BRASS_DARK : '#07060d'; ctx.lineWidth = z * 0.13 + 2; ctx.stroke();
+        ctx.strokeStyle = BRASS; ctx.lineWidth = z * 0.13; ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,240,200,0.55)'; ctx.lineWidth = Math.max(1, z * 0.03); ctx.stroke();
+      }
+    }
   } else {
     ctx.lineCap = 'round';
     ctx.strokeStyle = P.ink;
@@ -681,7 +714,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   }
 
   // 闇の炉：稼働中の装置と納品所は、暗がりに光をこぼす
-  if (punk && !light) {
+  if ((punk || arcane) && !light) {
     ctx.globalCompositeOperation = 'lighter';
     const pool = (gx: number, gy: number, r: number, a: number) => {
       const g = ctx.createRadialGradient(sx(gx), sy(gy), 0, sx(gx), sy(gy), r * z);
@@ -982,6 +1015,20 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   ctx.globalAlpha = 1;
 
   if (punk) ambient(ctx, P, cw, ch, t, dt, sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), z);
+  if (arcane) {
+    // 魔術：ゆっくり漂う青い光の粒と、四隅の暗がり
+    if (!light) ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 26; i++) {
+      const px = mod(hash(i, 7) * cw + t * (6 + 9 * hash(i, 11)) * (i % 2 ? 1 : -1), cw), py = mod(hash(i, 13) * ch - t * (4 + 7 * hash(i, 17)), ch);
+      const a = (0.25 + 0.35 * Math.sin(t * (0.8 + hash(i, 19)) + i)) * (light ? 0.5 : 1), rad = 1.2 + 2.2 * hash(i, 23);
+      if (a <= 0) continue;
+      ctx.fillStyle = `rgba(${P.glow},${a})`; ctx.beginPath(); ctx.arc(px, py, rad, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    const g = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.45, cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, light ? 'rgba(70,45,15,0.2)' : 'rgba(0,0,0,0.5)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, cw, ch);
+  }
 }
 
 /** 工業スキンの空気。同じ工場の「光の側」と「闇の側」。
@@ -1115,10 +1162,26 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
   ctx.fillStyle = P.shadow;
   rr(ctx, cx - u * 0.42 + th * 0.8, cy - u * 0.42 + th * 1.9, u * 0.84, u * 0.84, u * 0.12);
   ctx.fill();
+  const arc = (P.skin as string) === 'arcane';
+  // 魔術スキンの台は、インクではなく濃い真鍮（夜は闇の色）で縁取る
+  const cardEdge = arc ? (P.name === 'light' ? BRASS_DARK : '#08060f') : P.ink;
+  const card = (fill: string) => { ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = cardEdge; ctx.lineWidth = line; ctx.stroke(); };
   rr(ctx, cx - u * 0.42, cy - u * 0.42 + th, u * 0.84, u * 0.84, u * 0.12);
-  inked(mix(info.color, P.ink, 0.25));
+  card(arc ? mix(BRASS_DARK, '#1a1206', 0.35) : mix(info.color, P.ink, 0.25));
   rr(ctx, cx - u * 0.42, cy - u * 0.42, u * 0.84, u * 0.84, u * 0.12);
-  inked(P.plate);
+  card(P.plate);
+  if (arc) {
+    // 魔術：真鍮の縁取りと、四隅の青い石（動いている間は灯る）
+    ctx.strokeStyle = BRASS; ctx.lineWidth = line * 1.25;
+    rr(ctx, cx - u * 0.385, cy - u * 0.385, u * 0.77, u * 0.77, u * 0.09); ctx.stroke();
+    ctx.strokeStyle = BRASS_DARK; ctx.lineWidth = Math.max(0.8, line * 0.35);
+    rr(ctx, cx - u * 0.355, cy - u * 0.355, u * 0.71, u * 0.71, u * 0.07); ctx.stroke();
+    if (z >= 24) for (const [gx, gy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      ctx.beginPath(); ctx.arc(cx + gx * u * 0.355, cy + gy * u * 0.355, Math.max(1.5, u * 0.028), 0, Math.PI * 2);
+      ctx.fillStyle = e.busy ? `rgb(${P.glow})` : mix(P.plate, BRASS_DARK, 0.6); ctx.fill();
+      ctx.strokeStyle = BRASS_DARK; ctx.lineWidth = Math.max(0.8, line * 0.4); ctx.stroke();
+    }
+  }
   }
 
   const busy = !!e.busy;

@@ -1,10 +1,11 @@
 /** 見た目は「スキン × 明暗」の 4 通り。
  *  ノート：ライト＝方眼ノートにインク、ダーク＝黒板にチョーク。
  *  工業：ライト＝光の炉（白い鋼板、安全色、差し込む日光）、ダーク＝闇の炉（煤けた鉄、溶けた橙、火の粉と走査線）。
+ *  魔術：ライト＝羊皮紙の実験録（セピアのインク、真鍮、青く光る液）、ダーク＝夜の書斎（藍の闇、真鍮、青い灯）。
  *  画面部品（CSS）と地図（canvas）で同じ色を使う */
 export type ThemeName = 'light' | 'dark';
 export type ThemeChoice = 'auto' | ThemeName;
-export type Skin = 'note' | 'punk';
+export type Skin = 'note' | 'punk' | 'arcane';
 
 export interface Palette {
   key: string;
@@ -34,6 +35,9 @@ export interface Palette {
 
 const HAND = '"Klee One", "Hiragino Maru Gothic ProN", "Yu Gothic", sans-serif';
 const HEAVY = '"Dela Gothic One", "Hiragino Sans", "Yu Gothic", sans-serif';
+const SERIF = '"Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif';
+/** 魔術スキンの真鍮の色（明るい面・縁） */
+export const BRASS = '#b8913f', BRASS_DARK = '#6b4f1f';
 
 export const PALETTES: Record<string, Palette> = {
   'note-light': {
@@ -52,6 +56,18 @@ export const PALETTES: Record<string, Palette> = {
     plate: '#f4f5f2', shadow: 'rgba(10,15,20,0.4)', edge: '#14181d', glow: '255,244,214', font: HEAVY,
     line: { solid: '#b89255', liquid: '#49b9d6', gas: '#dfe5ea', none: '#a3acb4' },
   },
+  // 羊皮紙：錬金術師の実験録。セピアのインク、真鍮の金具、ガラス管の中を青い光が流れる
+  'arcane-light': {
+    key: 'arcane-light', skin: 'arcane', name: 'light', paper: '#eadfc4', grid: 'rgba(110,78,36,0.09)', gridBold: 'rgba(110,78,36,0.2)', ink: '#3b2a1a', soft: '#7c6850', red: '#a3322b', hi: '#35aef2',
+    plate: '#f7f0dc', shadow: 'rgba(70,45,15,0.26)', edge: '#3b2a1a', glow: '53,174,242', font: SERIF,
+    line: { solid: '#d8c69a', liquid: '#bfe6fb', gas: '#e2dcf2', none: '#dfd4b6' },
+  },
+  // 夜の書斎：藍の闇に、真鍮と青い灯
+  'arcane-dark': {
+    key: 'arcane-dark', skin: 'arcane', name: 'dark', paper: '#14121e', grid: 'rgba(120,170,255,0.05)', gridBold: 'rgba(196,154,78,0.15)', ink: '#efe5cc', soft: '#a99b83', red: '#ff7a66', hi: '#5ccaff',
+    plate: '#262034', shadow: 'rgba(0,0,0,0.55)', edge: 'rgba(8,6,16,0.88)', glow: '92,202,255', font: SERIF,
+    line: { solid: '#4b3d29', liquid: '#1c4b68', gas: '#3a3555', none: '#2d2841' },
+  },
   // 闇の炉：夜勤の溶鉱炉。煤けた鉄、溶けた橙、警報の赤
   'punk-dark': {
     key: 'punk-dark', skin: 'punk', name: 'dark', paper: '#0c0e11', grid: 'rgba(255,255,255,0.035)', gridBold: 'rgba(255,138,31,0.16)', ink: '#f0e9dc', soft: '#8d9198', red: '#ff3d2e', hi: '#ff8a1f',
@@ -67,7 +83,7 @@ export function themeName(): ThemeName {
   const a = root.dataset.theme;
   return a === 'dark' || a === 'light' ? a : media.matches ? 'dark' : 'light';
 }
-export const skinName = (): Skin => (root.dataset.skin === 'punk' ? 'punk' : 'note');
+export const skinName = (): Skin => (root.dataset.skin === 'punk' ? 'punk' : root.dataset.skin === 'arcane' ? 'arcane' : 'note');
 export const palette = (): Palette => PALETTES[`${skinName()}-${themeName()}`];
 
 /** 明暗の選択を反映する。auto は端末（または表示している側）の設定に従う */
@@ -76,7 +92,7 @@ export function applyTheme(choice: ThemeChoice) {
   else root.dataset.theme = choice;
 }
 export function applySkin(skin: Skin) {
-  if (skin === 'punk') root.dataset.skin = 'punk';
+  if (skin === 'punk' || skin === 'arcane') root.dataset.skin = skin;
   else delete root.dataset.skin;
 }
 
