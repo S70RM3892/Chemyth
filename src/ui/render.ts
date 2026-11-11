@@ -1,4 +1,4 @@
-import { ZONES, hubRect, isSea, zoneAt, zoneSpots, type Zone } from '../content/map';
+import { ZONES, hubRect, isSea, resourceAt, zoneAt, zoneSpots, type Zone } from '../content/map';
 import { ELEMENTS } from '../content/elements';
 import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
@@ -652,6 +652,23 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       continue;
     }
     machine(ctx, P, sx(e.x + sz / 2), sy(e.y + sz / 2), z * pop * sz, z, e, t);
+    // 状態灯：動いていれば緑、原料待ちは橙、出口の詰まりは赤の点滅。色だけに頼らないよう、形も変える（丸・三角・四角）
+    if (z >= 26 && isMachine(e.kind) && e.recipe) {
+      // 2×2 の装置は上辺の真ん中（出口と入口の間で、どの向きでも空いている）。1 マスの装置は左下の角
+      const st = machineState(e), lx = sz === 2 ? sx(e.x + 1) : sx(e.x) + z * 0.2, ly = sz === 2 ? sy(e.y) + z * 0.2 : sy(e.y + 1) - z * 0.2, lr = Math.max(3, z * 0.085);
+      ctx.beginPath();
+      if (st === 0) ctx.arc(lx, ly, lr, 0, Math.PI * 2);
+      else if (st === 1) { ctx.moveTo(lx, ly - lr * 1.15); ctx.lineTo(lx + lr * 1.1, ly + lr * 0.85); ctx.lineTo(lx - lr * 1.1, ly + lr * 0.85); ctx.closePath(); }
+      else ctx.rect(lx - lr, ly - lr, lr * 2, lr * 2);
+      ctx.fillStyle = st === 0 ? '#3fbf63' : st === 1 ? '#e0962a' : Math.sin(t * 9) > 0 ? P.red : mix(P.red, '#000000', 0.55);
+      ctx.fill(); ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = Math.max(1, z * 0.03); ctx.stroke();
+      if (st === 0 && punk && !light) { ctx.globalAlpha = 0.35; ctx.beginPath(); ctx.arc(lx, ly, lr * 2.1, 0, Math.PI * 2); ctx.fillStyle = '#3fbf63'; ctx.fill(); ctx.globalAlpha = 1; }
+    }
+    // 採取機は、採れているあいだ、土ぼこりやしぶきを飛ばす
+    if (e.kind === 'extractor' && z >= 20 && (e.u ?? 0) > 0.3 && particles.length < 260 && Math.random() < dt * 2.2) {
+      const a = Math.random() * Math.PI * 2, wet = sub(resourceAt(e.x, e.y)).state !== 'solid';
+      particles.push({ x: e.x + 0.5 + Math.cos(a) * 0.2, y: e.y + 0.5 + Math.sin(a) * 0.2, vx: Math.cos(a) * 0.5, vy: Math.sin(a) * 0.5 - 0.25, age: 0, life: 0.45 + Math.random() * 0.25, color: wet ? '#5aa9d6' : P.soft, r: 0.035 + Math.random() * 0.03 });
+    }
     // 稼働中の装置は、蒸気や火花を出す
     if (e.busy && z >= 20 && particles.length < 260 && Math.random() < dt * (e.kind === 'electrolyzer' || e.kind === 'battery' ? 5 : 3)) {
       const r1 = Math.random(), r2 = Math.random();
@@ -765,6 +782,10 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
         // 先頭の灯り：前の列車を待って止まっているときは赤
         ctx.fillStyle = tr.held ? P.red : punk ? '#14181d' : P.ink; ctx.fillRect(L / 2 - z * 0.2, -Wd / 2 + z * 0.06, z * 0.14, Wd - z * 0.12);
         ctx.restore();
+        // 走っている列車は、後ろへ煙を残す
+        if (z >= 16 && !tr.held && tr.p > 0.01 && tr.p < 0.99 && particles.length < 260 && Math.random() < dt * 5) {
+          particles.push({ x: cam.x + (tx - cw / 2) / z - Math.cos(ang) * 0.4, y: cam.y + (ty - ch / 2) / z - Math.sin(ang) * 0.4, vx: -Math.cos(ang) * 0.3, vy: -0.35 - Math.random() * 0.2, age: 0, life: 0.8 + Math.random() * 0.5, color: 'smoke', r: 0.08 + Math.random() * 0.05 });
+        }
         if (tr.cargo.length && z >= 22) { const s0 = tr.cargo[0]; ctx.drawImage(sprite(s0.startsWith('!') ? s0.slice(1) : s0), tx - z * 0.17 - Math.cos(ang) * z * 0.1, ty - z * 0.17 - Math.sin(ang) * z * 0.1, z * 0.34, z * 0.34); }
       }
     }

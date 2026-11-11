@@ -5,11 +5,22 @@ let enabled = true;
 export const setSound = (on: boolean) => { enabled = on; };
 export const soundOn = () => enabled;
 
+/** 音を出す土台。create が false なら、まだ作られていないときは null を返す（操作の前には作れない） */
+export function audioContext(create = true): AudioContext | null {
+  try {
+    if (!ac && create) ac = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    if (ac && create && ac.state === 'suspended') void ac.resume();
+  } catch { /* 音が出せない環境では黙る */ }
+  return ac;
+}
+/** 最初の操作で音を出せるようにする（背景音楽のため） */
+export function unlockAudio() { if (enabled) audioContext(true); }
+
 function tone(freq: number, dur: number, type: OscillatorType = 'sine', gain = 0.05, when = 0) {
   if (!enabled) return;
   try {
-    ac ??= new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-    if (ac.state === 'suspended') void ac.resume();
+    const ac = audioContext(true);
+    if (!ac) return;
     const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime + when;
     o.type = type;
     o.frequency.setValueAtTime(freq, t);

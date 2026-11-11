@@ -14,7 +14,8 @@ import { draw, type Camera } from './ui/render';
 import { lanePaths, type LaneTile } from './engine/lanes';
 import { decodeBlueprint, encodeBlueprint, type Stamp } from './engine/blueprint';
 import { showStats, type StatsCtx } from './ui/stats';
-import { setSound, sfx, soundOn } from './ui/sound';
+import { setSound, sfx, soundOn, unlockAudio } from './ui/sound';
+import { musicOn, musicTick, setMusic } from './ui/music';
 import { initTitle, skinButtons, slotName, store, themeButtons } from './ui/title';
 import { applySkin, applyTheme } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
@@ -91,6 +92,9 @@ function boot(data: HotData) {
   let cw = 0, ch = 0;
 
   setSound(store.meta().sound !== false);
+  setMusic(store.meta().music !== false);
+  // 背景音楽は、最初に画面に触れたときから鳴らせる（ブラウザの決まり）
+  window.addEventListener('pointerdown', () => unlockAudio(), { once: true });
   applyTheme(store.meta().theme ?? 'auto');
   applySkin(store.meta().skin ?? 'note');
   const save = () => { if (slot) store.write(slot, serialize(world)); };
@@ -281,6 +285,9 @@ function boot(data: HotData) {
       h('li', {}, h('b', {}, '強化する'), '研究点がたまったら「強化」。計算問題を解くと、採取・運搬・処理が速くなる。'),
       h('li', {}, h('b', {}, '広げる'), '道具は「運ぶ・作る・出し入れ・編集」の棚に分かれている。遠くの資源地からは「貨物駅」の列車で運べ。装置やベルトの下は「地下ベルト」でくぐれる。「範囲」で囲んだラインは、コピーして回し、設計図として保存できる。'),
       h('li', {}, h('b', {}, '見直す'), '右上の「統計」で、納品の速さ、装置ごとの稼働率、止まっている理由がわかる。地図に稼働率を重ねて表示できる。'),
+      h('li', {}, h('b', {}, '手早く置く'), '設備の道具で空いたマスを押し続けると、置く前の見本（占めるマス・出口・入口）が出る。そのまま指を動かして場所を選び、離すと置く。棚の右端で、ベルトをまとめて引く本数と、設備を置く向きを決められる。'),
+      h('li', {}, h('b', {}, '研究する'), '「強化」の下の「研究」で、3 本・4 本引き、長い地下ベルト、信号（検知器と弁）、2 階、列車や装置の能力を開く。二者択一の組は、工場の形に合うほうを選べ。'),
+      h('li', {}, h('b', {}, '網にする'), '道具「線路」で駅から駅へ線路を敷くと、列車はそこを 1.5 倍の速さで走る。線路は枝分かれさせて何駅でも共有できるが、混むと待ちが出る。地図を引くと、区画ごとに「何を毎分いくつ作っているか」の札が出る。'),
     ),
     h('p', { class: 'muted' }, '物質の絵柄は、元素ごとに決まった形の組み合わせでできている（「図鑑」で確認できる）。置いたものをタップすると、その場に「設定・回す・消す」が出る。間違えたら右上の「元に戻す」。'),
     first ? h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'start', onclick: closeModal }, '始める')) : null,
@@ -309,6 +316,7 @@ function boot(data: HotData) {
       h('div', { class: 'menu' },
         h('div', { class: 'row' }, h('span', { class: 'muted' }, '見た目'), h('span', { class: 'seg' }, ...skinButtons(showMenu)), h('span', { class: 'seg' }, ...themeButtons(showMenu))),
         item('m-sound', soundOn() ? '音：あり' : '音：なし', () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); showMenu(); }),
+        item('m-music', musicOn() ? '音楽：あり' : '音楽：なし', () => { setMusic(!musicOn()); store.setMeta({ music: musicOn() }); sfx.tap(); showMenu(); }),
         item('m-help', '遊び方', () => showHelp()),
         item('m-title', '保存してタイトルへ戻る', () => { modal.hidden = true; sheet.replaceChildren(); toTitle(); })),
       h('p', { class: 'muted' }, `${slotName(slot)}。この端末に自動で保存している。`),
@@ -773,7 +781,7 @@ function boot(data: HotData) {
   const toTitle = () => { save(); slot = 0; selected = null; app.classList.add('in-title'); title.show(); };
 
   // ---- ループ ----
-  let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0;
+  let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0;
   const STEP = 1 / 60;
   const frame = (now: number) => {
     const dt = Math.min(0.1, (now - prev) / 1000);
@@ -829,6 +837,13 @@ function boot(data: HotData) {
       hud();
     }
     placeAct();
+    // 背景音楽：工場の画面でだけ鳴らす。動いている装置が多いほど、音が増える
+    if (now - musicAt > 250) {
+      musicAt = now;
+      let busy = 0, all = 0;
+      if (slot) for (const e of world.ents.values()) if (e.recipe) { all++; if (e.busy) busy++; }
+      musicTick(slot !== 0 && !document.hidden, all ? Math.min(1, (busy / all) * 0.6 + Math.min(1, all / 30) * 0.4) : 0);
+    }
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);

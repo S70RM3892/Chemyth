@@ -90,7 +90,7 @@ b { font-weight: 700; }
 #act #act-erase { color: var(--red); }
 
 /* ---- お知らせ：赤ペンの走り書き ---- */
-#toast { position: absolute; left: 50%; bottom: 76px; z-index: 4; transform: translateX(-50%) rotate(-0.6deg); max-width: calc(100% - 32px); background: var(--card); color: var(--red); border: var(--bw) solid var(--red); padding: 8px 18px; border-radius: 4px; font-family: var(--font-hand); font-weight: 600; font-size: 16px; text-align: center; pointer-events: none; box-shadow: 3px 3px 0 var(--shadow); animation: rise 0.2s ease; }
+#toast { position: absolute; left: 50%; bottom: 104px; z-index: 4; transform: translateX(-50%) rotate(-0.6deg); max-width: calc(100% - 32px); background: var(--card); color: var(--red); border: var(--bw) solid var(--red); padding: 8px 18px; border-radius: 4px; font-family: var(--font-hand); font-weight: 600; font-size: 16px; text-align: center; pointer-events: none; box-shadow: 3px 3px 0 var(--shadow); animation: rise 0.2s ease; }
 @keyframes rise { from { opacity: 0; transform: translate(-50%, 8px) rotate(-0.6deg); } }
 
 /* ---- 正解のはんこ ---- */
