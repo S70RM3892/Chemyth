@@ -12,9 +12,15 @@ export const DX = [1, 0, -1, 0];
 export const DY = [0, 1, 0, -1];
 
 /** 'part' は 2×2 の装置が占める残りのマス。ref が本体の位置を指す */
-export type Kind = 'belt' | 'extractor' | 'vent' | 'hub' | 'splitter' | 'bridge' | 'depot' | 'sampler' | 'analyzer' | 'part' | MachineKind;
+export type Kind = 'belt' | 'extractor' | 'vent' | 'hub' | 'splitter' | 'bridge' | 'tunnel' | 'station' | 'depot' | 'sampler' | 'analyzer' | 'part' | MachineKind;
 /** 2×2 マスを占める装置。出口が 6 か所あり、奥の面が入口の目安になる */
-export const BIG: Kind[] = ['separator', 'reactor', 'electrolyzer', 'battery'];
+export const BIG: Kind[] = ['separator', 'reactor', 'electrolyzer', 'battery', 'station'];
+/** 地下ベルトが届く距離（入口から出口までのマス数） */
+export const TUNNEL_RANGE = 7;
+/** 貨物駅にためておける数と、列車 1 編成に積める数 */
+export const STATION_CAP = 24, TRAIN_CAP = 12;
+/** 路線の数 */
+export const LINES = 8;
 
 /** 流れている物質。p は 0〜1 の進み具合、m は最後に動いた tick、rc は搬出口から出た印 */
 export interface Item { s: string; p: number; m: number; rc?: boolean; d?: Dir }
@@ -62,6 +68,12 @@ export interface Ent {
   badT?: number;
   /** 電解槽：電池の e⁻ で加速していられる残り秒数 */
   pw?: number;
+  /** 貨物駅：路線の番号、積む駅か降ろす駅か、ためている物質（搬出口から出たものは先頭に '!'） */
+  ch?: number;
+  role?: 'in' | 'out';
+  buf?: string[];
+  /** 積む駅が走らせている列車。p：0 が自分の駅、1 が行き先。back：戻り。to：行き先の駅のキー */
+  tr?: { p: number; back: boolean; cargo: string[]; wait: number; to?: string };
 }
 
 /** 有毒な気体と、無害にする方法。捨てても罰はないが、処理の反応は入試で問われる */
@@ -153,6 +165,8 @@ export interface World {
 export const beltSpeed = (w: World) => 2 * (1 + 0.35 * w.up.belt);
 export const extractInterval = (w: World) => 1 / (1 + 0.5 * w.up.extract);
 export const machineRate = (w: World) => 1 + 0.4 * w.up.machine;
+/** 列車の速さ（マス/秒）。ベルトの強化で一緒に速くなる */
+export const trainSpeed = (w: World) => 9 * (1 + 0.35 * w.up.belt);
 
 export const key = (x: number, y: number) => `${x},${y}`;
 export const isMachine = (k: Kind): k is MachineKind => k === 'separator' || k === 'electrolyzer' || k === 'reactor' || k === 'battery' || k === 'collector';
@@ -246,6 +260,8 @@ export function place(w: World, kind: Kind, x: number, y: number, dir: Dir): str
   if (kind === 'belt' || kind === 'splitter' || kind === 'analyzer') e.item = null;
   if (kind === 'splitter') e.rr = 0;
   if (kind === 'bridge') e.items = [null, null];
+  if (kind === 'tunnel') e.item = null;
+  if (kind === 'station') { e.buf = []; e.ch = 1; e.role = 'in'; e.timer = 0; e.rr = 0; }
   if (kind === 'extractor') { e.timer = 0; discover(w, resourceAt(x, y)); }
   if (kind === 'depot' || kind === 'sampler') { e.timer = 0; e.rr = 0; }
   put(w, e);
@@ -484,8 +500,30 @@ function emits(w: World, n: Ent, x: number, y: number, d: Dir, depth = 0): boole
     case 'analyzer': return [0, 1].some((i) => portDir(n.dir, i) === d);
     case 'splitter': return [0, 1, 2].some((i) => portDir(n.dir, i) === d);
     case 'bridge': return through(w, n, d, depth + 1);
+    // 地下ベルトは、先に出口があれば地下へもぐる。なければそこが出口で、地上へ出す
+    case 'tunnel': return n.dir === d && !tunnelPair(w, n);
+    case 'station': return n.role === 'out' && [0, 1].some((i) => { const p = slotPort(n, i); return p.d === d && p.tx === x && p.ty === y; });
     default: return !!n.outOrder && n.outOrder.some((_, i) => { const p = outPort(n, i); return p.d === d && p.tx === x && p.ty === y; });
   }
+}
+
+/** 地下ベルトの入口 e から見た出口：同じ向きの、いちばん近い地下ベルト */
+export function tunnelPair(w: World, e: Ent): Ent | null {
+  for (let k = 1; k <= TUNNEL_RANGE; k++) {
+    const n = at(w, e.x + DX[e.dir] * k, e.y + DY[e.dir] * k);
+    if (n && n.kind === 'tunnel' && n.dir === e.dir) return n;
+  }
+  return null;
+}
+/** 積む駅 e の行き先：同じ路線の降ろす駅のうち、いちばん近いもの */
+export function stationTarget(w: World, e: Ent): Ent | null {
+  let best: Ent | null = null, bd = Infinity;
+  for (const n of w.ents.values()) {
+    if (n.kind !== 'station' || n.role !== 'out' || n.ch !== e.ch) continue;
+    const d = Math.hypot(n.x - e.x, n.y - e.y);
+    if (d < bd) { bd = d; best = n; }
+  }
+  return best;
 }
 
 /** 立体交差 b を向き d に通り抜ける流れがあるか（立体交差が続いていてもたどる） */
@@ -512,6 +550,11 @@ export function autoDir(w: World, kind: Kind, x: number, y: number): Dir {
       if (n && n.kind !== 'extractor' && n.kind !== 'depot' && n.kind !== 'sampler' && n.kind !== 'hub' && !(n.kind === 'belt' && n.dir === (d + 2) % 4)) return d;
     }
   } else {
+    // 地下ベルトの 2 つ目は、手前にある入口と同じ向きにそろえる
+    if (kind === 'tunnel') for (const d of [0, 1, 2, 3] as Dir[]) for (let k = 1; k <= TUNNEL_RANGE; k++) {
+      const n = at(w, x - DX[d] * k, y - DY[d] * k);
+      if (n && n.kind === 'tunnel' && n.dir === d) return d;
+    }
     for (const [fx, fy] of footprint(x, y, BIG.includes(kind) ? 2 : 1)) {
       const d = inflow(w, fx, fy);
       if (d !== null) return d;
@@ -615,6 +658,14 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): 
     case 'analyzer':
       if (t.item) return false;
       t.item = { s, p: 0, m: w.tick, rc };
+      return true;
+    case 'tunnel':
+      if (t.item || d !== t.dir) return false;
+      t.item = { s, p: 0, m: w.tick, rc };
+      return true;
+    case 'station':
+      if (t.role !== 'in' || (t.buf ??= []).length >= STATION_CAP) return false;
+      t.buf.push(rc ? '!' + s : s);
       return true;
     case 'bridge': {
       const slots = (t.items ??= [null, null]);
@@ -723,6 +774,58 @@ export function step(w: World, dt: number) {
         e.timer = (e.timer || 0) + dt;
         if (!e.sub || !(w.stock[e.sub] > 0) || e.timer < every) break;
         if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, e.sub, true)) { e.timer = 0; w.stock[e.sub]--; }
+        break;
+      }
+      case 'tunnel': {
+        const it = e.item;
+        if (!it) break;
+        const pair = tunnelPair(w, e);
+        const dist = pair ? Math.abs(pair.x - e.x) + Math.abs(pair.y - e.y) : 1;
+        it.p = Math.min(1, it.p + (speed * dt) / dist);
+        if (it.p < 1 || it.m === w.tick) break;
+        if (pair) { if (!pair.item) { pair.item = { s: it.s, p: 0, m: w.tick, rc: it.rc }; e.item = null; } }
+        else if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc)) e.item = null;
+        break;
+      }
+      case 'station': {
+        const buf = (e.buf ??= []);
+        if (e.role === 'out') {
+          // 降ろす駅：ためたものを、正面の 2 つの口から交互に出す
+          e.timer = (e.timer || 0) + dt;
+          if (!buf.length || e.timer < every * 0.4) break;
+          for (let k = 0; k < 2; k++) {
+            const i = ((e.rr || 0) + k) % 2, p = slotPort(e, i), rc = buf[0].startsWith('!');
+            if (push(w, p.tx, p.ty, p.d, rc ? buf[0].slice(1) : buf[0], rc)) { buf.shift(); e.rr = (i + 1) % 2; e.timer = 0; e.n = (e.n || 0) + 1; break; }
+          }
+          break;
+        }
+        // 積む駅：列車を 1 編成走らせる
+        const tr = (e.tr ??= { p: 0, back: false, cargo: [], wait: 0 });
+        if (tr.p <= 0 && !tr.back) {
+          while (tr.cargo.length < TRAIN_CAP && buf.length) tr.cargo.push(buf.shift()!);
+          tr.wait += dt;
+          // 満載か、少し待っても増えなければ発車する
+          if (tr.cargo.length && (tr.cargo.length >= TRAIN_CAP || tr.wait > 2.5)) {
+            const to = stationTarget(w, e);
+            if (to) { tr.to = key(to.x, to.y); tr.p = 1e-6; tr.wait = 0; }
+          }
+          break;
+        }
+        const dest = tr.to ? w.ents.get(tr.to) : undefined;
+        const ok = !!dest && dest.kind === 'station' && dest.role === 'out' && dest.ch === e.ch;
+        if (!ok) tr.back = true; // 行き先がなくなった：引き返す
+        const v = (trainSpeed(w) * dt) / Math.max(1, ok ? Math.hypot(dest!.x - e.x, dest!.y - e.y) : 12);
+        if (!tr.back) {
+          tr.p = Math.min(1, tr.p + v);
+          if (tr.p >= 1) {
+            const db = (dest!.buf ??= []);
+            while (tr.cargo.length && db.length < STATION_CAP) db.push(tr.cargo.shift()!);
+            if (!tr.cargo.length) { tr.back = true; e.n = (e.n || 0) + 1; }
+          }
+        } else {
+          tr.p = Math.max(0, tr.p - v);
+          if (tr.p <= 0) { tr.p = 0; tr.back = false; if (tr.cargo.length) buf.unshift(...tr.cargo.splice(0)); }
+        }
         break;
       }
       case 'vent':

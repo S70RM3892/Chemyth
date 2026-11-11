@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
-import { TOXIC, fedTier, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
+import { STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
@@ -732,6 +732,83 @@ describe('工場の動作', () => {
     for (let i = 0; i < 10; i++) { at(g2, hx - 1, hy)!.item = { s: 'N2', p: 1, m: 0 }; run(g2, 0.5); }
     expect(g2.grades['0:0']).toBe('S');
     expect(deserialize(serialize(g2))!.grades['0:0']).toBe('S');
+  });
+
+  it('地下ベルトは、あいだに何があってもくぐって運ぶ', () => {
+    const w = newWorld();
+    place(w, 'belt', 10, 10, 0);
+    place(w, 'tunnel', 11, 10, 0);
+    place(w, 'reactor', 12, 10, 0);          // あいだに 2×2 の装置
+    place(w, 'belt', 14, 9, 1); place(w, 'belt', 14, 10, 1); // 交差するベルト
+    expect(autoDir(w, 'tunnel', 15, 10)).toBe(0); // 2 つ目は入口と同じ向きになる
+    place(w, 'tunnel', 15, 10, 0);
+    place(w, 'belt', 16, 10, 0);
+    expect(tunnelPair(w, at(w, 11, 10)!)).toBe(at(w, 15, 10));
+    expect(tunnelPair(w, at(w, 15, 10)!)).toBeNull();
+    expect(inflow(w, 16, 10)).toBe(0);            // 出口の先は流れ込みとして認識する
+    expect(inflow(w, 12, 10)).toBeNull();         // 入口の先（地下）は地上へは出ない
+    at(w, 10, 10)!.item = { s: 'N2', p: 1, m: 0 };
+    run(w, 5);
+    expect(at(w, 16, 10)!.item?.s).toBe('N2');
+    expect(at(w, 12, 10)!.inBuf).toBeUndefined(); // あいだの装置には入らない
+    // 届く距離をこえると、つながらない
+    place(w, 'tunnel', 30, 30, 0); place(w, 'tunnel', 30 + TUNNEL_RANGE + 1, 30, 0);
+    expect(tunnelPair(w, at(w, 30, 30)!)).toBeNull();
+    // 逆向きからは入れない
+    place(w, 'belt', 12, 20, 2); place(w, 'tunnel', 11, 20, 0);
+    at(w, 12, 20)!.item = { s: 'O2', p: 1, m: 0 };
+    run(w, 1);
+    expect(at(w, 11, 20)!.item).toBeNull();
+  });
+
+  it('貨物駅：積む駅から、同じ路線の降ろす駅へ列車が運ぶ', () => {
+    const w = newWorld();
+    place(w, 'station', 10, 10, 0);
+    place(w, 'station', 60, 10, 0);
+    const a = at(w, 10, 10)!, b = at(w, 60, 10)!;
+    expect(a.big).toBe(true);
+    b.role = 'out';
+    expect(stationTarget(w, a)).toBe(b);
+    b.ch = 2;
+    expect(stationTarget(w, a)).toBeNull();   // 路線番号が違うとつながらない
+    b.ch = 1;
+    place(w, 'belt', 62, 10, 0); place(w, 'belt', 62, 11, 0); // 降ろす駅の正面の 2 つの口
+    place(w, 'belt', 9, 10, 0);
+    let got = 0;
+    for (let i = 0; i < 40 * 60; i++) {
+      const src = at(w, 9, 10)!;
+      if (!src.item) src.item = { s: i % 2 ? 'N2' : 'O2', p: 1, m: 0 };
+      for (const [x, y] of [[62, 10], [62, 11]]) { const o = at(w, x, y)!; if (o.item) { got++; o.item = null; } }
+      step(w, 1 / 60);
+    }
+    expect(got).toBeGreaterThan(TRAIN_CAP * 2);   // 何往復かして届いている
+    expect(a.n!).toBeGreaterThan(1);
+    expect(a.buf!.length).toBeLessThanOrEqual(STATION_CAP);
+    // 降ろす駅は受け取らない（ベルトで押し込めない）
+    place(w, 'belt', 59, 10, 0);
+    at(w, 59, 10)!.item = { s: 'H2', p: 1, m: 0 };
+    run(w, 1);
+    expect(at(w, 59, 10)!.item?.s).toBe('H2');
+    // 行き先を消すと、列車は積み荷を持って引き返し、駅に戻す
+    const w2 = newWorld();
+    place(w2, 'station', 10, 10, 0); place(w2, 'station', 40, 10, 0);
+    at(w2, 40, 10)!.role = 'out';
+    at(w2, 10, 10)!.buf = ['N2', 'N2', 'N2'];
+    run(w2, 3.5);
+    expect(at(w2, 10, 10)!.tr!.p).toBeGreaterThan(0);
+    remove(w2, 40, 10);
+    run(w2, 10);
+    expect(at(w2, 10, 10)!.tr!.cargo.length + at(w2, 10, 10)!.buf!.length).toBe(3);
+    // 搬出口から出したもの（数えない印つき）は、列車で運んでも印が残る
+    const w3 = newWorld();
+    place(w3, 'station', hx - 30, hy - 1, 0); place(w3, 'station', hx - 2, hy - 1, 0); // 正面・右の口が納品所に向く
+    at(w3, hx - 2, hy - 1)!.role = 'out';
+    at(w3, hx - 30, hy - 1)!.buf = ['!N2', '!N2'];
+    run(w3, 12);
+    expect(w3.stock.N2).toBe(2);
+    expect(w3.delivered.N2).toBeUndefined();
+    const r = deserialize(serialize(w))!;
+    expect(at(r, 60, 10)!.role).toBe('out');
   });
 
   it('1 マスだった頃の装置は、そのまま 3 つの出口で動く', () => {

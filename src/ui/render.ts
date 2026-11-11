@@ -1,13 +1,13 @@
 import { ZONES, hubRect, isSea, zoneAt, zoneSpots, type Zone } from '../content/map';
 import { ELEMENTS } from '../content/elements';
-import { MACHINES } from '../content/machines';
+import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { beltSpeed, currentGoal, DX, DY, fedTier, goalCount, inDoors, inflow, isMachine, machineState, outPort, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { beltSpeed, currentGoal, DX, DY, fedTier, goalCount, inDoors, inflow, isMachine, machineState, outPort, stationTarget, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 
 export interface Camera { x: number; y: number; z: number }
-export interface View { tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null }
+export interface View { tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string }[] | null }
 
 // 方眼ノートに描いた工場の図面。輪郭線と斜線で描き、ぼかしや発光は使わない
 let FONT_HAND = '"Klee One", sans-serif';
@@ -470,6 +470,52 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   ctx.globalAlpha = 1;
   }
 
+  // ベルトの段階：強化するほど、中央の流れ線が色を変えて速く流れる
+  const tier = Math.min(5, w.up.belt);
+  if (tier > 0 && z >= 14) {
+    ctx.lineCap = 'butt';
+    ctx.strokeStyle = ['', '#3f8fd0', '#2fa06a', '#d9a520', '#e0662c', '#c23fb0'][tier];
+    ctx.lineWidth = lw(0.075);
+    ctx.setLineDash([z * 0.16, z * 0.34]); ctx.lineDashOffset = -t * beltSpeed(w) * z;
+    for (const b of belts) { trace(b); ctx.stroke(); }
+    ctx.setLineDash([]);
+    if (tier >= 3) { ctx.lineWidth = lw(0.025); ctx.globalAlpha = 0.55; for (const b of belts) { trace(b); ctx.stroke(); } ctx.globalAlpha = 1; }
+  }
+
+  // 地下ベルト：入口は後ろ半分、出口は前半分だけ地上に見える。あいだは点線
+  for (const e of w.ents.values()) {
+    if (e.kind !== 'tunnel' || !inView(e)) continue;
+    const cx = sx(e.x + 0.5), cy = sy(e.y + 0.5), wd = z * WIDTH.none, pair = tunnelPair(w, e);
+    const dxv = DX[e.dir], dyv = DY[e.dir], side = pair ? -1 : 1;
+    if (pair) {
+      ctx.strokeStyle = P.ink; ctx.globalAlpha = 0.3; ctx.lineWidth = lw(0.07);
+      ctx.setLineDash([z * 0.12, z * 0.16]);
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(sx(pair.x + 0.5), sy(pair.y + 0.5)); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+    }
+    ctx.lineCap = 'butt';
+    for (const [col, lwid] of [[punk ? '#0b0d10' : P.ink, wd + edge], [P.line.none, wd]] as [string, number][]) {
+      ctx.strokeStyle = col; ctx.lineWidth = lwid;
+      ctx.beginPath(); ctx.moveTo(cx + dxv * side * z * 0.5, cy + dyv * side * z * 0.5); ctx.lineTo(cx, cy); ctx.stroke();
+    }
+    const it = e.item;
+    if (it) {
+      const dist = pair ? Math.abs(pair.x - e.x) + Math.abs(pair.y - e.y) : 1;
+      const off = pair ? -0.5 + it.p * dist : it.p - 0.5;
+      if (pair ? off < -0.05 : off > 0.05) token(ctx, P, cx + dxv * off * z, cy + dyv * off * z, z, it.s);
+    }
+    // 坑口：黒い口と、もぐる・出る向きの矢じり
+    ctx.save();
+    ctx.translate(cx, cy); ctx.rotate((e.dir * Math.PI) / 2);
+    ctx.fillStyle = punk ? 'rgba(0,0,0,0.45)' : P.shadow; rr(ctx, -z * 0.17 + z * 0.05, -z * 0.4 + z * 0.1, z * 0.34, z * 0.8, z * 0.08); ctx.fill();
+    rr(ctx, -z * 0.17, -z * 0.4, z * 0.34, z * 0.8, z * 0.08);
+    ctx.fillStyle = MACHINES.tunnel.color; ctx.fill(); ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = lw(0.05); ctx.stroke();
+    rr(ctx, -z * 0.09, -z * 0.3, z * 0.18, z * 0.6, z * 0.05); ctx.fillStyle = '#050607'; ctx.fill();
+    ctx.fillStyle = P.hi;
+    ctx.beginPath(); ctx.moveTo(z * 0.06, 0); ctx.lineTo(-z * 0.05, -z * 0.1); ctx.lineTo(-z * 0.05, z * 0.1); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
   // 立体交差：縦の管の上を横の管がまたぐ
   for (const e of w.ents.values()) {
     if (e.kind !== 'bridge' || !inView(e)) continue;
@@ -501,7 +547,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
 
   // ---- 装置 ----
   for (const e of w.ents.values()) {
-    if (e.kind === 'belt' || e.kind === 'bridge' || e.kind === 'hub' || e.kind === 'part' || !(inView(e) || (e.big && inView({ ...e, x: e.x + 1, y: e.y + 1 })))) continue;
+    if (e.kind === 'belt' || e.kind === 'bridge' || e.kind === 'tunnel' || e.kind === 'hub' || e.kind === 'part' || !(inView(e) || (e.big && inView({ ...e, x: e.x + 1, y: e.y + 1 })))) continue;
     if (!born.has(e)) born.set(e, t);
     const age = t - born.get(e)!;
     const pop = age < 0.24 ? 0.7 + 0.3 * (1 - Math.pow(1 - age / 0.24, 3)) + 0.1 * Math.sin((age / 0.24) * Math.PI) : 1;
@@ -533,6 +579,46 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   const hr = hubRect(w.hubSize);
   hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
 
+  // ---- 貨物線：積む駅から降ろす駅へ、設備の上を越える高架の線路と列車 ----
+  for (const e of w.ents.values()) {
+    if (e.kind !== 'station' || e.role !== 'in') continue;
+    const dest = (e.tr?.to ? w.ents.get(e.tr.to) : undefined) ?? stationTarget(w, e);
+    if (!dest || dest.kind !== 'station') continue;
+    const ax = sx(e.x + 1), ay = sy(e.y + 1), bx = sx(dest.x + 1), by = sy(dest.y + 1);
+    if (Math.max(ax, bx) < -50 || Math.min(ax, bx) > cw + 50 || Math.max(ay, by) < -50 || Math.min(ay, by) > ch + 50) continue;
+    const col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length], len = Math.hypot(bx - ax, by - ay) || 1, ang = Math.atan2(by - ay, bx - ax);
+    const lift2 = z * 0.3;
+    ctx.lineCap = 'butt';
+    // 地面の影 → 枕木 → 路線色の桁
+    ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2;
+    ctx.beginPath(); ctx.moveTo(ax + lift2 * 0.5, ay + lift2); ctx.lineTo(bx + lift2 * 0.5, by + lift2); ctx.stroke();
+    ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = z * 0.26;
+    ctx.setLineDash([z * 0.07, z * 0.2]);
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = z * 0.13;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.strokeStyle = col; ctx.lineWidth = z * 0.07;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    // 列車
+    const tr = e.tr;
+    if (tr && z >= 10) {
+      const k = Math.max(0, Math.min(1, tr.p)), tx = ax + (bx - ax) * k, ty = ay + (by - ay) * k;
+      ctx.save();
+      ctx.translate(tx, ty); ctx.rotate(tr.back ? ang + Math.PI : ang);
+      const L = z * 0.95, Wd = z * 0.46;
+      ctx.fillStyle = punk ? 'rgba(0,0,0,0.4)' : P.shadow; rr(ctx, -L / 2 + z * 0.06, -Wd / 2 + z * 0.14, L, Wd, z * 0.08); ctx.fill();
+      rr(ctx, -L / 2, -Wd / 2, L, Wd, z * 0.08); ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = lw(0.05); ctx.stroke();
+      rr(ctx, -L / 2 + z * 0.08, -Wd / 2 + z * 0.07, L * 0.62, Wd - z * 0.14, z * 0.04); ctx.fillStyle = tr.cargo.length ? '#f3f1e8' : 'rgba(0,0,0,0.35)'; ctx.fill(); ctx.stroke();
+      // 先頭の運転台
+      ctx.fillStyle = punk ? '#14181d' : P.ink; ctx.fillRect(L / 2 - z * 0.2, -Wd / 2 + z * 0.06, z * 0.14, Wd - z * 0.12);
+      ctx.restore();
+      if (tr.cargo.length && z >= 22) { const s0 = tr.cargo[0]; ctx.drawImage(sprite(s0.startsWith('!') ? s0.slice(1) : s0), tx - z * 0.17 - Math.cos(tr.back ? ang + Math.PI : ang) * z * 0.1, ty - z * 0.17 - Math.sin(tr.back ? ang + Math.PI : ang) * z * 0.1, z * 0.34, z * 0.34); }
+    }
+    void len;
+  }
+
+
   // ---- 稼働率の札：装置の上に、直近の稼働率と止まっている理由を出す ----
   if (view.stats && z >= 13) {
     const GOOD = '#2f8f55', WARN = '#c9821a';
@@ -555,6 +641,18 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       ctx.fillRect(bx + 2, by + hh - 4, (wd - 4) * u, 2.5);
       ctx.fillStyle = punk ? '#eef0ea' : P.ink;
       ctx.fillText(tx, bx + wd / 2, by + hh / 2 - 1);
+    }
+  }
+
+  // ---- 設計図の見本：置ける所は蛍光、ふさがっている所は赤 ----
+  if (view.ghost) {
+    ctx.textAlign = 'center';
+    for (const g of view.ghost) {
+      const gx = sx(g.x), gy = sy(g.y), gs = g.size * z;
+      ctx.fillStyle = g.ok ? (punk ? `rgba(${P.glow},0.3)` : 'rgba(255,225,77,0.45)') : 'rgba(210,63,58,0.4)';
+      ctx.fillRect(gx + 2, gy + 2, gs - 4, gs - 4);
+      ctx.strokeStyle = g.ok ? P.hi : P.red; ctx.lineWidth = lw(0.05); ctx.strokeRect(gx + 2, gy + 2, gs - 4, gs - 4);
+      if (z >= 18) { ctx.fillStyle = punk ? '#f0e9dc' : P.ink; ctx.font = `700 ${Math.min(gs * 0.45, z * 0.5)}px ${FONT_SMALL}`; ctx.fillText(g.glyph, gx + gs / 2, gy + gs / 2 + 1); }
     }
   }
 
@@ -821,6 +919,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
   if (e.kind === 'extractor' || e.kind === 'depot' || e.kind === 'sampler') port(e.dir, P.plate);
   else if (e.kind === 'analyzer') { port(portDir(e.dir, 0), '#7fc06a', '陽'); port(portDir(e.dir, 1), P.red, '陰'); }
   else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), P.plate);
+  else if (e.kind === 'station') { if (e.role === 'out') for (const i of [0, 1]) { const p = slotPort(e, i); port(p.d, P.plate, undefined, p.x + 0.5 - mx, p.y + 0.5 - my); } }
   else if (e.outOrder) e.outOrder.forEach((s2, i) => { const p = outPort(e, i); port(p.d, sub(s2).color, label(s2), p.x + 0.5 - mx, p.y + 0.5 - my, s2); });
   else if (unset) { const p = slotPort(e, 0); port(p.d, P.plate, undefined, p.x + 0.5 - mx, p.y + 0.5 - my); }
   if (e.kind === 'electrolyzer' && e.big) poleMarks(ctx, P, e, cx, cy, pu, line);
@@ -906,6 +1005,7 @@ function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: 
     if (e.kind === 'extractor' || e.kind === 'depot' || e.kind === 'sampler') port(e.dir, '#eef0ea');
     else if (e.kind === 'analyzer') { port(portDir(e.dir, 0), '#7fc06a', '陽'); port(portDir(e.dir, 1), P.red, '陰'); }
     else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), '#eef0ea');
+    else if (e.kind === 'station') { if (e.role === 'out') for (const i of [0, 1]) { const p = slotPort(e, i); port(p.d, '#eef0ea', undefined, p.x + 0.5 - mx, p.y + 0.5 - my); } }
     else if (e.outOrder) e.outOrder.forEach((s2, i) => { const p = outPort(e, i); port(p.d, sub(s2).color, label(s2), p.x + 0.5 - mx, p.y + 0.5 - my, s2); });
     else if (unset) { const p = slotPort(e, 0); port(p.d, '#eef0ea', undefined, p.x + 0.5 - mx, p.y + 0.5 - my); }
   };
@@ -1106,6 +1206,22 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
     case 'depot': {
       rr(ctx, cx - u * 0.26, cy - u * 0.26, u * 0.52, u * 0.52, u * 0.06); inked(info.color);
       if (e.sub) ctx.drawImage(sprite(e.sub), cx - u * 0.25, cy - u * 0.25, u * 0.5, u * 0.5);
+      break;
+    }
+    case 'station': {
+      // 駅舎：路線色の屋根に番線の数字。積む駅は上向き、降ろす駅は下向きの矢じり
+      const col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length], out = e.role === 'out';
+      rr(ctx, cx - u * 0.3, cy - u * 0.22, u * 0.6, u * 0.44, u * 0.05); inked(col);
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = line * 0.6;
+      for (const k of [-0.1, 0.1]) { ctx.beginPath(); ctx.moveTo(cx - u * 0.3, cy + u * k); ctx.lineTo(cx + u * 0.3, cy + u * k); ctx.stroke(); }
+      disc(cx, cy, u * 0.14); inked('#f3f1e8');
+      ctx.fillStyle = '#14181d'; ctx.font = `700 ${u * 0.18}px ${FONT_MONO}`; ctx.textAlign = 'center';
+      ctx.fillText(String(e.ch || 1), cx, cy + u * 0.01);
+      ctx.fillStyle = P.ink;
+      ctx.beginPath();
+      if (out) { ctx.moveTo(cx - u * 0.08, cy + u * 0.27); ctx.lineTo(cx + u * 0.08, cy + u * 0.27); ctx.lineTo(cx, cy + u * 0.36); }
+      else { ctx.moveTo(cx - u * 0.08, cy - u * 0.27); ctx.lineTo(cx + u * 0.08, cy - u * 0.27); ctx.lineTo(cx, cy - u * 0.36); }
+      ctx.closePath(); ctx.fill();
       break;
     }
     case 'vent': {

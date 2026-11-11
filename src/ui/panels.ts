@@ -1,5 +1,5 @@
 import { ELEMENTS } from '../content/elements';
-import { MACHINES } from '../content/machines';
+import { LINE_COLORS, MACHINES } from '../content/machines';
 import { CONDITIONS, electronsOf, recipeById, RECIPES } from '../content/recipes';
 import { isCorrect, QUESTIONS, type Question } from '../content/questions';
 import { label, sub } from '../content/substances';
@@ -9,7 +9,7 @@ import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
 import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
-import { SRS_STEPS, UPGRADE_COST, beltSpeed, discover, dueIds, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { LINES, SRS_STEPS, STATION_CAP, UPGRADE_COST, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { chip, equation, openConfig, type SheetActions } from './config';
 import { h } from './dom';
 import { sfx } from './sound';
@@ -303,6 +303,34 @@ export function showAnalyzer(c: PanelCtx, e: Ent, extra: HTMLElement) {
       h('div', { class: 'menu' }, ...TESTS.filter((t) => t.group === g).map((t) =>
         h('button', { class: 'ghost' + (e.test === t.id ? ' picked' : ''), type: 'button', id: `test-${t.id}`, onclick: () => { e.test = t.id; sfx.ok(); showAnalyzer(c, e, extra); } }, t.name))),
     ]),
+    extra);
+}
+
+// ---------------- 貨物駅 ----------------
+
+
+export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
+  const again = () => showStation(c, e, extra);
+  const role = (id: 'in' | 'out', text: string) => h('button', { class: 'ghost' + (e.role === id ? ' picked on' : ''), type: 'button', id: `st-role-${id}`, onclick: () => { e.role = id; e.buf = []; e.tr = undefined; sfx.ok(); again(); } }, text);
+  const to = e.role === 'in' ? stationTarget(c.w, e) : null;
+  const feeders = e.role === 'out' ? [...c.w.ents.values()].filter((n) => n.kind === 'station' && n.role === 'in' && n.ch === e.ch).length : 0;
+  const buf = (e.buf ?? []).map((s) => (s.startsWith('!') ? s.slice(1) : s));
+  const kinds = [...new Set(buf)];
+  c.show(h('header', {}, h('h2', {}, '貨物駅'), closeBtn(c)),
+    h('h3', {}, '① 役割'),
+    h('div', { class: 'row' }, role('in', '積む駅（ここから運び出す）'), role('out', '降ろす駅（ここへ届く）')),
+    h('h3', {}, '② 路線番号'),
+    h('p', { class: 'muted' }, '同じ番号の「積む駅」と「降ろす駅」が結ばれる。積む駅は、同じ番号のいちばん近い降ろす駅へ運ぶ。'),
+    h('div', { class: 'chips' }, ...Array.from({ length: LINES }, (_, i) => {
+      const b = h('button', { class: 'chip plain line' + (e.ch === i + 1 ? ' on' : ''), type: 'button', id: `st-line-${i + 1}`, onclick: () => { e.ch = i + 1; e.tr = undefined; sfx.tap(); again(); } }, `${i + 1} 番線`);
+      b.style.setProperty('--line', LINE_COLORS[i]);
+      return b;
+    })),
+    h('p', { class: 'status' }, e.role === 'in'
+      ? (to ? `行き先：${Math.round(Math.hypot(to.x - e.x, to.y - e.y))} マス先の降ろす駅。片道 約 ${(Math.hypot(to.x - e.x, to.y - e.y) / trainSpeed(c.w)).toFixed(1)} 秒。列車は ${e.tr && (e.tr.p > 0 || e.tr.back) ? (e.tr.back ? '戻っている' : `${e.tr.cargo.length} 個を運んでいる`) : '駅で積んでいる'}。` : `${e.ch} 番線の降ろす駅がまだない。行き先に貨物駅を置き、「降ろす駅」にして同じ番号にしろ。`)
+      : `${e.ch} 番線の積む駅：${feeders} か所。届いたものは、正面の 2 つの口から出る。`),
+    h('p', { class: 'muted' }, `駅にあるもの：${buf.length} / ${STATION_CAP} 個`),
+    kinds.length ? h('div', { class: 'chips' }, ...kinds.map((s) => { const b = chip(s); b.disabled = true; b.append(h('span', { class: 'muted' }, `×${buf.filter((x) => x === s).length}`)); return b; })) : null,
     extra);
 }
 

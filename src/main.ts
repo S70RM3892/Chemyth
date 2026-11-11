@@ -8,7 +8,7 @@ import { recipeById } from './content/recipes';
 import { about, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
 import { attachInput, Z_MIN } from './ui/input';
-import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
+import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showStation, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
 import { showDrills, showStructure } from './ui/practice';
 import { draw, type Camera } from './ui/render';
 import { showStats, type StatsCtx } from './ui/stats';
@@ -21,10 +21,17 @@ import { drawToken, elementIcon } from './ui/token';
 type Placeable = Exclude<Kind, 'hub' | 'part'>;
 type Tool = 'pan' | 'erase' | 'area' | Placeable;
 /** 範囲コピーした設計図。左上からのずれで持つ */
-interface Stamp { kind: Placeable; dx: number; dy: number; dir: Dir; recipe?: string; outOrder?: string[]; outSlot?: number[]; test?: string; sub?: string }
+interface Stamp { kind: Placeable; dx: number; dy: number; dir: Dir; recipe?: string; outOrder?: string[]; outSlot?: number[]; test?: string; sub?: string; ch?: number; role?: 'in' | 'out' }
 type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir };
 const SESSION_LIMIT_MS = 25 * 60 * 1000;
-const BUILD: Placeable[] = ['belt', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'sampler', 'analyzer', 'collector', 'splitter', 'bridge', 'depot', 'vent'];
+const BUILD: Placeable[] = ['belt', 'bridge', 'tunnel', 'splitter', 'analyzer', 'station', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'sampler', 'depot', 'vent'];
+/** 道具の分類。道具が多いので、棚を分けて出す */
+const GROUPS: { id: string; name: string; tools: Tool[] }[] = [
+  { id: 'move', name: '運ぶ', tools: ['pan', 'belt', 'bridge', 'tunnel', 'splitter', 'analyzer', 'station'] },
+  { id: 'make', name: '作る', tools: ['extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector'] },
+  { id: 'store', name: '出し入れ', tools: ['sampler', 'depot', 'vent'] },
+  { id: 'edit', name: '編集', tools: ['area', 'erase'] },
+];
 const SPEEDS = [1, 2, 4, 0];
 /** 複製：同じ設定の装置を続けて置く */
 interface Clone { kind: Placeable; recipe?: string; outOrder?: string[]; outSlot?: number[]; big?: boolean; test?: string; sub?: string }
@@ -56,6 +63,8 @@ function boot(data: HotData) {
   /** 範囲選択の 2 つの角と、コピーした設計図 */
   let areaA: [number, number] | null = null, areaB: [number, number] | null = null;
   let blueprint: Stamp[] | null = null;
+  /** 設計図を置こうとしている場所（左上のマス） */
+  let ghost: [number, number] | null = null;
   /** 地図に稼働率の札を出すか */
   let overlay = store.meta().overlay === true;
   const app = $('app');
@@ -209,6 +218,7 @@ function boot(data: HotData) {
     if (kind === 'depot') { showDepot(panel(), e, extra()); return; }
     if (kind === 'sampler') { showSampler(panel(), e, extra()); return; }
     if (kind === 'analyzer') { showAnalyzer(panel(), e, extra()); return; }
+    if (kind === 'station') { showStation(panel(), e, extra()); return; }
     showSheet(h('header', {}, h('h2', {}, MACHINES[kind].name), closeBtn()),
       kind === 'extractor' ? h('p', { class: 'eq' }, `ここで採れるもの：${sub(resourceAt(e.x, e.y)).name}`) : null,
       h('div', { class: 'split' }, about(kind), sideOf(e)));
@@ -232,6 +242,7 @@ function boot(data: HotData) {
       h('li', {}, h('b', {}, '設定する'), '装置を置くと設定が開く。原料、生成物の化学式、係数、条件を自分で決める。蒸留塔・反応器・電解槽・電池は 2×2 マスで、出口が 6 か所ある。どの出口から何が出るかは、出口の絵柄でわかる。'),
       h('li', {}, h('b', {}, '納める'), 'ベルトを納品所までつなぐ。要らない副生成物は「廃棄口」へ。出口が詰まると装置は止まる。'),
       h('li', {}, h('b', {}, '強化する'), '研究点がたまったら「強化」。計算問題を解くと、採取・運搬・処理が速くなる。'),
+      h('li', {}, h('b', {}, '広げる'), '道具は「運ぶ・作る・出し入れ・編集」の棚に分かれている。遠くの資源地からは「貨物駅」の列車で運べ。装置やベルトの下は「地下ベルト」でくぐれる。「範囲」で囲んだラインは、コピーして回し、設計図として保存できる。'),
       h('li', {}, h('b', {}, '見直す'), '右上の「統計」で、納品の速さ、装置ごとの稼働率、止まっている理由がわかる。地図に稼働率を重ねて表示できる。'),
     ),
     h('p', { class: 'muted' }, '物質の絵柄は、元素ごとに決まった形の組み合わせでできている（「図鑑」で確認できる）。置いたものをタップすると、その場に「設定・回す・消す」が出る。間違えたら右上の「元に戻す」。'),
@@ -283,7 +294,9 @@ function boot(data: HotData) {
   const pick = (id: Tool, keepClone = false) => {
     tool = id;
     if (!keepClone) clone = null;
-    if (id !== 'area') { blueprint = null; areaA = areaB = null; }
+    if (id !== 'area') { blueprint = null; ghost = null; areaA = areaB = null; }
+    const grp = GROUPS.find((g) => g.tools.includes(id));
+    if (grp) { tab = grp.id; paintTabs(); }
     paintArea();
     const t = TOOLS.find((x) => x.id === id)!;
     for (const [k, el] of buttons) { el.classList.toggle('on', k === tool); el.setAttribute('aria-pressed', String(k === tool)); }
@@ -296,6 +309,17 @@ function boot(data: HotData) {
     buttons.set(t.id, b);
     bar.append(b);
   }
+  // 道具の棚：分類ごとに切り替える
+  let tab = 'move';
+  const tabs = h('div', { id: 'tabs' }, ...GROUPS.map((g) => h('button', { type: 'button', id: `tab-${g.id}`, onclick: () => { tab = g.id; paintTabs(); sfx.tap(); } }, g.name)));
+  bar.before(tabs);
+  function paintTabs() {
+    for (const g of GROUPS) {
+      $(`tab-${g.id}`).classList.toggle('on', g.id === tab);
+      for (const id of g.tools) buttons.get(id)?.classList.toggle('off', g.id !== tab);
+    }
+  }
+  paintTabs();
   /** 指令が進むと使える道具が増える */
   const refreshTools = (announce: boolean) => {
     for (const t of TOOLS) {
@@ -324,7 +348,7 @@ function boot(data: HotData) {
   const placeAct = () => {
     if (!selected || !modal.hidden || !slot) { act.hidden = true; return; }
     const hub = selected.kind === 'hub';
-    actOpen.textContent = isMachine(selected.kind) ? '設定' : selected.kind === 'depot' || selected.kind === 'sampler' ? '選ぶ' : selected.kind === 'analyzer' ? '検査' : '説明';
+    actOpen.textContent = isMachine(selected.kind) || selected.kind === 'station' ? '設定' : selected.kind === 'depot' || selected.kind === 'sampler' ? '選ぶ' : selected.kind === 'analyzer' ? '検査' : '説明';
     actTurn.hidden = actErase.hidden = hub;
     actCopy.hidden = !copyable(selected);
     act.hidden = false;
@@ -348,7 +372,7 @@ function boot(data: HotData) {
     begin: () => { group = null; camTo = null; cross = null; },
     mode: (x, y) => (tool === 'area' ? (blueprint ? 'pan' : 'stroke') : tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y)) ? 'stroke' : 'pan'),
     tap(x, y) {
-      if (tool === 'area') { if (blueprint) pasteAt(x, y); else { areaA = areaB = null; paintArea(); } return; }
+      if (tool === 'area') { if (blueprint) { ghost = [x, y]; sfx.tap(); } else areaA = areaB = null; paintArea(); return; }
       const e = at(world, x, y);
       if (tool === 'erase') { if (e?.kind === 'hub') toast('納品所は消せない'); else if (doErase(x, y)) sfx.erase(); else toast('ここには何もない', 1200); return; }
       if (e) {
@@ -375,7 +399,7 @@ function boot(data: HotData) {
         placed.sub = clone.sub;
         return;
       }
-      if (isMachine(tool) || tool === 'depot' || tool === 'sampler' || tool === 'analyzer') inspect(placed);
+      if (isMachine(tool) || tool === 'depot' || tool === 'sampler' || tool === 'analyzer' || tool === 'station') inspect(placed);
     },
     stroke(x, y, prev) {
       selected = null;
@@ -401,24 +425,43 @@ function boot(data: HotData) {
     },
   });
 
-  // ---- 範囲：まとめてコピー・貼りつけ・消去 ----
+  // ---- 範囲：まとめてコピー・貼りつけ・消去。設計図は回せて、保存できる ----
   const areaAct = $('area-act');
+  const BP_KEY = 'chemyth-v2-blueprints';
+  const library = (): { name: string; stamps: Stamp[] }[] => { try { return JSON.parse(localStorage.getItem(BP_KEY) || '[]'); } catch { return []; } };
+  const saveLibrary = (l: { name: string; stamps: Stamp[] }[]) => { try { localStorage.setItem(BP_KEY, JSON.stringify(l.slice(0, 16))); } catch { /* 保存できなくても遊べる */ } };
+  const sizeOfKind = (k: Placeable) => (BIG.includes(k) ? 2 : 1);
   const areaRect = (): [number, number, number, number] | null => (areaA && areaB ? [Math.min(areaA[0], areaB[0]), Math.min(areaA[1], areaB[1]), Math.max(areaA[0], areaB[0]), Math.max(areaA[1], areaB[1])] : null);
   const inArea = () => {
     const r = areaRect();
     return r ? [...world.ents.values()].filter((e) => e.kind !== 'hub' && e.kind !== 'part' && e.x >= r[0] && e.x <= r[2] && e.y >= r[1] && e.y <= r[3]) : [];
   };
+  /** 設計図を置こうとしている場所の見本 */
+  const ghostCells = () => (blueprint && ghost ? blueprint.map((b) => {
+    const sz = sizeOfKind(b.kind), x = ghost![0] + b.dx, y = ghost![1] + b.dy;
+    let free = true;
+    for (let ix = 0; ix < sz; ix++) for (let iy = 0; iy < sz; iy++) if (at(world, x + ix, y + iy)) free = false;
+    return { x, y, size: sz, ok: free, dir: b.dir, glyph: MACHINES[b.kind].glyph };
+  }) : null);
   function paintArea() {
-    const n = inArea().length;
-    areaAct.hidden = tool !== 'area' || (!blueprint && !areaRect());
-    $('area-n').textContent = blueprint ? `設計図 ${blueprint.length} 個を貼りつけ中。左上にしたい場所をタップ。` : `${n} 個を選択中`;
-    $('area-copy').hidden = $('area-del').hidden = !!blueprint || n === 0;
+    const n = inArea().length, bp = !!blueprint;
+    areaAct.hidden = tool !== 'area';
+    $('area-n').textContent = bp ? (ghost ? `設計図 ${blueprint!.length} 個。場所を変えるなら別のマスをタップ。` : `設計図 ${blueprint!.length} 個。置きたい場所の左上をタップ。`) : areaRect() ? `${n} 個を選択中` : 'なぞって四角く囲め。';
+    $('area-copy').hidden = $('area-del').hidden = bp || n === 0;
+    $('area-rot').hidden = $('area-save').hidden = $('area-put').hidden = !bp;
+    ($('area-put') as HTMLButtonElement).disabled = !ghost;
+    $('area-lib').hidden = bp || !library().length;
+    $('area-cancel').hidden = !bp && !areaRect();
   }
+  const toStamps = (r: [number, number, number, number], es: Ent[]): Stamp[] => es.map((e) => ({ kind: e.kind as Placeable, dx: e.x - r[0], dy: e.y - r[1], dir: e.dir, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, test: e.test, sub: e.sub, ch: e.ch, role: e.role }));
   $('area-copy').onclick = () => {
     const r = areaRect(), es = inArea();
     if (!r || !es.length) return;
-    blueprint = es.map((e) => ({ kind: e.kind as Placeable, dx: e.x - r[0], dy: e.y - r[1], dir: e.dir, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, test: e.test, sub: e.sub }));
-    areaA = areaB = null;
+    blueprint = toStamps(r, es);
+    // 左上の空きを詰める
+    const mx = Math.min(...blueprint.map((b) => b.dx)), my = Math.min(...blueprint.map((b) => b.dy));
+    for (const b of blueprint) { b.dx -= mx; b.dy -= my; }
+    areaA = areaB = null; ghost = null;
     sfx.ok();
     paintArea();
   };
@@ -429,13 +472,45 @@ function boot(data: HotData) {
     sfx.erase();
     paintArea();
   };
-  $('area-cancel').onclick = () => { blueprint = null; areaA = areaB = null; paintArea(); };
+  /** 時計回りに 90° 回す。2×2 の装置は、回したあとの左上のマスを新しい位置にする */
+  $('area-rot').onclick = () => {
+    if (!blueprint) return;
+    const H = Math.max(...blueprint.map((b) => b.dy + sizeOfKind(b.kind)));
+    blueprint = blueprint.map((b) => ({ ...b, dx: H - b.dy - sizeOfKind(b.kind), dy: b.dx, dir: ((b.dir + 1) % 4) as Dir }));
+    sfx.tap();
+    paintArea();
+  };
+  $('area-save').onclick = () => {
+    if (!blueprint) return;
+    const l = library(), big = blueprint.filter((b) => BIG.includes(b.kind));
+    const what = [...new Set(big.map((b) => recipeById(b.recipe)?.name ?? MACHINES[b.kind].name))].slice(0, 2).join('・') || `${blueprint.length} 個`;
+    l.unshift({ name: `設計図 ${l.length + 1}：${what}`, stamps: blueprint });
+    saveLibrary(l);
+    toast('設計図を保存した。「範囲」の「設計図」から、どのノートでも呼び出せる。', 3500);
+    sfx.ok();
+    paintArea();
+  };
+  const showLibrary = () => {
+    const l = library();
+    showSheet(h('header', {}, h('h2', {}, '設計図'), closeBtn()),
+      h('p', { class: 'muted' }, '「範囲」で囲んでコピーし、「保存」したもの。この端末に残り、どのノートからも使える。'),
+      l.length ? h('div', { class: 'menu' }, ...l.map((bp, i) => {
+        const n = (f: (b: Stamp) => boolean) => bp.stamps.filter(f).length;
+        return h('div', { class: 'row bp' },
+          h('span', { class: 'stack' }, h('b', {}, bp.name), h('span', { class: 'muted' }, `装置 ${n((b) => BIG.includes(b.kind))}・ベルト類 ${n((b) => b.kind === 'belt' || b.kind === 'bridge' || b.kind === 'tunnel')}・ほか ${n((b) => !BIG.includes(b.kind) && b.kind !== 'belt' && b.kind !== 'bridge' && b.kind !== 'tunnel')}`)),
+          h('button', { class: 'primary', type: 'button', id: `bp-use-${i}`, onclick: () => { blueprint = bp.stamps.map((b) => ({ ...b })); ghost = null; areaA = areaB = null; closeModal(); pick('area', true); } }, '使う'),
+          h('button', { class: 'ghost warn', type: 'button', id: `bp-del-${i}`, onclick: () => { l.splice(i, 1); saveLibrary(l); showLibrary(); } }, '消す'));
+      })) : h('p', {}, 'まだ保存した設計図はない。'));
+  };
+  $('area-lib').onclick = showLibrary;
+  $('area-cancel').onclick = () => { blueprint = null; ghost = null; areaA = areaB = null; paintArea(); };
+  $('area-put').onclick = () => { if (ghost) pasteAt(ghost[0], ghost[1]); };
   function pasteAt(x: number, y: number) {
     if (!blueprint) return;
     group = null;
     let ok = 0;
     // 大きい装置から先に置く（ベルトに場所を取られないように）
-    for (const b of [...blueprint].sort((p, q) => Number(BIG.includes(q.kind)) - Number(BIG.includes(p.kind)))) {
+    for (const b of [...blueprint].sort((p, q) => sizeOfKind(q.kind) - sizeOfKind(p.kind))) {
       if (doPlace(b.kind, x + b.dx, y + b.dy, b.dir)) continue;
       ok++;
       const placed = at(world, x + b.dx, y + b.dy)!;
@@ -443,9 +518,12 @@ function boot(data: HotData) {
       if (r && b.outOrder) { configure(placed, r, b.outOrder.filter((s) => s !== 'e')); placed.outOrder = [...b.outOrder]; placed.outBuf = b.outOrder.map(() => 0); if (b.outSlot) placed.outSlot = [...b.outSlot]; }
       placed.test = b.test;
       placed.sub = b.sub;
+      if (b.kind === 'station') { placed.ch = b.ch ?? 1; placed.role = b.role ?? 'in'; }
     }
-    if (ok < blueprint.length) toast(`${blueprint.length} 個のうち ${ok} 個を置いた。残りは場所がふさがっていた。`); else toast(`${ok} 個を貼りつけた。`, 1500);
+    if (ok < blueprint.length) toast(`${blueprint.length} 個のうち ${ok} 個を置いた。残りは場所がふさがっていた。`); else toast(`${ok} 個を置いた。続けて別の場所にも置ける。`, 1800);
     ok ? sfx.place() : sfx.bad();
+    ghost = null;
+    paintArea();
   }
 
   // ---- 指令の表示 ----
@@ -547,7 +625,7 @@ function boot(data: HotData) {
       } else input.tick(dt);
       if (selected && at(world, selected.x, selected.y) !== selected) selected = null;
       if (lastSeen !== world.seen) { lastSeen = world.seen; refreshTools(true); }
-      draw(ctx, cw, ch, world, cam, now / 1000, dt, { tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null });
+      draw(ctx, cw, ch, world, cam, now / 1000, dt, { tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : null });
       hud();
     }
     placeAct();
