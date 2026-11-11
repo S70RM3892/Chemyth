@@ -5,14 +5,17 @@ import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
 import { BIG, FEED_TIERS, addRail, removeRail, setRailMask, stationRoutes, FLOOR_DY, floorOf, groundY, has, liftPartner, footprint, inDoors, maxLanes, mergeDirs, slotCount, slotPort, at, autoDir, beltSpeed, configure, currentGoal, extractInterval, fedTier, flowStats, goalRate, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
 import { recipeById } from './content/recipes';
-import { about, diagram, openConfig } from './ui/config';
+import { about, chip, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
 import { attachInput, Z_MIN, type InputHandlers } from './ui/input';
-import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showPhoresis, showSettler, showSignal, showStation, showTank, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
+import { numPad, typeNumber, reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showPhoresis, showSettler, showSignal, showStation, showTank, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
 import { showDrills, showEssays, showStructure } from './ui/practice';
 import { draw, type Camera } from './ui/render';
 import { lanePaths, type LaneTile } from './engine/lanes';
+import { CASES, CASE_KIND, CASE_REWARD, limitStock, type Case, type CaseState } from './engine/cases';
+import { appearance, equationOf } from './content/looks';
 import { isSep, sepSlots } from './content/sep';
+import { showMock } from './ui/mock';
 import { decodeBlueprint, encodeBlueprint, type Stamp } from './engine/blueprint';
 import { showStats, type StatsCtx } from './ui/stats';
 import { setSound, sfx, soundOn, unlockAudio } from './ui/sound';
@@ -98,7 +101,9 @@ function boot(data: HotData) {
   window.addEventListener('pointerdown', () => unlockAudio(), { once: true });
   applyTheme(store.meta().theme ?? 'auto');
   applySkin(store.meta().skin ?? 'note');
-  const save = () => { if (slot) store.write(slot, serialize(world)); };
+  /** 課題を開いているあいだ、本編の工場は home に預けておく。world は課題の小さな工場 */
+  let sandbox: { c: Case; home: World; done: boolean } | null = null;
+  const save = () => { if (slot) store.write(slot, serialize(sandbox ? sandbox.home : world)); };
   hot?.snapshot?.(() => (slot ? { slot, save: serialize(world) } : {}));
 
   const resize = () => {
@@ -228,6 +233,7 @@ function boot(data: HotData) {
 
   /** 置いたものの説明。設定のある装置は設定シートへ */
   const inspect = (e: Ent) => {
+    if (e.sealed) { showSealed(e); return; }
     if (isMachine(e.kind)) { modal.hidden = false; sheet.scrollTop = 0; openConfig(sheet, world, e, sheetActions); return; }
     if (e.kind === 'hub') {
       const g = currentGoal(world);
@@ -311,7 +317,12 @@ function boot(data: HotData) {
         item('m-drills', '連鎖計算（理論の大問。数値は毎回変わる）', () => showDrills(panel())),
         item('m-structure', '構造決定（異性体の数え上げ・構造の特定・ペプチドの配列）', () => showStructure(panel())),
         item('m-passages', 'リード文課題（空欄補充）', () => showPassages(panel())),
-        item('m-essays', '論述（紙に書いて、要点で自己採点）', () => showEssays(panel()))),
+        item('m-essays', '論述（紙に書いて、要点で自己採点）', () => showEssays(panel())),
+        item('m-mock', '模試（自分の工場がそのまま問題文になる）', () => showMock(panel()))),
+      h('h3', {}, '課題'),
+      h('div', { class: 'menu' },
+        item('m-cases', `課題（壊れた工場を直せ・限られた原料・中身の見えない装置）　${(sandbox ? sandbox.home : world).cases.length} / ${CASES.length}`, () => showCases()),
+        sandbox ? item('m-case-leave', '課題をやめて、自分の工場に戻る', () => { leaveCase(); closeModal(); }) : null),
       h('h3', {}, 'ふり返り'),
       h('div', { class: 'menu' },
         item('m-syllabus', '範囲表（入試範囲のどこまで進んだか）', () => showSyllabus(panel())),
@@ -332,7 +343,7 @@ function boot(data: HotData) {
   $('b-up').onclick = () => showUpgrades(panel());
   $('b-book').onclick = () => showBook(panel());
   $('b-review').onclick = () => showReview(panel());
-  $('goal').onclick = () => showChapters(panel());
+  $('goal').onclick = () => (sandbox ? showCaseBrief() : showChapters(panel()));
   const speedBtn = $('b-speed');
   const paintSpeed = () => { speedBtn.textContent = speed === 0 ? '⏸ 停止中' : `▶ ×${speed}`; speedBtn.classList.toggle('hot', speed !== 1); };
   speedBtn.onclick = () => { speed = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length]; paintSpeed(); sfx.tap(); };
@@ -731,10 +742,134 @@ function boot(data: HotData) {
     paintArea();
   }
 
+  // ---- 課題：本編とは別の小さな工場を開く ----
+  const resetView = () => {
+    undo.length = 0; group = null; selected = null; undoBtn.disabled = true; shownGoal = ''; clone = null; hover = null;
+    setFloor(0); paintFloor();
+    cam.x = hubCX; cam.y = hubCY; cam.z = nearZoom(); camTo = null;
+    refreshTools(false);
+    pick('pan');
+  };
+  function enterCase(c: Case) {
+    const home = sandbox ? sandbox.home : world;
+    save();
+    const w = c.build((Date.now() % 9973) + 1);
+    // 覚えたこと・間違いの記録・研究は、本編と同じものを使う
+    w.learned = home.learned; w.srs = home.srs; w.mistakes = home.mistakes; w.agents = home.agents; w.research = home.research; w.discovered = home.discovered; w.solved = home.solved;
+    sandbox = { c, home, done: false };
+    world = w;
+    speed = 1; paintSpeed();
+    resetView();
+    camTo = fitView();   // 課題の工場の全体が見えるところへ
+    showCaseBrief();
+  }
+  function leaveCase() {
+    if (!sandbox) return;
+    world = sandbox.home;
+    sandbox = null;
+    speed = 1; paintSpeed();
+    goalIco.hidden = false;
+    resetView();
+    save();
+  }
+  function showCases() {
+    const done = (sandbox ? sandbox.home : world).cases;
+    showSheet(h('header', {}, h('h2', {}, '課題'), closeBtn()),
+      h('p', { class: 'muted' }, `自分の工場とは別に、小さな工場を 1 つ渡す。いつでもやめて戻れる。初めて解くと研究点 +${CASE_REWARD}。`),
+      ...(['repair', 'limit', 'box'] as const).flatMap((k) => [
+        h('h3', {}, CASE_KIND[k]),
+        h('p', { class: 'muted' }, k === 'repair' ? '1 か所だけ誤った工場。止まり方や、出てくる物から、誤りを突き止めて直す。' : k === 'limit' ? '原料の数が決まっている。どちらが先に尽きるかを計算し、できる数を先に答える。数は毎回変わる。' : '封印された装置に入る物と、出てくる物の数だけから、中の反応を当てる。'),
+        h('div', { class: 'menu' }, ...CASES.filter((c) => c.kind === k).map((c) => h('button', { class: 'ghost' + (done.includes(c.id) ? ' picked' : ''), type: 'button', id: `case-${c.id}`, onclick: () => enterCase(c) },
+          h('b', {}, (done.includes(c.id) ? '✓ ' : '') + c.title)))),
+      ]));
+  }
+  function showCaseBrief() {
+    if (!sandbox) return;
+    const c = sandbox.c;
+    if (c.kind === 'limit' && !world.pred) { askPrediction(); return; }
+    showSheet(h('header', {}, h('h2', {}, c.title), closeBtn()),
+      h('p', {}, h('span', { class: 'pill' }, CASE_KIND[c.kind])),
+      h('p', { class: 'qtext' }, c.brief),
+      h('p', { class: 'status' }, c.check(world).text),
+      h('div', { class: 'row' },
+        h('button', { class: 'primary', type: 'button', id: 'case-go', onclick: closeModal }, '工場を見る'),
+        h('button', { class: 'ghost', type: 'button', id: 'case-leave', onclick: () => { leaveCase(); closeModal(); } }, 'やめて、自分の工場に戻る')));
+  }
+  /** 限られた原料：できる数と、残る数を、動かす前に答えさせる */
+  function askPrediction() {
+    if (!sandbox) return;
+    const c = sandbox.c, m = [...world.ents.values()].find((e) => e.recipe)!, r = recipeById(m.recipe)!, target = m.outOrder![0];
+    const stock = [...world.ents.values()].filter((e) => e.kind === 'sampler');
+    const vals = ['', ''];
+    let active = 0;
+    const slots = [0, 1].map((i) => h('button', { class: 'slot numslot', type: 'button', id: `pred-${i}`, onclick: () => { active = i; paint(); } }, ''));
+    const paint = () => slots.forEach((el, i) => { el.textContent = vals[i] || '数を入れる'; el.classList.toggle('on', i === active); el.classList.toggle('empty', !vals[i]); });
+    paint();
+    showSheet(h('header', {}, h('h2', {}, c.title), h('button', { class: 'ghost', type: 'button', id: 'case-leave', onclick: () => { leaveCase(); closeModal(); } }, 'やめる')),
+      h('p', {}, h('span', { class: 'pill' }, CASE_KIND[c.kind])),
+      h('p', { class: 'eq' }, equationOf(r)),
+      h('p', { class: 'qtext' }, `原料は ${stock.map((e) => `${label(e.sub!)} ${e.left} 個`).join('、')} しかない。`),
+      h('div', { class: 'row' }, h('span', { class: 'tag wide' }, `${label(target)} は最大で`), slots[0], h('span', {}, '個できる')),
+      h('div', { class: 'row' }, h('span', { class: 'tag wide' }, '反応せずに残る原料は、合わせて'), slots[1], h('span', {}, '個')),
+      h('p', { class: 'muted' }, '紙に書いて計算しろ。答えると工場が動き、結果と照らし合わせる。'),
+      numPad((k) => { vals[active] = typeNumber(vals[active], k).replace(/[-.]/g, '').slice(0, 4); paint(); }),
+      h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'pred-ok', onclick: () => {
+        if (vals.some((v) => v === '')) { toast('2 つとも答えろ。', 1600); return; }
+        world.pred = { out: Number(vals[0]), rest: Number(vals[1]) };
+        speed = 4; paintSpeed();
+        closeModal();
+        toast('予想を受け取った。工場を動かす。', 2200);
+      } }, '答えて、工場を動かす')));
+  }
+  function finishCase(st: CaseState) {
+    if (!sandbox) return;
+    const { c, home } = sandbox;
+    sandbox.done = true;
+    const first = st.ok && !home.cases.includes(c.id);
+    if (first) { home.cases.push(c.id); home.points += CASE_REWARD; }
+    if (st.ok) { stamp('解決'); sfx.goal(); } else sfx.bad();
+    if (!st.ok) home.mistakes.push({ machine: 'calc', recipe: c.id, part: 'calc', t: Date.now() });
+    save();
+    showSheet(h('header', {}, h('h2', {}, st.ok ? '解決' : '予想が違った'), closeBtn()),
+      h('p', { class: 'eq' }, c.title),
+      h('p', { class: 'status' }, st.text),
+      st.ok ? h('p', {}, first ? `研究点 +${CASE_REWARD}。` : 'この課題は前にも解いている。') : h('p', {}, '工場は計算どおりに動いた。予想のどこが違ったかを、下の解説で確かめろ。数を変えて、もう一度やれる。'),
+      h('p', { class: 'note' }, c.note),
+      h('div', { class: 'row' },
+        !st.ok || c.kind === 'limit' ? h('button', { class: st.ok ? 'ghost' : 'primary', type: 'button', id: 'case-again', onclick: () => enterCase(c) }, '数を変えて、もう一度') : null,
+        h('button', { class: 'ghost', type: 'button', id: 'case-list', onclick: () => { leaveCase(); showCases(); } }, '課題の一覧'),
+        h('button', { class: st.ok ? 'primary' : 'ghost', type: 'button', id: 'case-home', onclick: () => { leaveCase(); closeModal(); } }, '自分の工場に戻る')));
+  }
+  /** 封印された装置：設定は見せず、入った数と出てきた数だけを見せる */
+  function showSealed(e: Ent) {
+    const r = recipeById(e.recipe)!, n = e.n || 0;
+    showSheet(h('header', {}, h('h2', {}, '封印された装置'), closeBtn()),
+      h('p', {}, '中の設定は見えない。これまでに入った数と、出てきた数は次のとおり。'),
+      h('h3', {}, '入った数'),
+      h('div', { class: 'chips' }, ...r.inputs.map(([id, k]) => { const b = chip(id); b.disabled = true; b.append(h('span', { class: 'muted' }, `×${n * k}`)); return b; })),
+      h('h3', {}, '出てきた数'),
+      h('div', { class: 'chips' }, ...r.outputs.filter(([id]) => id !== 'e').map(([id, k]) => { const b = chip(id); b.disabled = true; b.append(h('span', { class: 'muted' }, `×${n * k}（${appearance(id) || '—'}）`)); return b; })),
+      h('p', { class: 'muted' }, '数の比から反応式を書け。条件や触媒は、出てくる物から考える。わかったら、空の装置に同じ反応を設定しろ。'));
+  }
+
   // ---- 指令の表示 ----
   const goalIco = $<HTMLCanvasElement>('goal-ico');
   let rateTick = -99;
   const hud = () => {
+    if (sandbox) {
+      // 課題のあいだは、指令の札に課題の内容を出す
+      const st = sandbox.c.check(world);
+      $('pts').textContent = String(sandbox.home.points);
+      $('goal-step').textContent = `課題：${CASE_KIND[sandbox.c.kind]}`;
+      $('goal-name').textContent = sandbox.c.title;
+      $('goal-hint').textContent = 'ここを押すと、課題の説明が出る。';
+      $('goal-count').textContent = '';
+      $('goal-rate').textContent = st.text;
+      $('goal-bar').style.width = st.done ? '100%' : '0%';
+      goalIco.hidden = true;
+      shownGoal = '';
+      return;
+    }
     const g = currentGoal(world), ch2 = CHAPTERS[world.chapter];
     $('pts').textContent = String(world.points);
     const due = reviewCount(world);
@@ -784,7 +919,7 @@ function boot(data: HotData) {
       if (!json) showHelp(true);
     },
   });
-  const toTitle = () => { save(); slot = 0; selected = null; app.classList.add('in-title'); title.show(); };
+  const toTitle = () => { leaveCase(); save(); slot = 0; selected = null; app.classList.add('in-title'); title.show(); };
 
   // ---- ループ ----
   let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0;
@@ -793,7 +928,8 @@ function boot(data: HotData) {
     const dt = Math.min(0.1, (now - prev) / 1000);
     prev = now;
     if (slot) {
-      if (modal.hidden) {
+      // 「限られた原料」は、予想を答えるまで動かさない
+      if (modal.hidden && !(sandbox?.c.kind === 'limit' && !world.pred)) {
         acc += dt * speed;
         let guard = 0;
         const s0 = PERF ? performance.now() : 0;
@@ -801,7 +937,9 @@ function boot(data: HotData) {
         if (PERF) PERF.step.push(performance.now() - s0);
         if (acc > STEP * 4) acc = 0;
       }
+      if (sandbox && !sandbox.done && modal.hidden) { const st = sandbox.c.check(world); if (st.done) finishCase(st); }
       for (const ev of world.events.splice(0)) {
+        if (sandbox) continue;   // 課題の工場の出来事は、本編の進み具合に数えない
         if (ev === 'goal-done' || ev === 'chapter-done') {
           // 操業評価：指令を終えた時点の納品の速さ
           const gr = world.lastGrade;

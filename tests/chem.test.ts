@@ -1696,3 +1696,135 @@ describe('抽出分離と電気泳動', () => {
     expect(at(w2, 10, 10)!.bad).toBe('ions:Ag.Cu');
   });
 });
+
+describe('課題：壊れた工場・限られた原料・中身の見えない装置', () => {
+  const run = (w: ReturnType<typeof newWorld>, sec: number) => { for (let i = 0; i < sec * 60; i++) step(w, 1 / 60); };
+
+  it('課題の一覧：id が重ならず、3 種類ともある', async () => {
+    const { CASES } = await import('../src/engine/cases');
+    expect(new Set(CASES.map((c) => c.id)).size).toBe(CASES.length);
+    expect(CASES.filter((c) => c.kind === 'repair').length).toBe(6);
+    expect(CASES.filter((c) => c.kind === 'limit').length).toBe(4);
+    expect(CASES.filter((c) => c.kind === 'box').length).toBe(4);
+  });
+
+  it('壊れた工場：そのままでは目的の物が届かず、正しく直すと届く', async () => {
+    const { CASES } = await import('../src/engine/cases');
+    for (const c of CASES.filter((x) => x.kind === 'repair')) {
+      const w = c.build(1);
+      run(w, 90);
+      expect(c.check(w).done, `${c.id}：壊れたままでは達成しない`).toBe(false);
+      c.fix!(w);
+      run(w, 150);
+      expect(c.check(w).done, `${c.id}：直すと達成する`).toBe(true);
+    }
+  });
+
+  it('限られた原料：できる数と残る数は、係数で割った小さいほうで決まる。工場の結果と一致する', async () => {
+    const { CASES, limitAnswer, limitStock } = await import('../src/engine/cases');
+    // N₂ 10 個と H₂ 21 個：H₂ が先に尽きる（7 回）。NH₃ 14 個、残り N₂ 3 個
+    expect(limitAnswer('haber-bosch', 'NH3', [10, 21])).toEqual({ runs: 7, out: 14, rest: 3 });
+    expect(limitAnswer('contact', 'SO3', [9, 20])).toEqual({ runs: 4, out: 8, rest: 1 + 16 });
+    for (const c of CASES.filter((x) => x.kind === 'limit')) {
+      for (const seed of [1, 2, 3]) {
+        const w = c.build(seed);
+        const stock = [...w.ents.values()].filter((e) => e.kind === 'sampler').map((e) => e.left!);
+        expect(stock.every((n) => n > 0)).toBe(true);
+        const machine = [...w.ents.values()].find((e) => e.recipe)!, target = machine.outOrder![0];
+        expect(limitStock(machine.recipe!, seed)).toEqual(stock);
+        const ans = limitAnswer(machine.recipe!, target, stock);
+        expect(c.check(w)).toMatchObject({ done: false, text: '先に予想を答えろ' });
+        w.pred = { out: ans.out, rest: ans.rest };
+        run(w, 240);
+        // 原料を捨てずに使い切り、計算どおりの数だけできる
+        expect(w.delivered[target], `${c.id} seed ${seed}`).toBe(ans.out);
+        expect(Object.keys(w.spilled).length).toBe(0);
+        expect(c.check(w)).toMatchObject({ done: true, ok: true });
+        // 予想が違っていれば、終わっても正解にならない
+        w.pred = { out: ans.out + 1, rest: ans.rest };
+        expect(c.check(w)).toMatchObject({ done: true, ok: false });
+      }
+    }
+    // seed が変わると数も変わる
+    expect(limitStock('haber-bosch', 1)).not.toEqual(limitStock('haber-bosch', 2));
+  });
+
+  it('中身の見えない装置：封印された装置は動いてタンクに数がたまり、同じ反応を設定すると正解になる', async () => {
+    const { CASES } = await import('../src/engine/cases');
+    for (const c of CASES.filter((x) => x.kind === 'box')) {
+      const w = c.build(1);
+      const sealed = [...w.ents.values()].find((e) => e.sealed)!, r = rec(sealed.recipe!);
+      run(w, 40);
+      expect(sealed.n!, c.id).toBeGreaterThan(3);
+      // 出てきた数の比が、係数の比になっている
+      const tanks = [...w.ents.values()].filter((e) => e.kind === 'tank');
+      expect(tanks.length).toBe(sealed.outOrder!.length);
+      for (const [s, n] of r.outputs) { const t = tanks.find((x) => x.sub === s)!; expect(Math.abs(t.cnt! - sealed.n! * n), `${c.id} ${s}`).toBeLessThanOrEqual(n); }
+      expect(c.check(w).done).toBe(false);
+      // 別の反応を設定しても正解にならない
+      const twin = [...w.ents.values()].find((e) => e.kind === sealed.kind && !e.sealed)!;
+      const other = RECIPES.find((x) => x.machine === sealed.kind && x.id !== sealed.recipe)!;
+      configure(twin, other, other.outputs.map(([s]) => s).filter((s) => s !== 'e'), other.machine === 'electrolyzer' ? other.outputs.map(() => 'c' as const) : undefined);
+      expect(c.check(w).done).toBe(false);
+      c.fix!(w);
+      expect(c.check(w)).toMatchObject({ done: true, ok: true });
+    }
+  });
+});
+
+describe('模試：自分の工場から', () => {
+  it('どの反応からも、答えの決まった小問が作れる', async () => {
+    const { questionsFor, numOk, molarMass, MASS } = await import('../src/content/mock');
+    expect(molarMass('H2SO4')).toBe(98);
+    expect(molarMass('NH3')).toBe(17);
+    expect(molarMass('air')).toBeNull();
+    for (const el of ELEMENTS) expect(MASS[el.sym], el.sym).toBeGreaterThan(0);
+    let total = 0, none = 0;
+    for (const r of RECIPES) {
+      let a = 12345;
+      const rnd = () => { a = (a * 1664525 + 1013904223) >>> 0; return a / 4294967296; };
+      const qs = questionsFor(r, '①', 2, rnd);
+      total += qs.length; if (!qs.length) none++;
+      for (const q of qs) {
+        expect(q.recipe).toBe(r.id);
+        expect(q.text.length, r.id).toBeGreaterThan(10);
+        if (q.kind === 'num') { expect(Number.isFinite(q.answer as number), `${r.id} ${q.topic}`).toBe(true); expect(q.answer as number).toBeGreaterThan(0); expect(numOk(q, q.answer as number)).toBe(true); expect(numOk(q, (q.answer as number) * 1.1)).toBe(false); }
+        else { expect(q.choices!, `${r.id} ${q.topic}`).toContain(q.answer); expect(new Set(q.choices).size).toBe(q.choices!.length); expect(q.choices!.length).toBeGreaterThanOrEqual(3); }
+      }
+    }
+    expect(total).toBeGreaterThan(RECIPES.length * 2);
+    expect(none).toBeLessThan(RECIPES.length * 0.2);
+  });
+
+  it('量的関係と質量の計算は、反応式の係数どおりになる', async () => {
+    const { questionsFor } = await import('../src/content/mock');
+    let a = 7;
+    const rnd = () => { a = (a * 1664525 + 1013904223) >>> 0; return a / 4294967296; };
+    const qs = questionsFor(rec('haber-bosch'), '①', 3, rnd);
+    const coef = qs.find((q) => q.topic === '反応式')!;
+    expect(coef.answer).toBe(3);                                  // N₂ + x H₂ ⇄ 2NH₃
+    expect(coef.text).toContain('x H₂');
+    const amount = qs.find((q) => q.topic === '量的関係')!;
+    const [used, made] = [Number(amount.text.match(/合わせて (\d+) 個/)![1]), amount.answer as number];
+    // N₂ 1 : H₂ 3 : NH₃ 2 のどれかの比になっている
+    expect([2, 2 / 3]).toContain(made / used);
+    expect(qs.some((q) => q.topic === '化学平衡' && q.answer === '低温・高圧')).toBe(true);
+    expect(qs.some((q) => q.kind === 'choice' && q.answer === 'Fe₃O₄')).toBe(true);
+  });
+
+  it('工場の反応から大問を作る：つながった反応を選び、工程の順に並べる', async () => {
+    const { makeMock } = await import('../src/content/mock');
+    expect(makeMock([], 1)).toBeNull();
+    const m = makeMock([{ id: 'precip-agcl', count: 1 }, { id: 'ostwald-1', count: 2 }, { id: 'ostwald-2', count: 2 }, { id: 'ostwald-3', count: 1 }, { id: 'haber-bosch', count: 4 }], 3)!;
+    expect(m.lead.length).toBeGreaterThanOrEqual(3);
+    expect(m.qs.length).toBeGreaterThanOrEqual(5);
+    expect(m.qs.length).toBeLessThanOrEqual(8);
+    // つながっていない沈殿反応は選ばれない
+    expect(m.lead.join('')).not.toContain('塩化銀');
+    expect(m.lead.some((x) => x.includes('原料になる'))).toBe(true);
+    // seed が変わると数値が変わる
+    const again = makeMock([{ id: 'haber-bosch', count: 1 }], 1)!, other = makeMock([{ id: 'haber-bosch', count: 1 }], 2)!;
+    expect(again.qs.length).toBeGreaterThanOrEqual(3);
+    expect(JSON.stringify(again.qs)).not.toBe(JSON.stringify(other.qs));
+  });
+});

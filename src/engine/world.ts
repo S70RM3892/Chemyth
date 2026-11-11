@@ -97,6 +97,10 @@ export interface Ent {
    *  貯蔵タンク：sub がためている物質、cnt と rcn が数（rcn は試薬棚や搬出口から出たぶん）、test が 'hold' なら出口を閉じている */
   buf2?: string[];
   buf3?: string[];
+  /** 試薬棚：出せる残りの数（課題で使う）。なければ無限 */
+  left?: number;
+  /** 課題の「中身の見えない装置」：反応の設定を見せない */
+  sealed?: boolean;
   cnt?: number;
   rcn?: number;
   /** 検知器・弁：ch が信号の番号。検知器の test は 'jam'（詰まっている間）か 'is:物質'（その物質が通ったあと 3 秒）。
@@ -176,6 +180,12 @@ export interface World {
   research: string[];
   /** 設問に正解して使えるようになった、系統分離の試薬（src/content/ions.ts の id） */
   agents: string[];
+  /** 解いた課題（src/engine/cases.ts の id） */
+  cases: string[];
+  /** 課題の工場：原料を入れすぎても捨てずに待たせる（原料の数を正確に数えるため）。保存しない */
+  noSpill?: boolean;
+  /** 課題「限られた原料」での予想。保存しない */
+  pred?: { out: number; rest: number };
   /** 正解した計算問題 */
   solved: string[];
   /** 演習（連鎖計算・構造決定）の型ごとの成績。tries：解いた回数、clean：全問正解した回数 */
@@ -431,7 +441,7 @@ export function newWorld(): World {
   const w: World = {
     ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
-    up: { extract: 0, belt: 0, machine: 0 }, research: [], agents: [], solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, sig: [], rails: new Map(), railRev: 0, occ: new Map(), buckets: [], playMs: 0, tick: 0, events: [], fx: [],
+    up: { extract: 0, belt: 0, machine: 0 }, research: [], agents: [], cases: [], solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, sig: [], rails: new Map(), railRev: 0, occ: new Map(), buckets: [], playMs: 0, tick: 0, events: [], fx: [],
   };
   for (const [x, y] of hubTiles(2)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
   return w;
@@ -1007,7 +1017,7 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): 
       // 使わない物質は受け取らない。ベルトはそこで止まるので、理由がわかるように印をつける
       if (!need) { t.bad = s; t.badT = w.tick; return false; }
       // 入れすぎた分はあふれて捨てる（1 本のベルトに混ぜても詰まらない）
-      if ((t.inBuf[s] || 0) >= need * 4) { w.fx.push({ x, y, type: 'spill', s }); bump(w.spilled, s); bucket(w).spill++; return true; }
+      if ((t.inBuf[s] || 0) >= need * 4) { if (w.noSpill) return false; w.fx.push({ x, y, type: 'spill', s }); bump(w.spilled, s); bucket(w).spill++; return true; }
       t.inBuf[s] = (t.inBuf[s] || 0) + 1;
       return true;
     }
@@ -1135,11 +1145,12 @@ export function step(w: World, dt: number) {
       }
       case 'sampler': {
         e.timer = (e.timer || 0) + dt;
-        if (!e.sub || e.timer < every * 1.5) break;
+        if (!e.sub || e.timer < every * 1.5 || e.left === 0) break;
         const set = e.sub.startsWith('set:') ? setById(e.sub.slice(4)) : undefined;
         const s = set ? set.members[(e.rr || 0) % set.members.length] : e.sub;
         if (!hasSub(s)) break;
-        if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, s, !set)) { e.timer = 0; e.rr = ((e.rr || 0) + 1) % 1000; }
+        // 数を限った試薬棚（課題）から出たものは、反応させて納めたぶんを数える
+        if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, s, !set && e.left === undefined)) { e.timer = 0; e.rr = ((e.rr || 0) + 1) % 1000; if (e.left !== undefined) e.left--; }
         break;
       }
       case 'bridge': {
@@ -1295,7 +1306,7 @@ export function serialize(w: World): string {
   return JSON.stringify({
     v: SAVE_VERSION, ents: [...w.ents.values()].filter((e) => e.kind !== 'part'), chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
     rails: [...w.rails], hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
-    discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, research: w.research, agents: w.agents, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
+    discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, research: w.research, agents: w.agents, cases: w.cases, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
     playMs: Math.round(w.playMs), savedAt: Date.now(),
   });
 }
@@ -1354,6 +1365,7 @@ export function deserialize(json: string): World | null {
     w.up = { extract: d.up?.extract | 0, belt: d.up?.belt | 0, machine: d.up?.machine | 0 };
     w.solved = d.solved || [];
     w.agents = Array.isArray(d.agents) ? d.agents.filter((x: unknown) => typeof x === 'string') : [];
+    w.cases = Array.isArray(d.cases) ? d.cases.filter((x: unknown) => typeof x === 'string') : [];
     w.research = (Array.isArray(d.research) ? d.research : []).filter((id: string) => RESEARCH.some((r) => r.id === id));
     w.practice = d.practice || {};
     w.made = d.made || {};

@@ -273,8 +273,8 @@ export function showSyllabus(c: PanelCtx) {
 
 export function numPad(press: (k: string) => void): HTMLElement {
   return h('div', { class: 'keys numpad' }, ...['7', '8', '9', '4', '5', '6', '1', '2', '3', '−', '0', '.'].map((k) =>
-    h('button', { class: 'key n', type: 'button', onclick: () => press(k) }, k)),
-    h('button', { class: 'key fn wide', type: 'button', onclick: () => press('⌫') }, '⌫'));
+    h('button', { class: 'key n', type: 'button', id: `pad-${k}`, onclick: () => press(k) }, k)),
+    h('button', { class: 'key fn wide', type: 'button', id: 'pad-del', onclick: () => press('⌫') }, '⌫'));
 }
 export function typeNumber(text: string, k: string): string {
   if (k === '⌫') return text.slice(0, -1);

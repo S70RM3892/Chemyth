@@ -927,7 +927,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   {
     const plate = (e: Ent) => {
       const r = recipeById(e.recipe);
-      if (!r) return;
+      if (!r || e.sealed) return;
       const sz = sizeOf(e), eq = equationOf(r), cond = r.accept[0] && r.accept[0] !== 'なし' ? r.accept[0] : '';
       const fs = Math.max(11, Math.min(15, z * 0.3));
       ctx.font = `700 ${fs}px ${FONT_MONO}`;
@@ -1428,6 +1428,15 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
   const inked = (fill: string) => { ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = P.ink; ctx.lineWidth = line; ctx.stroke(); };
   const busy = !!e.busy;
   // 反応を設定した装置は、その反応の様子を描く（中身の色、気体、沈殿、加熱、電極での変化）
+  if (e.sealed) {
+    // 封印された装置：中は見せない。鎖と「？」
+    rr(ctx, cx - u * 0.27, cy - u * 0.27, u * 0.54, u * 0.54, u * 0.06); ctx.fillStyle = mix(P.plate, P.ink, 0.82); ctx.fill(); ctx.strokeStyle = P.ink; ctx.lineWidth = line; ctx.stroke();
+    ctx.strokeStyle = P.hi; ctx.lineWidth = line * 0.8; ctx.setLineDash([u * 0.04, u * 0.03]);
+    ctx.beginPath(); ctx.moveTo(cx - u * 0.27, cy - u * 0.27); ctx.lineTo(cx + u * 0.27, cy + u * 0.27); ctx.moveTo(cx + u * 0.27, cy - u * 0.27); ctx.lineTo(cx - u * 0.27, cy + u * 0.27); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = P.hi; ctx.font = `800 ${u * 0.3}px ${FONT_MONO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('?', cx, cy + (busy ? Math.sin(t * 6) * u * 0.012 : 0)); ctx.textBaseline = 'alphabetic';
+    return;
+  }
   if (e.recipe && reactionGlyph(ctx, P, e, cx, cy, u, t, line)) return;
   switch (e.kind) {
     case 'extractor': {
@@ -1517,6 +1526,14 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
       }
       ctx.strokeStyle = P.ink; ctx.lineWidth = line;
       ctx.beginPath(); ctx.moveTo(cx - u * 0.32, cy + u * 0.2); ctx.lineTo(cx + u * 0.32, cy + u * 0.2); ctx.stroke();
+      // 数の決まった試薬棚（課題）：残りの数を出す
+      if (e.left !== undefined) {
+        const tx = String(e.left);
+        ctx.font = `700 ${Math.max(10, u * 0.24)}px ${FONT_MONO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        const tw = ctx.measureText(tx).width + u * 0.12, th = Math.max(13, u * 0.3);
+        rr(ctx, cx - tw / 2, cy + u * 0.24, tw, th, th * 0.3); ctx.fillStyle = e.left ? P.hi : P.red; ctx.fill(); ctx.lineWidth = Math.max(0.8, line * 0.5); ctx.stroke();
+        ctx.fillStyle = '#14181d'; ctx.fillText(tx, cx, cy + u * 0.24 + th / 2 + 0.5); ctx.textBaseline = 'alphabetic';
+      }
       break;
     }
     case 'collector': {
