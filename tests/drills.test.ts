@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DRILLS, checkStep, inspectDrill, mulberry32, type Drill, type DrillStep } from '../src/content/drills';
+import { DRILLS, checkStep, evalExpr, inspectDrill, mulberry32, sameExpr, type Drill, type DrillStep } from '../src/content/drills';
 
 const SEEDS = 200;
 const UNITS = ['b31', 'b32', 'b33', 'b34', 'c11', 'c12', 'c13', 'c14', 'c15', 'c21', 'c22', 'c23', 'c24', 'c25', 'c26', 'c42', 'c44', 'c45'];
@@ -131,6 +131,14 @@ describe('ドリル：共通', () => {
             expect(s.tol).toBeUndefined();
             for (let i = 0; i < 4; i++) expect(checkStep(s, i)).toBe(i === s.answer);
             expect(checkStep(s, s.answer + 0.01)).toBe(false);
+            // 式に出てくる文字の一覧がある。文章の選択肢なら空で、conceptual がつく
+            expect(Array.isArray(s.vars)).toBe(true);
+            expect(new Set(s.vars).size).toBe((s.vars as string[]).length);
+            if (s.conceptual) expect(s.vars).toEqual([]);
+            else expect(s.conceptual).toBeUndefined();
+          } else {
+            expect(s.vars).toBeUndefined();
+            expect(s.conceptual).toBeUndefined();
           }
           if (s.tol !== undefined) {
             expect(s.tol).toBeGreaterThan(0);
@@ -729,84 +737,6 @@ describe('ドリル：化学としての検算', () => {
 
 // ───────────────────────── 式を選ぶ小問 ─────────────────────────
 
-const SUPER: Record<string, string> = { '⁻': '-', '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9' };
-
-/**
- * 選択肢の式を数値にする小さな計算機。
- * 並べて書いた積（4α²P、n(1 + α)）、/、+、−、かっこ、√、²・³・ⁿ、a×10ⁿ の数を読む。
- * 積と商は左から順に計算する（PV/(RT) は (P×V)÷(R×T)）。変数は env の名前のうち最も長く一致するもの。
- */
-function evalExpr(src: string, env: Record<string, number>): number {
-  const names = Object.keys(env).sort((a, b) => b.length - a.length);
-  const s = src.replace(/\s+/g, '');
-  let i = 0;
-  const startsFactor = (): boolean => i < s.length && (/[0-9(√]/.test(s[i]) || names.some((n) => s.startsWith(n, i)));
-  const primary = (): number => {
-    if (s[i] === '(') {
-      i++;
-      const v = expr();
-      if (s[i] !== ')') throw new Error(`式が読めない（かっこ）: ${src}`);
-      i++;
-      return v;
-    }
-    if (s[i] === '√') {
-      i++;
-      return Math.sqrt(primary());
-    }
-    const m = /^\d+(\.\d+)?(×10[⁻⁰¹²³⁴⁵⁶⁷⁸⁹]+)?/.exec(s.slice(i));
-    if (m) {
-      i += m[0].length;
-      const [mant, ex] = m[0].split('×10');
-      return Number(mant) * (ex ? 10 ** Number(ex.split('').map((ch) => SUPER[ch]).join('')) : 1);
-    }
-    const name = names.find((n) => s.startsWith(n, i));
-    if (name === undefined) throw new Error(`式が読めない（${s.slice(i)}）: ${src}`);
-    i += name.length;
-    return env[name];
-  };
-  const postfix = (): number => {
-    let v = primary();
-    for (;;) {
-      if (s[i] === '²') v = v ** 2;
-      else if (s[i] === '³') v = v ** 3;
-      else if (s[i] === 'ⁿ') v = v ** env.n;
-      else return v;
-      i++;
-    }
-  };
-  const term = (): number => {
-    let v = postfix();
-    for (;;) {
-      if (s[i] === '/') {
-        i++;
-        v /= postfix();
-      } else if (s[i] === '×') {
-        i++;
-        v *= postfix();
-      } else if (startsFactor()) v *= postfix();
-      else return v;
-    }
-  };
-  function expr(): number {
-    let v = term();
-    for (;;) {
-      if (s[i] === '+') {
-        i++;
-        v += term();
-      } else if (s[i] === '−') {
-        i++;
-        v -= term();
-      } else return v;
-    }
-  }
-  const out = expr();
-  if (i !== s.length) throw new Error(`式が読めない（残り ${s.slice(i)}）: ${src}`);
-  return out;
-}
-
-/** 選択肢から、式でない飾り（「Kp = 」「倍」など）を外す */
-const bare = (c: string): string => c.replace(/^Kp = /, '').replace(/倍.*$/, '');
-
 interface ChoiceSpec {
   /** 式に出てくる文字の値 */
   env: Record<string, number>;
@@ -854,6 +784,7 @@ const CHOICE_SPECS: Record<string, (SpecFn | null)[]> = {
         if (p.c0 * Math.exp(-k * mid) > p.c0 / 2) lo = mid;
         else hi = mid;
       }
+      // 式の中の logₑ2 は 0.693 だが、ここでは正確な値を入れて確かめる
       return { env: { k, 'c₀': p.c0, 'logₑ2': Math.log(2) }, expected: lo, tol: 1e-9 };
     },
   ],
@@ -926,8 +857,8 @@ const CHOICE_SPECS: Record<string, (SpecFn | null)[]> = {
 };
 
 describe('ドリル：式を選ぶ小問', () => {
-  it('計算機が式を正しく読む', () => {
-    const env = { α: 0.5, P: 2e5, n: 3, R: 8, T: 300, V: 4, K: 4, 'V₁': 100, 'V₂': 50, Ka: 1e-5, c: 0.1, 'c₀': 2, k: 0.5, 'logₑ2': Math.log(2) };
+  it('evalExpr：選択肢の書き方を読む', () => {
+    const env = { α: 0.5, P: 2e5, n: 3, R: 8, T: 300, V: 4, K: 4, 'V₁': 100, 'V₂': 50, Ka: 1e-5, c: 0.1, 'c₀': 2, k: 0.5, x: 7, 'p₀': 10, Δp: 2 };
     near(evalExpr('4α²P/(1 − α²)', env), (4 * 0.25 * 2e5) / 0.75);
     near(evalExpr('n(1 + α)RT/V', env), (3 * 1.5 * 8 * 300) / 4);
     near(evalExpr('4nα²/((1 − α)V)', env), (4 * 3 * 0.25) / (0.5 * 4));
@@ -936,11 +867,117 @@ describe('ドリル：式を選ぶ小問', () => {
     near(evalExpr('√(Ka/c)/2', env), 0.005);
     near(evalExpr('(2V₁/(2V₁ + KV₂))²', env), 0.25);
     near(evalExpr('(nV₁/(nV₁ + KV₂))ⁿ', env), 0.6 ** 3);
-    near(evalExpr('(logₑ2)/k', env), Math.log(2) / 0.5);
     near(evalExpr('c₀/(2k)', env), 2);
-    near(evalExpr('1/2', env), 0.5);
-    expect(() => evalExpr('4α²Q', env)).toThrow();
-    expect(() => evalExpr('(1 + α', env)).toThrow();
+    near(evalExpr('p₀ − Δp', env), 8);
+    near(evalExpr('80x', env), 560);
+    // logₑ2 は問題文で与える値 0.693。vars で上書きできる
+    near(evalExpr('(logₑ2)/k', env), 0.693 / 0.5);
+    near(evalExpr('(logₑ2)/k', { ...env, 'logₑ2': 1 }), 2);
+  });
+
+  it('evalExpr：演算の順序、符号、√、ASCII の代用記号', () => {
+    const env = { a: 2, b: 3, c: 5, α: 0.5, n: 3 };
+    near(evalExpr('1 + 2 × 3', env), 7);
+    near(evalExpr('(1 + 2) × 3', env), 9);
+    near(evalExpr('8 ÷ 2 ÷ 2', env), 2);
+    near(evalExpr('8 − 3 − 2', env), 3);
+    near(evalExpr('8 - 3 - 2', env), 3);
+    near(evalExpr('2*3', env), 6);
+    near(evalExpr('1.5a', env), 3);
+    near(evalExpr('.5a', env), 1);
+    // 並べた積は割り算より先。× を書いた積は左から順
+    near(evalExpr('ab/bc', env), 6 / 15);
+    near(evalExpr('1/2a', env), 0.25);
+    near(evalExpr('1/2×a', env), 1);
+    near(evalExpr('1/(2a)', env), 0.25);
+    near(evalExpr('a(b + c)', env), 16);
+    near(evalExpr('(a + b)(b + c)', env), 40);
+    // 指数
+    near(evalExpr('a²', env), 4);
+    near(evalExpr('a³b', env), 24);
+    near(evalExpr('2a²', env), 8);
+    near(evalExpr('(ab)²', env), 36);
+    near(evalExpr('a^2', env), 4);
+    near(evalExpr('a^2b', env), 12);
+    near(evalExpr('a^(1/2)', env), Math.SQRT2);
+    near(evalExpr('a^-1', env), 0.5);
+    near(evalExpr('a^n', env), 8);
+    near(evalExpr('aⁿ', env), 8);
+    near(evalExpr('10⁻²', env), 0.01);
+    near(evalExpr('1.0×10⁵', env), 1e5);
+    near(evalExpr('2×10^5', env), 2e5);
+    // 符号
+    near(evalExpr('−a', env), -2);
+    near(evalExpr('-a²', env), -4);
+    near(evalExpr('a × −b', env), -6);
+    near(evalExpr('1 − −a', env), 3);
+    near(evalExpr('+a', env), 2);
+    // √ は次の因数にかかる
+    near(evalExpr('√4', env), 2);
+    near(evalExpr('√(a + a)', env), 2);
+    near(evalExpr('√ab', env), Math.SQRT2 * 3);
+    near(evalExpr('√(ab)', env), Math.sqrt(6));
+    near(evalExpr('2√4', env), 4);
+    near(evalExpr('√4/2', env), 1);
+    near(evalExpr('√a²', env), 2);
+    // 空白は無視
+    near(evalExpr('  a  +\tb ', env), 5);
+  });
+
+  it('evalExpr：読めない式は例外か NaN。止まらなくなることはない', () => {
+    const env = { α: 0.5, P: 2, a: 3 };
+    const bad = (src: string): boolean => {
+      try {
+        return !Number.isFinite(evalExpr(src, env));
+      } catch {
+        return true;
+      }
+    };
+    for (const src of ['', ' ', '4α²P/(', '4α²P/', '(', ')', '()', '((a)', 'a)', 'a +', '+', '−', '×a', 'a××a', 'a//a', 'a^', '^2', '²', 'a⁻', '√', '√)', '.', 'a..2', '1.2.3', '4α²Q', 'abc', 'a b c d e!', 'a=a', 'ⁿ', 'aⁿ', '1/0', '0/0', '√(−4)', 'NaN', 'Infinity', '1e5', 'a,a', '{a}', '[a]']) {
+      expect(bad(src)).toBe(true);
+    }
+    // 長すぎる入力・深い入れ子でも落ちずに断る
+    expect(bad('('.repeat(100000))).toBe(true);
+    expect(bad('('.repeat(150) + 'a')).toBe(true);
+    expect(bad('√'.repeat(300) + 'a')).toBe(true);
+    expect(bad('a+'.repeat(5000) + 'a')).toBe(true);
+    near(evalExpr('('.repeat(90) + 'a' + ')'.repeat(90), env), 3);
+    near(evalExpr('−'.repeat(100) + 'a', env), 3);
+    // 文字列でないものが来ても例外で断る
+    expect(() => evalExpr(undefined as unknown as string, env)).toThrow();
+  });
+
+  it('sameExpr：同じ式は同じ、違う式は違う、読めない式は false（例外を外に出さない）', () => {
+    const v = ['α', 'P'];
+    expect(sameExpr('4α²P/(1 − α²)', '4α²P/(1 − α²)', v)).toBe(true);
+    expect(sameExpr('4α²P/(1 − α²)', '4Pα²/((1−α)(1+α))', v)).toBe(true);
+    expect(sameExpr('4α²P/(1 − α²)', '4*α^2*P/(1-α^2)', v)).toBe(true);
+    expect(sameExpr('4α²P/(1 − α²)', '(2α)²P/(1 − α)(1 + α)', v)).toBe(true);
+    expect(sameExpr('4α²P/(1 − α²)', '4α²P/(1 − α)', v)).toBe(false);
+    expect(sameExpr('4α²P/(1 − α²)', '4α²P/(1 − α²) + 0.00001P', v)).toBe(false);
+    // α = 0.5 のときだけ同じ値になる式を見分ける
+    expect(sameExpr('2α', '4α²', ['α'])).toBe(false);
+    expect(sameExpr('2nα/((1 − α)V)', '4nα²/((1 − α)V)', ['n', 'α', 'V'])).toBe(false);
+    // V = 1 のときだけ同じ値になる式を見分ける
+    expect(sameExpr('4nα²/(1 − α)', '4nα²/((1 − α)V)', ['n', 'α', 'V'])).toBe(false);
+    // 順番を変えても、何度呼んでも同じ結果
+    expect(sameExpr('4Pα²/((1−α)(1+α))', '4α²P/(1 − α²)', ['P', 'α'])).toBe(true);
+    for (let k = 0; k < 3; k++) expect(sameExpr('α + P', 'P + α', v)).toBe(true);
+    // 文字のない式
+    expect(sameExpr('2', '4/2', [])).toBe(true);
+    expect(sameExpr('2', '√4', [])).toBe(true);
+    expect(sameExpr('2', '1/2', [])).toBe(false);
+    expect(sameExpr('0', '0', [])).toBe(true);
+    // 読めない式、vars にない文字
+    for (const src of ['', '4α²P/(', '4α²P/', '(((', '4α²Q', '4α²P/(1 − β²)', '1/0', '√(−1)', '('.repeat(100000)]) {
+      expect(() => sameExpr(src, '4α²P/(1 − α²)', v)).not.toThrow();
+      expect(sameExpr(src, '4α²P/(1 − α²)', v)).toBe(false);
+      expect(sameExpr('4α²P/(1 − α²)', src, v)).toBe(false);
+      expect(sameExpr(src, src, v)).toBe(false);
+    }
+    // logₑ2 は定数 0.693 として扱う
+    expect(sameExpr('(logₑ2)/k', '0.693/k', ['logₑ2', 'k'])).toBe(true);
+    expect(sameExpr('(logₑ2)/k', '0.7/k', ['logₑ2', 'k'])).toBe(false);
   });
 
   it('式を選ぶ小問をもつ生成器が 12 以上あり、すべてに検算の定義がある', () => {
@@ -964,13 +1001,13 @@ describe('ドリル：式を選ぶ小問', () => {
           positions[k].add(s.answer);
           wording[k].add([...choices].sort().join(' | '));
           // 解説に正しい式が書いてある
-          expect(s.how).toContain(bare(choices[s.answer]).trim());
+          expect(s.how).toContain(choices[s.answer]);
           const spec = specs[k];
           if (!spec) return;
           const { env, expected, tol = 1e-9 } = spec(params, a);
           expect(Number.isFinite(expected)).toBe(true);
           choices.forEach((c, idx) => {
-            const v = evalExpr(bare(c), env);
+            const v = evalExpr(c, env);
             expect(Number.isFinite(v)).toBe(true);
             const err = Math.abs(v - expected) / Math.abs(expected);
             if (idx === s.answer) expect(err).toBeLessThanOrEqual(tol);
@@ -985,4 +1022,101 @@ describe('ドリル：式を選ぶ小問', () => {
       for (const set of wording) expect(set.size).toBeLessThanOrEqual(5);
     });
   }
+});
+
+/** 手で書いた、正しい式と同じ意味の別の書き方。キーは選択肢の正しい式 */
+const REWRITES: Record<string, string[]> = {
+  '4α²P/(1 − α²)': ['4Pα²/((1−α)(1+α))', '4*α^2*P/(1-α^2)', '(2αP/(1+α))²/((1−α)P/(1+α))', 'P×4α²÷(1−α²)'],
+  '√(cKa)': ['√(Kac)', '(cKa)^(1/2)', '(c×Ka)^0.5', 'c√(Ka/c)', '√c√Ka'],
+  '√(Ksp/c)': ['(Ksp/c)^(1/2)', '√Ksp/√c', '√(Ksp c)/c'],
+  '(logₑ2)/k': ['0.693/k', 'logₑ2/k', '(1/k)logₑ2', 'logₑ2×k⁻¹'],
+  '80x': ['98x − 18x', '48x + 32x', 'x×80', '160x/2'],
+  '1 + α': ['1 − α + 2α', 'α + 1', '(1−α)+α+α'],
+  '1 + 2α': ['1 − α + 3α', '2α + 1'],
+  'n(1 − β/2)': ['n − nβ/2', 'n(2−β)/2', 'n(1−β) + nβ/2', '(1 − 0.5β)n'],
+  'wRT/(ΠV)': ['wRT/ΠV', 'w×R×T÷(Π×V)', '(w/Π)(RT/V)', 'RTw/(VΠ)'],
+  'PV/(RT) + kWP/(1.0×10⁵)': ['P(V/(RT) + kW/100000)', 'kWP/100000 + PV/RT', 'PV/(RT) + kWP/10⁵', 'PV/(RT)+kWP×10⁻⁵', 'PV/(RT) + kWP/(1.0*10^5)'],
+  'n(1 + α)': ['n + nα', 'n(1 − α) + 2nα', '(1+α)n'],
+  'n(1 + α)RT/V': ['(n + nα)RT/V', 'nRT(1+α)/V', 'RTn(1+α)V⁻¹'],
+  '4nα²/((1 − α)V)': ['(2nα/V)²/(n(1−α)/V)', '4nα²/(V − αV)', '4α²n/V/(1−α)'],
+  'KcRT': ['RTKc', 'Kc×R×T', 'Kc(RT)'],
+  'cα²/(1 − α)': ['(cα)²/(c(1−α))', 'α²c/(1−α)', 'c×α^2/(1-α)'],
+  '√(Ka/c)': ['(Ka/c)^(1/2)', '√Ka/√c', '√(cKa)/c'],
+  'V₁/(V₁ + KV₂)': ['1/(1 + KV₂/V₁)', 'V₁/(KV₂ + V₁)', '1 − KV₂/(V₁ + KV₂)'],
+  '(2V₁/(2V₁ + KV₂))²': ['(V₁/(V₁ + KV₂/2))²', '4V₁²/(2V₁ + KV₂)²', '(1 + KV₂/(2V₁))^(−2)'],
+  '(nV₁/(nV₁ + KV₂))ⁿ': ['(nV₁/(nV₁ + KV₂))^n', '(V₁/(V₁ + KV₂/n))ⁿ', '(1 + KV₂/(nV₁))^(−n)'],
+  '(W/M₀)/(W/M₀ + w/M)': ['1/(1 + wM₀/(WM))', 'WM/(WM + wM₀)', '1 − (w/M)/(W/M₀ + w/M)'],
+  'p₀n₂/(n₁ + n₂)': ['p₀ − p₀n₁/(n₁ + n₂)', 'n₂p₀/(n₂ + n₁)', 'p₀(1 − n₁/(n₁+n₂))'],
+  'wM₀(p₀ − Δp)/(WΔp)': ['(p₀/Δp − 1)wM₀/W', 'wM₀(p₀ − Δp)/WΔp', 'w/(WΔp/(M₀(p₀ − Δp)))'],
+};
+
+describe('ドリル：式を打ち込んで答える', () => {
+  it('文章の選択肢（conceptual）は weak-acid-general の 1 問だけ', () => {
+    const found: string[] = [];
+    for (const g of DRILLS) {
+      g.make(mulberry32(1)).steps.forEach((s, i) => {
+        if (s.conceptual) found.push(`${g.id}#${i + 1}`);
+      });
+    }
+    expect(found).toEqual(['weak-acid-general#3']);
+  });
+
+  it('どの式の小問でも、正しい式は自分と同じ、間違いの式は違うと判定され、別の書き方は通る', () => {
+    const rewritten = new Set<string>();
+    const symbols = new Set<string>();
+    let count = 0;
+    for (const g of DRILLS) {
+      for (let seed = 0; seed < SEEDS; seed++) {
+        for (const s of g.make(mulberry32(seed)).steps) {
+          if (!s.choices || s.conceptual) continue;
+          count++;
+          const vars = s.vars as string[];
+          const right = s.choices[s.answer];
+          expect(sameExpr(right, right, vars)).toBe(true);
+          s.choices.forEach((c, i) => {
+            if (i === s.answer) return;
+            expect(sameExpr(c, right, vars)).toBe(false);
+            expect(sameExpr(right, c, vars)).toBe(false);
+          });
+          // vars は正しい式に出てくる文字ちょうど：どれも式の中にあり、1 つでも欠けると読めない
+          const env: Record<string, number> = {};
+          vars.forEach((v, k) => {
+            env[v] = 1.3 + 0.7 * k;
+            symbols.add(v);
+            expect(right).toContain(v);
+          });
+          expect(Number.isFinite(evalExpr(right, env))).toBe(true);
+          for (const v of vars) {
+            if (v === 'logₑ2') continue;
+            const less = { ...env };
+            delete less[v];
+            expect(() => evalExpr(right, less)).toThrow();
+          }
+          // 読めない入力は false で、例外にならない
+          for (const junk of ['', '4α²P/(', `${right}(`, `${right}/`, `(${right}`, `${right})`, `${right} +`]) {
+            expect(() => sameExpr(junk, right, vars)).not.toThrow();
+            expect(sameExpr(junk, right, vars)).toBe(false);
+          }
+          // かっこでくくっても、1 をかけても同じ
+          expect(sameExpr(`(${right})`, right, vars)).toBe(true);
+          expect(sameExpr(`1×(${right})`, right, vars)).toBe(true);
+          expect(sameExpr(`2(${right})/2`, right, vars)).toBe(true);
+          expect(sameExpr(`(${right}) + 0.001`, right, vars)).toBe(false);
+          expect(sameExpr(`1.001(${right})`, right, vars)).toBe(false);
+          const alts = REWRITES[right];
+          if (alts) {
+            rewritten.add(right);
+            for (const alt of alts) expect(`${alt} ⇔ ${right}: ${sameExpr(alt, right, vars)}`).toBe(`${alt} ⇔ ${right}: true`);
+          }
+        }
+      }
+    }
+    expect(count).toBeGreaterThan(24 * SEEDS * 0.9);
+    // 手で書いた別の書き方は、どれも実際に出てくる式に対応している
+    expect([...rewritten].sort()).toEqual(Object.keys(REWRITES).sort());
+    // キーパッドに必要な文字の一覧（2 文字以上のものは 1 つのキーにする）
+    expect([...symbols].sort()).toEqual(
+      ['K', 'Ka', 'Kc', 'Ksp', 'M', 'M₀', 'P', 'R', 'T', 'V', 'V₁', 'V₂', 'W', 'c', 'k', 'logₑ2', 'n', 'n₁', 'n₂', 'p₀', 'w', 'x', 'Δp', 'Π', 'α', 'β'].sort(),
+    );
+  });
 });

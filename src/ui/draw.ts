@@ -5,13 +5,18 @@ import { sfx } from './sound';
 /** 構造式を自分で組み立てる入力欄。京大の有機は構造式を描いて答えるので、選択肢に頼らない練習をここでする。
  *  マス目に原子を置き、原子を 2 つ続けてタップすると結合がつく（もう一度で二重結合、さらにもう一度で外れる）。
  *  水素は書かない。価数の残りから自動で補って表示する */
-const COLS = 9, ROWS = 5, VALENCE: Record<string, number> = { C: 4, O: 2, N: 3, Cl: 1, Br: 1 };
+const COLS = 9, ROWS = 5, VALENCE: Record<string, number> = { C: 4, O: 2, N: 3, Cl: 1, Br: 1, Ph: 1, Ar: 2 };
+/** 道具の札に出す名前。Ph は一置換、Ar は二置換のベンゼン環 */
+const TOOL_NAME: Record<string, string> = { Ph: 'C₆H₅–', Ar: '–C₆H₄–' };
+type RingPos = 'o' | 'm' | 'p';
 const SUB = '₀₁₂₃₄₅₆₇₈₉';
 
 export interface Editor { el: HTMLElement; mol(): Mol | null; problem(): string | null }
 
 export function structureEditor(elements: string[] = ['C', 'O', 'Cl']): Editor {
   const atoms = new Map<number, string>();
+  /** 二置換のベンゼン環の、置換基の位置関係 */
+  const pos = new Map<number, RingPos>();
   let bonds: [number, number, 1 | 2][] = [];
   let tool = 'C', sel: number | null = null;
   const used = (i: number) => bonds.filter((b) => b[0] === i || b[1] === i).reduce((a, b) => a + b[2], 0);
@@ -19,6 +24,8 @@ export function structureEditor(elements: string[] = ['C', 'O', 'Cl']): Editor {
   const text = (i: number) => {
     const el = atoms.get(i)!, hn = VALENCE[el] - used(i);
     if (el === 'Cl' || el === 'Br') return el;
+    if (el === 'Ph') return 'C₆H₅';
+    if (el === 'Ar') return `${pos.get(i) ?? 'o'}-C₆H₄`;
     return hn <= 0 ? el : hn === 1 ? `${el}H` : `${el}H${SUB[hn]}`;
   };
   const grid = h('div', { class: 'draw-grid' });
@@ -32,10 +39,10 @@ export function structureEditor(elements: string[] = ['C', 'O', 'Cl']): Editor {
 
   const paint = () => {
     palette.replaceChildren(
-      ...elements.map((el) => h('button', { class: 'chip plain' + (tool === el ? ' on' : ''), type: 'button', id: `draw-el-${el}`, onclick: () => { tool = el; paint(); } }, el)), // 選んでいる原子はそのまま：次に置く原子がそこにつながる
+      ...elements.map((el) => h('button', { class: 'chip plain' + (tool === el ? ' on' : ''), type: 'button', id: `draw-el-${el}`, onclick: () => { tool = el; paint(); } }, TOOL_NAME[el] ?? el)), // 選んでいる原子はそのまま：次に置く原子がそこにつながる
       h('button', { class: 'chip plain' + (tool === '-' ? ' on' : ''), type: 'button', id: 'draw-bond', onclick: () => { tool = '-'; sel = null; paint(); } }, '結合を変える'),
       h('button', { class: 'chip plain' + (tool === 'x' ? ' on' : ''), type: 'button', id: 'draw-erase', onclick: () => { tool = 'x'; sel = null; paint(); } }, '消す'),
-      h('button', { class: 'chip plain', type: 'button', id: 'draw-clear', onclick: () => { atoms.clear(); bonds = []; sel = null; paint(); } }, '全部消す'));
+      h('button', { class: 'chip plain', type: 'button', id: 'draw-clear', onclick: () => { atoms.clear(); pos.clear(); bonds = []; sel = null; paint(); } }, '全部消す'));
     svg.replaceChildren(...bonds.flatMap(([a, b, order]) => {
       const [x1, y1] = center(a), [x2, y2] = center(b), len = Math.hypot(x2 - x1, y2 - y1) || 1, nx = (-(y2 - y1) / len) * 0.9, ny = ((x2 - x1) / len) * 0.9;
       return (order === 2 ? [-1, 1] : [0]).map((k) => {
@@ -49,8 +56,10 @@ export function structureEditor(elements: string[] = ['C', 'O', 'Cl']): Editor {
       const el = atoms.get(i), over = el ? used(i) > VALENCE[el] : false;
       const b = h('button', { class: 'draw-cell' + (el ? ' atom' : '') + (sel === i ? ' on' : '') + (over ? ' bad' : ''), type: 'button', id: `draw-${i}`, ariaLabel: el ? text(i) : '空き' }, el ? text(i) : '');
       b.onclick = () => {
-        if (tool === 'x') { if (el) { atoms.delete(i); bonds = bonds.filter((q) => q[0] !== i && q[1] !== i); } sel = null; }
-        else if (!el) { if (tool !== '-') { atoms.set(i, tool); if (sel !== null && atoms.has(sel)) bonds.push([sel, i, 1]); sel = i; } } // 置いた原子は、選んでいた原子につなぐ
+        if (tool === 'x') { if (el) { atoms.delete(i); pos.delete(i); bonds = bonds.filter((q) => q[0] !== i && q[1] !== i); } sel = null; }
+        // 二置換の環をもう一度タップすると、オルト → メタ → パラ と変わる
+        else if (el === 'Ar' && tool === 'Ar') { pos.set(i, ({ o: 'm', m: 'p', p: 'o' } as const)[pos.get(i) ?? 'o']); sel = i; }
+        else if (!el) { if (tool !== '-') { atoms.set(i, tool); if (tool === 'Ar') pos.set(i, 'o'); if (sel !== null && atoms.has(sel)) bonds.push([sel, i, 1]); sel = i; } } // 置いた原子は、選んでいた原子につなぐ
         else if (tool !== '-') sel = sel === i ? null : i; // 元素を選んでいるとき：枝を伸ばす元の原子を選ぶだけ
         else if (sel === null || sel === i) sel = sel === i ? null : i;
         else {
@@ -65,7 +74,8 @@ export function structureEditor(elements: string[] = ['C', 'O', 'Cl']): Editor {
       return b;
     }));
     const p = problem();
-    status.textContent = atoms.size === 0 ? '元素を選んで、マス目をタップして原子を置け。続けて置くと、前の原子と結合する。枝を出すときは、元の原子をタップしてから置く。二重結合は「結合を変える」を選び、原子を 2 つ続けてタップする。水素は書かなくてよい。' : p ?? '結合の手は合っている。';
+    const ring = elements.includes('Ar') ? ' ベンゼン環は、置換基が 1 つなら C₆H₅–、2 つなら –C₆H₄– を置く。–C₆H₄– は、もう一度タップすると o（オルト）→ m（メタ）→ p（パラ）と変わる。' : '';
+    status.textContent = atoms.size === 0 ? '元素を選んで、マス目をタップして原子を置け。続けて置くと、前の原子と結合する。枝を出すときは、元の原子をタップしてから置く。二重結合は「結合を変える」を選び、原子を 2 つ続けてタップする。水素は書かなくてよい。' + ring : p ?? '結合の手は合っている。';
   };
 
   function order(): number[] { return [...atoms.keys()].sort((a, b) => a - b); }
@@ -82,7 +92,9 @@ export function structureEditor(elements: string[] = ['C', 'O', 'Cl']): Editor {
   function mol(): Mol | null {
     if (problem()) return null;
     const ids = order(), at = new Map(ids.map((id, k) => [id, k]));
-    return { atoms: ids.map((i) => atoms.get(i) as Atom), bonds: bonds.map(([a, b, o]) => [at.get(a)!, at.get(b)!, o]) };
+    const m: Mol = { atoms: ids.map((i) => atoms.get(i) as Atom), bonds: bonds.map(([a, b, o]) => [at.get(a)!, at.get(b)!, o]) };
+    if (pos.size) m.pos = ids.map((i) => (atoms.get(i) === 'Ar' ? pos.get(i) ?? 'o' : undefined));
+    return m;
   }
   paint();
   return { el: h('div', { class: 'draw' }, palette, grid, status), mol, problem };

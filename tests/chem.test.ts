@@ -938,6 +938,41 @@ describe('工場の動作', () => {
     expect(w.grades[`${ch}:0`]).toBeTruthy();
   });
 
+  it('コンビナートの全指令：最終段の装置を並べ、同時に動かして列車で運べば、どれも達成できる', () => {
+    const ch = CHAPTERS.findIndex((c) => c.name.includes('コンビナート'));
+    CHAPTERS[ch].goals.forEach((g, gi) => {
+      const w = newWorld();
+      setChapter(w, ch);
+      w.progress[ch] = gi;
+      expect(currentGoal(w)).toBe(g);
+      place(w, 'station', hx - 2, hy, 0);
+      at(w, hx - 2, hy)!.role = 'out';
+      const feed: [ReturnType<typeof at>, typeof RECIPES[number]][] = [];
+      [g.s, ...g.also!].forEach((s, i) => {
+        // その物質を作る装置を 1 台ずつ。原料は切らさずに与える（上流は別のテストで確かめている）
+        const r = RECIPES.find((x) => x.machine !== 'collector' && x.machine !== 'battery' && productsOf(x).some(([o]) => o === s))!;
+        expect(r, s).toBeTruthy();
+        const x = 100 + i * 14, y = 100;
+        expect(place(w, r.machine, x, y, 0), `${s} の装置`).toBeNull();
+        const e = at(w, x, y)!, order = productsOf(r).map(([o]) => o);
+        configure(e, r, order, r.machine === 'electrolyzer' ? order.map((_, k) => (poleOf(r, k) === 'a' ? 'a' : 'c')) : undefined);
+        // 先に、欲しい生成物の出口へ積む駅を置く。残りの出口は廃棄口でふさぐ（駅と重なる出口は、そのまま駅に入る）
+        order.forEach((o, k) => {
+          const p = outPort(e, k);
+          if (o === s) expect(place(w, 'station', p.tx + (p.d === 2 ? -1 : 0), p.ty + (p.d === 3 ? -1 : 0), 0), `${s} の積む駅`).toBeNull();
+        });
+        order.forEach((o, k) => { const p = outPort(e, k); if (o !== s) place(w, 'vent', p.tx, p.ty, 0); });
+        feed.push([e, r]);
+      });
+      let sec = 0;
+      while (w.progress[ch] === gi && sec < 900) {
+        for (let k = 0; k < 60; k++) { for (const [e, r] of feed) for (const [s, n] of r.inputs) e!.inBuf![s] = n * 2; step(w, 1 / 60); }
+        sec++;
+      }
+      expect(w.progress[ch], `${g.s} ほか：${sec} 秒で ${JSON.stringify(w.multi)}`).toBe(gi + 1);
+    });
+  });
+
   it('1 マスだった頃の装置は、そのまま 3 つの出口で動く', () => {
     const w = newWorld();
     w.progress[0] = 2;

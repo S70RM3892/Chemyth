@@ -1,8 +1,9 @@
-import { DRILLS, checkStep, mulberry32, type Drill, type DrillGen } from '../content/drills';
+import { DRILLS, checkStep, mulberry32, sameExpr, type Drill, type DrillGen } from '../content/drills';
 import { pretty } from '../chem/formula';
 import { canonical, specOf, specText, type Isomer } from '../chem/isomers';
 import { makeSugar, sugarKey, sugarText } from '../content/sugar';
 import { structureEditor } from './draw';
+import { ESSAYS, type Essay } from '../content/essays';
 import { AMINOS, makePeptide } from '../content/peptide';
 import { makeCount, makeIdentify, type CountProblem, type IdentifyProblem } from '../content/structure';
 import { SYLLABUS } from '../content/syllabus';
@@ -69,24 +70,54 @@ function runDrill(c: PanelCtx, g: DrillGen) {
       return;
     }
     const s = d.steps[i];
-    const choices = (s as typeof s & { choices?: string[] }).choices;
+    const meta = s as typeof s & { choices?: string[]; vars?: string[]; conceptual?: boolean };
+    const choices = meta.choices;
     if (choices) {
-      // 文字式で答える設問：正しい式を選ぶ
+      // 文字式で答える設問：式を自分で打ち込む。値を何通りか代入して、正しい式と同じ値になるかで判定する
       const fb2 = h('div', { class: 'answer', hidden: true });
+      let closed = false;
+      const settle = (good: boolean, picked?: HTMLElement) => {
+        if (closed) return;
+        closed = true;
+        if (good) { right++; sfx.ok(); } else { sfx.bad(); w.mistakes.push({ machine: 'drill', recipe: g.title, part: 'calc', t: Date.now() }); }
+        [...list.children].forEach((o, n) => { (o as HTMLButtonElement).disabled = true; o.classList.toggle('picked', n === s.answer); });
+        picked?.classList.toggle('wrong', !good);
+        fb2.replaceChildren(h('p', {}, h('b', {}, good ? '正解。' : '不正解。'), `正しい式は ${choices[s.answer]}`), h('p', { class: 'note' }, s.how));
+        fb2.hidden = false;
+        typedBox?.querySelectorAll('button').forEach((b) => { (b as HTMLButtonElement).disabled = true; });
+        ask(i + 1);
+      };
       const list = h('div', { class: 'isos pick col' }, ...choices.map((ch, k) => {
         const b = h('button', { class: 'chip plain iso', type: 'button', id: `drill-choice-${i}-${k}` }, ch);
-        b.onclick = () => {
-          const good = checkStep(s, k);
-          if (good) { right++; sfx.ok(); } else { sfx.bad(); w.mistakes.push({ machine: 'drill', recipe: g.title, part: 'calc', t: Date.now() }); }
-          [...list.children].forEach((o, n) => { (o as HTMLButtonElement).disabled = true; o.classList.toggle('picked', n === s.answer); });
-          b.classList.toggle('wrong', !good);
-          fb2.replaceChildren(h('p', {}, h('b', {}, good ? '正解。' : '不正解。'), `正しい式は ${choices[s.answer]}`), h('p', { class: 'note' }, s.how));
-          fb2.hidden = false;
-          ask(i + 1);
-        };
+        b.onclick = () => settle(checkStep(s, k), b);
         return b;
       }));
-      const box2 = h('section', { class: 'drill-step', id: `drill-step-${i}` }, h('p', { class: 'qtext' }, h('b', {}, `(${i + 1}) `), s.text), list, fb2);
+      let typedBox: HTMLElement | null = null;
+      const vars = meta.vars ?? [];
+      if (!meta.conceptual && vars.length) {
+        const toks: string[] = [];
+        const shown = h('div', { class: 'slot on numslot expr', id: `drill-expr-${i}` }, '');
+        const note = h('p', { class: 'feedback' });
+        const paintExpr = () => { shown.textContent = toks.join('') || '式を入れる'; shown.classList.toggle('empty', !toks.length); };
+        const key = (k: string, cls = 'n') => h('button', { class: `key ${cls}`, type: 'button', onclick: () => { if (k === '⌫') toks.pop(); else if (k === '消') toks.length = 0; else if (toks.length < 60) toks.push(k); note.textContent = ''; sfx.tap(); paintExpr(); } }, k);
+        const submit = h('button', { class: 'primary', type: 'button', id: `drill-expr-ok-${i}` }, 'この式で答える');
+        submit.onclick = () => {
+          const expr = toks.join('');
+          if (!expr) return;
+          // 式として読めないときは、数えずに直させる
+          if (!sameExpr(expr, expr, vars)) { note.textContent = '式として読めない。かっこの対応や、演算子の並びを確かめろ。'; return; }
+          settle(sameExpr(expr, choices[s.answer], vars));
+        };
+        paintExpr();
+        typedBox = h('div', { class: 'expr-box' },
+          h('p', { class: 'muted' }, '式を自分で組み立てろ。かけ算の記号は省いてよい（4α²P のように書ける）。分数は / で書く。PV/RT は (PV)/(RT) と読まれる。上つきの数字は ^ のあとに打つ（10^5）。'),
+          shown,
+          h('div', { class: 'keys exprkeys' }, ...vars.map((v) => key(v, 'el')), ...['7', '8', '9', '4', '5', '6', '1', '2', '3', '0', '.'].map((k) => key(k)),
+            ...['+', '−', '×', '/', '(', ')', '²', '³', '√', '^'].map((k) => key(k)), key('⌫', 'fn'), key('消', 'fn')),
+          note, h('div', { class: 'row' }, submit));
+      }
+      const box2 = h('section', { class: 'drill-step', id: `drill-step-${i}` }, h('p', { class: 'qtext' }, h('b', {}, `(${i + 1}) `), typedBox ? s.text.replace(/を選べ。$/, 'を答えろ。').replace(/選べ。$/, '答えろ。') : s.text),
+        ...(typedBox ? [typedBox, h('details', { class: 'named' }, h('summary', {}, '組み立てられないときは、選択肢から選ぶ'), list)] : [list]), fb2);
       body.append(box2);
       if (i > 0) box2.scrollIntoView({ block: 'nearest' });
       return;
@@ -131,6 +162,64 @@ function fmt(x: number): string {
   return String(Number(x.toPrecision(3)));
 }
 
+// ---------------- 論述 ----------------
+
+/** 論述：紙に書いてから、模範解答と要点を見て自分で採点する */
+export function showEssays(c: PanelCtx) {
+  const { w } = c;
+  const done = ESSAYS.filter((x) => w.practice[`essay-${x.id}`]?.clean).length;
+  c.show(
+    h('header', {}, h('h2', {}, '論述'), back('sheet-close', '閉じる', c.close)),
+    h('p', {}, '京大は年によって、字数制限つきの論述を出す。文章は機械では採点できないので、紙に書いてから模範解答と要点を見て、自分で採点しろ。'),
+    h('p', { class: 'muted' }, `要点を全部入れて書けたもの：${done} / ${ESSAYS.length}。書かずに模範解答を読むだけでは、書けるようにならない。`),
+    h('div', { class: 'menu' }, ...ESSAYS.map((x) => {
+      const st = w.practice[`essay-${x.id}`];
+      return h('button', { class: 'ghost drill', type: 'button', id: `essay-${x.id}`, onclick: () => runEssay(c, x) },
+        h('span', { class: 'drill-t' }, x.q.length > 34 ? x.q.slice(0, 34) + '…' : x.q),
+        h('span', { class: 'muted' }, `${SYLLABUS.find((u) => u.id === x.unit)?.title ?? ''}・${x.limit} 字以内`),
+        h('span', { class: 'drill-n' + (st?.clean ? ' ok' : '') }, st ? `満点 ${st.clean} / ${st.tries} 回` : '未挑戦'));
+    })),
+  );
+}
+
+function runEssay(c: PanelCtx, x: Essay) {
+  const { w } = c;
+  const got = new Set<number>();
+  const body = h('div', { class: 'rxlist' });
+  const reveal = h('button', { class: 'primary', type: 'button', id: 'essay-reveal' }, '紙に書いた。模範解答を見る');
+  reveal.onclick = () => {
+    reveal.hidden = true;
+    const keys = h('div', { class: 'isos pick col' }, ...x.keys.map((k, i) => {
+      const b = h('button', { class: 'chip plain iso', type: 'button', id: `essay-key-${i}` }, k);
+      b.onclick = () => { got.has(i) ? got.delete(i) : got.add(i); b.classList.toggle('on', got.has(i)); b.setAttribute('aria-pressed', String(got.has(i))); sfx.tap(); };
+      return b;
+    }));
+    const grade = h('button', { class: 'primary', type: 'button', id: 'essay-grade' }, '採点する');
+    grade.onclick = () => {
+      const full = got.size === x.keys.length, gain = got.size * 2 + (full ? 4 : 0);
+      record(w, `essay-${x.id}`, full);
+      w.points += gain;
+      if (!full) w.mistakes.push({ machine: 'structure', recipe: '論述', part: 'calc', t: Date.now() });
+      full ? (sfx.ok(), c.actions.stamp('満点')) : sfx.bad();
+      grade.hidden = true;
+      body.append(h('div', { class: 'answer' },
+        h('p', { class: 'qtext' }, `要点 ${x.keys.length} つのうち ${got.size} つ。研究点 +${gain}。`),
+        h('p', { class: 'muted' }, full ? '字数に収まっているかも確かめろ。' : '抜けた要点を入れて、もう一度書き直せ。'),
+        h('div', { class: 'row' }, back('essay-list', '一覧へ', () => showEssays(c)))));
+      c.sheet.scrollTop = c.sheet.scrollHeight;
+    };
+    body.append(h('div', { class: 'answer' }, h('p', {}, h('b', {}, '模範解答')), h('p', { class: 'note' }, x.model)),
+      h('p', { class: 'muted' }, '自分の答案に入っていた要点を、正直に選べ。言い回しは違ってよい。'), keys, h('div', { class: 'row' }, grade));
+    c.sheet.scrollTop = c.sheet.scrollHeight;
+  };
+  c.show(
+    h('header', {}, h('h2', {}, '論述'), back('essay-back', '一覧へ', () => showEssays(c))),
+    h('p', { class: 'qtext' }, x.q),
+    h('p', { class: 'muted' }, `${x.limit} 字以内。主語と理由のつながりをはっきりさせ、紙に書け。`),
+    h('div', { class: 'row' }, reveal), body,
+  );
+}
+
 // ---------------- 構造決定 ----------------
 
 /** 初見の分子式から、異性体を数え上げる・実験事実から 1 つに絞る */
@@ -160,7 +249,7 @@ export function showStructure(c: PanelCtx) {
       const id = `sugar-${lv}`, st = w.practice[id];
       return h('button', { class: 'ghost drill', type: 'button', id, onclick: () => runSugar(c, lv) },
         h('span', { class: 'drill-t' }, `結合様式　${LEVEL[lv]}`),
-        h('span', { class: 'muted' }, ['', '二糖（還元性と酵素）', '三糖（メチル化分析）', '四糖'][lv]),
+        h('span', { class: 'muted' }, ['', '二糖（還元性と酵素。スクロース・ラクトース型も）', '三糖（メチル化分析）', '四糖（枝分かれあり）'][lv]),
         h('span', { class: 'drill-n' + (st?.clean ? ' ok' : '') }, st ? `正解 ${st.clean} / ${st.tries} 回` : '未挑戦'));
     })),
   );
@@ -299,10 +388,12 @@ function runIdentify(c: PanelCtx, lv: 1 | 2 | 3) {
     };
     return b;
   }));
-  // 鎖式の化合物は、構造式を自分で組み立てて答える。ベンゼン環を含むものは選択肢から選ぶ
+  // 構造式を自分で組み立てて答える。ベンゼン環は、置換基の数に応じた部品（C₆H₅–、–C₆H₄–）として置く
   const ans = q.options.find((o) => o.key === q.answer)!;
-  const drawable = ans.mol.atoms.every((a) => a === 'C' || a === 'O' || a === 'Cl' || a === 'Br' || (a as string) === 'N');
-  const els = ['C', 'O', ...(q.spec.cl ? ['Cl'] : []), ...(q.spec.br ? ['Br'] : []), ...((q.spec as { n?: number }).n ? ['N'] : [])];
+  // 三置換のベンゼン環だけは、組み立てずに選択肢から選ぶ
+  const drawable = ans.mol.atoms.every((a) => ['C', 'O', 'Cl', 'Br', 'N', 'Ph', 'Ar'].includes(a as string));
+  const aromatic = q.options.some((o) => o.mol.atoms.some((a) => ['Ph', 'Ar', 'Tr'].includes(a as string)));
+  const els = ['C', 'O', ...(q.spec.cl ? ['Cl'] : []), ...(q.spec.br ? ['Br'] : []), ...((q.spec as { n?: number }).n ? ['N'] : []), ...(aromatic ? ['Ph', 'Ar'] : [])];
   const ed = drawable ? structureEditor(els) : null;
   const drawFb = h('p', { class: 'feedback', id: 'draw-feedback' });
   let tries = 0, done = false;

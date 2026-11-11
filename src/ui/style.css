@@ -212,6 +212,9 @@ b { font-weight: 700; }
 .iso { display: inline-flex; flex-direction: column; gap: 0; border: 1px solid var(--rule); padding: 4px 10px; line-height: 1.35; }
 .iso .muted { font-size: 11px; }
 .isos.pick .iso { min-height: 48px; justify-content: center; font-size: 16px; }
+.expr-box { display: grid; gap: 8px; }
+.slot.expr { font-family: var(--font-mono); font-size: 20px; min-height: 48px; word-break: break-all; }
+.keys.exprkeys { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 5px; }
 .isos.col { flex-direction: column; align-items: stretch; }
 .isos.col .iso { text-align: left; font-size: 14px; }
 .draw { display: grid; gap: 8px; }

@@ -1,4 +1,5 @@
 import { DRILLS } from './drills';
+import { ESSAYS } from './essays';
 import { KNOWLEDGE, type Knowledge } from './knowledge';
 import { PASSAGES, type Passage } from './passages';
 import { QUESTIONS, type Question } from './questions';
@@ -113,6 +114,6 @@ export function coverageOf(u: Unit): Coverage {
   const questions = QUESTIONS.filter((q) => (u.questions ?? []).includes(q.topic));
   const knowledge = KNOWLEDGE.filter((k) => (u.knowledge ?? []).includes(k.topic));
   const passages = PASSAGES.filter((p) => (u.passages ?? []).includes(p.id));
-  const practice = [...DRILLS.filter((d) => d.unit === u.id).map((d) => d.id), ...(u.practice ?? [])];
+  const practice = [...DRILLS.filter((d) => d.unit === u.id).map((d) => d.id), ...ESSAYS.filter((x) => x.unit === u.id).map((x) => `essay-${x.id}`), ...(u.practice ?? [])];
   return { recipes, sets, questions, knowledge, passages, practice, total: recipes.length + sets.length + questions.length + knowledge.length + passages.length + practice.length };
 }

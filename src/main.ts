@@ -9,7 +9,7 @@ import { about, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
 import { attachInput, Z_MIN } from './ui/input';
 import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showStation, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
-import { showDrills, showStructure } from './ui/practice';
+import { showDrills, showEssays, showStructure } from './ui/practice';
 import { draw, type Camera } from './ui/render';
 import { showStats, type StatsCtx } from './ui/stats';
 import { setSound, sfx, soundOn } from './ui/sound';
@@ -264,7 +264,8 @@ function boot(data: HotData) {
       h('div', { class: 'menu' },
         item('m-drills', '連鎖計算（理論の大問。数値は毎回変わる）', () => showDrills(panel())),
         item('m-structure', '構造決定（異性体の数え上げ・構造の特定・ペプチドの配列）', () => showStructure(panel())),
-        item('m-passages', 'リード文課題（空欄補充）', () => showPassages(panel()))),
+        item('m-passages', 'リード文課題（空欄補充）', () => showPassages(panel())),
+        item('m-essays', '論述（紙に書いて、要点で自己採点）', () => showEssays(panel()))),
       h('h3', {}, 'ふり返り'),
       h('div', { class: 'menu' },
         item('m-syllabus', '範囲表（入試範囲のどこまで進んだか）', () => showSyllabus(panel())),

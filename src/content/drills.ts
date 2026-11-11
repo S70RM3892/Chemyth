@@ -78,7 +78,7 @@ const isSupDigit = (ch: string | undefined): ch is string => ch !== undefined &&
  * 読めるもの：
  * - 文字：vars の名前（Ka、V₁、Δp のように 2 文字以上でもよい。最も長く一致する名前を取る）と、定数 logₑ2
  * - 小数、かっこ、+、−（- も可）、×（* · も可）、÷（/ ⁄ も可）
- * - 並べて書いた積：4α²P、n(1 + α)。割り算より先に計算する（PV/RT は (PV)÷(RT)、1/2k は 1÷(2k)）。
+ * - 並べて書いた積：4α²P、n(1 + α)。数は先頭にだけ置ける。割り算より先に計算する（PV/RT は (PV)÷(RT)、1/2k は 1÷(2k)）。
  *   × を書いた積は割り算と同じ強さで、左から順（1/2×k は (1÷2)×k）
  * - 後ろにつく指数：² ³ などの上付き数字、ⁿ（vars の n 乗）、^2 ^(1/2) ^n ^-1
  * - 前につく √：次の因数（数、文字、かっこ。指数がついていればそれも含む）にかかる
@@ -95,7 +95,8 @@ export function evalExpr(expr: string, vars: Record<string, number>): number {
   };
   const nameAt = (): string | undefined => names.find((n) => s.startsWith(n, i));
   const isMinus = (ch: string | undefined): boolean => ch === '−' || ch === '-';
-  const startsPrimary = (): boolean => i < s.length && (/[0-9.(√]/.test(s[i]) || nameAt() !== undefined);
+  // 並べた積の 2 つ目以降は、文字・かっこ・√ で始まるものだけ（「1.2.3」や「α2」は読まない）
+  const startsFactor = (): boolean => i < s.length && (s[i] === '(' || s[i] === '√' || nameAt() !== undefined);
 
   function primary(): number {
     const ch = s[i];
@@ -155,7 +156,7 @@ export function evalExpr(expr: string, vars: Record<string, number>): number {
   }
   function juxt(): number {
     let v = power();
-    while (startsPrimary()) v *= power();
+    while (startsFactor()) v *= power();
     return v;
   }
   function unary(): number {
