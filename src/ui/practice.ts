@@ -68,7 +68,7 @@ function runDrill(c: PanelCtx, g: DrillGen) {
     const display = h('div', { class: 'slot on numslot', id: `drill-display-${i}` }, '');
     const paint = () => { display.textContent = text || '答えを入れる'; display.classList.toggle('empty', !text); };
     const keys = numPad((k) => { text = typeNumber(text, k); sfx.tap(); paint(); });
-    const ok = h('button', { class: 'primary', type: 'button', id: 'drill-ok' }, '答える');
+    const ok = h('button', { class: 'primary', type: 'button', id: `drill-ok-${i}` }, '答える');
     const fb = h('div', { class: 'answer', hidden: true });
     const box = h('section', { class: 'drill-step', id: `drill-step-${i}` },
       h('p', { class: 'qtext' }, h('b', {}, `(${i + 1}) `), s.text),
