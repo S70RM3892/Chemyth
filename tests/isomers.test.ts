@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { parseFormula } from '../src/chem/formula';
 import {
-  byKey, canonical, cisTransCount, dehydCount, isomers, monoSubCount, parseKey, ringSubCount, specOf, specText, stereoCount,
-  type IsoClass, type Isomer, type Spec,
+  byKey, canonical, cisTransCount, dehydCount, isValid, isomers, monoSubCount, parseKey, ringNode, ringSubCount, specOf, specText, stereoCount, triPattern, twinPos,
+  type IsoClass, type Isomer, type Mol, type Spec,
 } from '../src/chem/isomers';
 import { SPECS, makeCount, makeIdentify } from '../src/content/structure';
 
@@ -15,6 +15,8 @@ const rngOf = (seed: number) => () => {
 };
 
 const S = (c: number, h: number, o = 0, cl = 0): Spec => ({ c, h, o, cl });
+/** 窒素 1 個を含む分子式 */
+const N = (c: number, h: number, o = 0): Spec => ({ c, h, n: 1, o });
 const count = (spec: Spec, cls?: IsoClass): number => isomers(spec).filter((i) => !cls || i.cls === cls).length;
 const classes = (spec: Spec): Record<string, number> => {
   const out: Record<string, number> = {};
@@ -88,16 +90,18 @@ describe('異性体の数え上げ', () => {
     expect(isomers(S(6, 6)).map((i) => i.formula)).toEqual(['C6H6']);
     expect(isomers(S(6, 4, 0, 2)).map((i) => i.name).sort()).toEqual(['m-ジクロロベンゼン', 'o-ジクロロベンゼン', 'p-ジクロロベンゼン']);
   });
-  it('C8H10O：一置換体 4 と二置換体 9', () => {
-    // 現実には 19 種類（フェノール類 9、アルコール 5、エーテル 5）。
-    // ジメチルフェノール 6 種は三置換ベンゼンなので、この数え上げの範囲外。
+  it('C8H10O：一置換体 4、二置換体 9、三置換体 6', () => {
+    // 全部で 19 種類（フェノール類 9、アルコール 5、エーテル 5）。三置換体はジメチルフェノール 6 種。
     const all = isomers(S(8, 10, 1));
     const mono = all.filter((i) => i.mol.atoms.includes('Ph'));
     const di = all.filter((i) => i.mol.atoms.includes('Ar'));
+    const tri = all.filter((i) => i.mol.atoms.includes('Tr'));
     expect(mono.map((i) => i.formula).sort()).toEqual(['C6H5CH(OH)CH3', 'C6H5CH2CH2OH', 'C6H5CH2OCH3', 'C6H5OC2H5']);
     expect(di.length).toBe(9);
-    expect(all.length).toBe(13);
-    expect(classes(S(8, 10, 1))).toEqual({ alcohol: 5, ether: 5, phenol: 3 });
+    expect(tri.map((i) => i.name).sort()).toEqual(['2,3-ジメチルフェノール', '2,4-ジメチルフェノール', '2,5-ジメチルフェノール', '2,6-ジメチルフェノール', '3,4-ジメチルフェノール', '3,5-ジメチルフェノール']);
+    expect(all.length).toBe(19);
+    expect(new Set(all.map((i) => i.formula)).size).toBe(19);
+    expect(classes(S(8, 10, 1))).toEqual({ alcohol: 5, ether: 5, phenol: 9 });
     for (const p of ['o', 'm', 'p']) {
       expect(di.filter((i) => i.formula.startsWith(p + '-')).map((i) => i.formula.slice(2)).sort()).toEqual(['C6H4(C2H5)OH', 'C6H4(CH3)CH2OH', 'C6H4(CH3)OCH3']);
     }
@@ -106,7 +110,9 @@ describe('異性体の数え上げ', () => {
     const all = isomers(S(8, 8, 2));
     expect(new Set(all.map((i) => i.key)).size).toBe(all.length);
     expect(new Set(all.map((i) => i.formula)).size).toBe(all.length);
-    for (const i of all) expect(['aldehyde', 'ketone', 'acid', 'ester']).toContain(i.cls);
+    for (const i of all) expect(['aldehyde', 'ketone', 'acid', 'ester', 'phenol']).toContain(i.cls);
+    // フェノール類に分類されるのは、三置換体のジヒドロキシスチレンだけ
+    for (const i of all.filter((x) => x.cls === 'phenol')) expect(i.mol.atoms.includes('Tr') && i.props.br2).toBe(true);
     expect(all.filter((i) => i.cls === 'acid').map((i) => i.name).sort()).toEqual(['m-トルイル酸', 'o-トルイル酸', 'p-トルイル酸', 'フェニル酢酸']);
     const esters = all.filter((i) => i.cls === 'ester');
     expect(esters.length).toBe(6);
@@ -127,7 +133,8 @@ describe('異性体の数え上げ', () => {
 
 describe('正準形と表記', () => {
   const pool: Spec[] = [...SPECS.map((s) => s.spec), S(1, 4), S(2, 6), S(2, 4), S(1, 4, 1), S(1, 2, 1), S(1, 2, 2), S(2, 6, 1), S(6, 6), S(6, 6, 1), S(7, 8),
-    S(7, 6, 2), S(7, 6, 3), S(8, 6, 4), S(8, 8, 3), S(9, 8, 4), S(8, 8), S(7, 7, 0, 1), S(3, 5, 0, 1), S(13, 10, 1), S(12, 10, 1), S(13, 10, 2)];
+    S(7, 6, 2), S(7, 6, 3), S(8, 6, 4), S(8, 8, 3), S(9, 8, 4), S(8, 8), S(7, 7, 0, 1), S(3, 5, 0, 1), S(13, 10, 1), S(12, 10, 1), S(13, 10, 2),
+    N(1, 5), N(6, 7), N(2, 5, 2), N(4, 9, 1), N(7, 7, 2), N(7, 7, 1), N(9, 11, 1), S(10, 14), S(9, 12, 1), S(9, 6, 6), S(6, 5, 0, 1)];
   it('key は一意で、読み戻しても同じ', () => {
     for (const spec of pool) {
       const all = isomers(spec);
@@ -155,10 +162,11 @@ describe('正準形と表記', () => {
   });
   it('示性式の原子数が分子式と合う', () => {
     for (const spec of pool) for (const i of isomers(spec)) {
-      const atoms = parseFormula(i.formula.replace(/^[omp]-/, '').replace(/=/g, ''));
+      // 環の位置は o- / m- / p- か、全角数字の位置番号で頭に書く
+      const atoms = parseFormula(i.formula.replace(/^[omp]-/, '').replace(/^[１-５,]+-/, '').replace(/=/g, ''));
       const want: Record<string, number> = {};
       const sp = specOf(i.mol);
-      for (const [k, el] of [['c', 'C'], ['h', 'H'], ['o', 'O'], ['cl', 'Cl'], ['br', 'Br']] as const) if (sp[k]) want[el] = sp[k]!;
+      for (const [k, el] of [['c', 'C'], ['h', 'H'], ['o', 'O'], ['n', 'N'], ['cl', 'Cl'], ['br', 'Br']] as const) if (sp[k]) want[el] = sp[k]!;
       expect(atoms, i.formula).toEqual(want);
     }
   });
@@ -300,6 +308,147 @@ describe('性質', () => {
   });
 });
 
+describe('窒素を含む化合物', () => {
+  const grades = (spec: Spec): number[] => [1, 2, 3].map((g) => isomers(spec).filter((i) => i.props.grade === g).length);
+  it('アミン', () => {
+    expect(classes(N(2, 7))).toEqual({ amine: 2 });
+    expect(classes(N(3, 9))).toEqual({ amine: 4 });
+    expect(grades(N(3, 9))).toEqual([2, 1, 1]);
+    expect(classes(N(4, 11))).toEqual({ amine: 8 });
+    expect(grades(N(4, 11))).toEqual([4, 3, 1]);
+    expect(isomers(N(4, 11)).filter((i) => i.chiral > 0).map((i) => i.formula)).toEqual(['CH3CH(NH2)CH2CH3']);
+    expect(isomers(N(2, 7)).map((i) => i.name).sort()).toEqual(['エチルアミン', 'ジメチルアミン']);
+    for (const i of isomers(N(4, 11))) expect([i.props.basic, i.props.na, i.props.bleach]).toEqual([true, false, false]);
+    expect(specText({ c: 4, h: 9, n: 1, o: 2 })).toBe('C4H9NO2');
+  });
+  it('アミド', () => {
+    const all = isomers(N(3, 7, 1));
+    expect(all.map((i) => i.formula).sort()).toEqual(['CH3CH2CONH2', 'CH3CONHCH3', 'HCON(CH3)2', 'HCONHC2H5']);
+    for (const i of all) expect([i.cls, i.props.basic, i.props.silver]).toEqual(['amide', false, false]);
+    const h = (formula: string): string[] => {
+      const i = all.find((x) => x.formula === formula)!;
+      expect(i.props.hydrolysis!.alcohol).toBe('');
+      return [byKey(i.props.hydrolysis!.acid)!.name, byKey(i.props.hydrolysis!.amine!)!.name];
+    };
+    expect(h('CH3CH2CONH2')).toEqual(['プロピオン酸', 'アンモニア']);
+    expect(h('CH3CONHCH3')).toEqual(['酢酸', 'メチルアミン']);
+    expect(h('HCON(CH3)2')).toEqual(['ギ酸', 'ジメチルアミン']);
+    expect(h('HCONHC2H5')).toEqual(['ギ酸', 'エチルアミン']);
+    expect(mol('N').formula).toBe('NH3');
+    expect(classes(N(4, 9, 1))).toEqual({ amide: 8 });
+  });
+  it('アミノ酸', () => {
+    // アミンの N 1 個と –COOH 1 個をもつものを aminoacid とする。N は第一級に限らない
+    const c3 = isomers(N(3, 7, 2));
+    expect(c3.map((i) => i.name).sort()).toEqual(['N-メチルグリシン', 'β-アラニン', 'アラニン']);
+    expect(c3.filter((i) => i.props.grade === 1).map((i) => [i.name, i.props.alpha, i.chiral])).toEqual([['β-アラニン', false, 0], ['アラニン', true, 1]]);
+    const c4 = isomers(N(4, 9, 2));
+    expect(classes(N(4, 9, 2))).toEqual({ aminoacid: 9 });
+    const primary = c4.filter((i) => i.props.grade === 1);
+    expect(primary.map((i) => i.name).sort()).toEqual(['2-アミノ-2-メチルプロパン酸', '2-アミノブタン酸', '3-アミノ-2-メチルプロパン酸', '3-アミノブタン酸', '4-アミノブタン酸']);
+    expect(primary.filter((i) => i.props.alpha).map((i) => i.name).sort()).toEqual(['2-アミノ-2-メチルプロパン酸', '2-アミノブタン酸']);
+    for (const i of c4) expect([i.props.basic, i.props.nahco3, i.props.naoh]).toEqual([true, true, true]);
+    expect(mol('C(N)(C(=O)(O))').formula).toBe('H2NCH2COOH');
+    expect(mol('C(N)(C(=O)(O))').name).toBe('グリシン');
+    // 対象外：アミノ酸のエステル、ヒドロキシアミド、尿素、カルバミン酸、ニトロ・N–O 化合物、エナミン
+    for (const bad of ['C(N)(C(=O)(O(C)))', 'C(O)(C(=O)(N))', 'C(=O)(N)(N)', 'C(=O)(N)(O)', 'N(O)(C)', 'C(=C)(N)', 'C(N)(N)', 'C(N)(O)', 'N(N)(C)', 'N(Cl)(C)']) {
+      expect(byKey(bad), bad).toBeUndefined();
+    }
+  });
+  it('芳香族の窒素化合物', () => {
+    expect(isomers(N(7, 9)).map((i) => i.name).sort()).toEqual(['N-メチルアニリン', 'm-トルイジン', 'o-トルイジン', 'p-トルイジン', 'ベンジルアミン']);
+    const aniline = mol('N(Ph)');
+    expect([aniline.name, aniline.cls, aniline.props.basic, aniline.props.bleach, aniline.props.grade]).toEqual(['アニリン', 'amine', true, true, 1]);
+    expect(mol('C(N)(Ph)').props.bleach).toBe(false);
+    const anilide = mol('C(C)(=O)(N(Ph))');
+    expect([anilide.name, anilide.formula, anilide.cls, anilide.props.basic]).toEqual(['アセトアニリド', 'C6H5NHCOCH3', 'amide', false]);
+    expect(byKey(anilide.props.hydrolysis!.acid)!.name).toBe('酢酸');
+    expect(byKey(anilide.props.hydrolysis!.amine!)!.name).toBe('アニリン');
+    const amides = isomers(N(8, 9, 1)).filter((i) => i.cls === 'amide');
+    expect(amides.length).toBe(11);
+    expect(amides.map((i) => i.name)).toContain('アセトアニリド');
+    expect(classes(N(8, 11))).toEqual({ amine: 20 });
+    const paba = mol('Arp(N)(C(=O)(O))');
+    expect([paba.cls, paba.props.alpha, paba.props.basic, paba.props.nahco3]).toEqual(['aminoacid', false, true, true]);
+  });
+});
+
+describe('三置換ベンゼン', () => {
+  it('数え上げ', () => {
+    expect(isomers({ c: 6, h: 3, cl: 3 }).map((i) => i.name).sort()).toEqual(['1,2,3-トリクロロベンゼン', '1,2,4-トリクロロベンゼン', '1,3,5-トリクロロベンゼン']);
+    const c9 = isomers(S(9, 12));
+    expect(c9.length).toBe(8);
+    expect(c9.filter((i) => i.mol.atoms.includes('Tr')).map((i) => i.name).sort()).toEqual(['1,2,3-トリメチルベンゼン', '1,2,4-トリメチルベンゼン', '1,3,5-トリメチルベンゼン']);
+    const c7 = isomers({ c: 7, h: 6, cl: 2 });
+    expect(c7.length).toBe(10);
+    expect(c7.filter((i) => i.mol.atoms.includes('Tr')).map((i) => i.name).sort()).toEqual(
+      ['2,3-ジクロロトルエン', '2,4-ジクロロトルエン', '2,5-ジクロロトルエン', '2,6-ジクロロトルエン', '3,4-ジクロロトルエン', '3,5-ジクロロトルエン']);
+    // 3 つとも異なる置換基なら 10 通り
+    expect(isomers({ c: 7, h: 6, o: 1, cl: 1, br: 1 }).filter((i) => i.mol.atoms.includes('Tr') && i.cls === 'phenol' && i.formula.includes('CH3')).length).toBe(0);
+    expect(isomers({ c: 6, h: 4, o: 1, cl: 1, br: 1 }).filter((i) => i.mol.atoms.includes('Tr')).length).toBe(10);
+    // 既存の数は変わらない
+    expect(isomers(S(8, 10)).length).toBe(4);
+    expect(isomers(S(7, 8, 1)).length).toBe(5);
+  });
+  it('性質', () => {
+    const tmb = (pat: string) => isomers(S(9, 12)).find((i) => triPattern(i) === pat)!;
+    expect(['123', '124', '135'].map((p) => ringSubCount(tmb(p)))).toEqual([2, 3, 1]);
+    for (const p of ['123', '124', '135']) {
+      const acid = byKey(tmb(p).props.sideOxid!)!;
+      expect(triPattern(acid)).toBe(p);
+      expect(specText(specOf(acid.mol))).toBe('C9H6O6');
+      expect(acid.cls).toBe('acid');
+    }
+    const x = (name: string) => named(S(8, 10, 1), name);
+    expect(['2,3-', '2,4-', '2,5-', '2,6-', '3,4-', '3,5-'].map((p) => ringSubCount(x(p + 'ジメチルフェノール')))).toEqual([3, 3, 3, 2, 3, 2]);
+    expect(['2,3-', '2,4-', '2,5-', '2,6-', '3,4-', '3,5-'].map((p) => twinPos(x(p + 'ジメチルフェノール')))).toEqual(['o', 'm', 'p', 'm', 'o', 'm']);
+    expect(['2,3-', '2,4-', '2,5-', '2,6-', '3,4-', '3,5-'].map((p) => triPattern(x(p + 'ジメチルフェノール')))).toEqual(['123', '124', '124', '123', '124', '135']);
+    expect(x('2,4-ジメチルフェノール').props.fecl3).toBe(true);
+    expect(x('2,4-ジメチルフェノール').formula).toBe('１,２,４-C6H3(OH)(CH3)CH3');
+  });
+  it('原子や結合の順序、番号の向きによらず同じ key', () => {
+    // 2,4-ジメチルフェノール：環の 1 位に OH、2 位と 4 位に CH3
+    const a: Mol = { atoms: ['Tr', 'O', 'C', 'C'], pos: ['124'], bonds: [[0, 1, 1, 1], [0, 2, 1, 2], [0, 3, 1, 4]] };
+    const b: Mol = { atoms: ['C', 'O', 'C', 'Tr'], pos: [undefined, undefined, undefined, '124'], bonds: [[2, 3, 1, 4], [3, 1, 1, 1], [0, 3, 1, 2]] };
+    expect(canonical(a)).toBe(canonical(b));
+    expect(byKey(canonical(a))!.name).toBe('2,4-ジメチルフェノール');
+    expect(isValid(a)).toBe(true);
+    expect(specText(specOf(a))).toBe('C8H10O');
+    // 123 型の両端は 1 と 3 のどちらで書いてもよい
+    const c: Mol = { atoms: ['Tr', 'O', 'C', 'C'], pos: ['123'], bonds: [[0, 1, 1, 2], [0, 2, 1, 1], [0, 3, 1, 3]] };
+    expect(byKey(canonical(c))!.name).toBe('2,6-ジメチルフェノール');
+    expect(isValid({ atoms: ['Tr', 'O', 'C', 'C'], pos: ['124'], bonds: [[0, 1, 1, 1], [0, 2, 1, 2], [0, 3, 1, 2]] })).toBe(false);
+    // 環の炭素の番号から節点の書き方を求める
+    expect(ringNode([3])).toEqual({ atom: 'Ph' });
+    expect(ringNode([2, 5])).toEqual({ atom: 'Ar', pos: 'p' });
+    expect(ringNode([6, 1])).toEqual({ atom: 'Ar', pos: 'o' });
+    expect(ringNode([1, 3, 5])).toEqual({ atom: 'Tr', pos: '135', slots: [0, 0, 0] });
+    expect(ringNode([6, 1, 2])).toEqual({ atom: 'Tr', pos: '123', slots: [1, 2, 1] });
+    expect(ringNode([1, 2, 4])).toEqual({ atom: 'Tr', pos: '124', slots: [1, 2, 4] });
+    expect(ringNode([1, 3, 4])).toEqual({ atom: 'Tr', pos: '124', slots: [4, 2, 1] });
+    expect(ringNode([1, 1])).toBeUndefined();
+    // 2,5-ジメチルフェノールを、環の番号 1（OH）、2、5（CH3）から組み立てる
+    const node = ringNode([1, 2, 5])!;
+    const d: Mol = { atoms: [node.atom, 'O', 'C', 'C'], pos: [node.pos], bonds: [[0, 1, 1, node.slots![0]], [0, 2, 1, node.slots![1]], [0, 3, 1, node.slots![2]]] };
+    expect(byKey(canonical(d))!.name).toBe('2,5-ジメチルフェノール');
+  });
+  it('描いた構造が木でなくても止まらない', () => {
+    const ring: Mol = { atoms: ['C', 'C', 'C'], bonds: [[0, 1, 1], [1, 2, 1], [2, 0, 1]] };
+    expect(canonical(ring).startsWith('#')).toBe(true);
+    expect(isValid(ring)).toBe(false);
+    expect(specText(specOf(ring))).toBe('C3H6');
+    const apart: Mol = { atoms: ['C', 'C', 'O'], bonds: [[0, 1, 1]] };
+    expect(canonical(apart).startsWith('#')).toBe(true);
+    expect(isValid(apart)).toBe(false);
+    // 規則の外でも、木であれば key は決まる（描いた答えと照合できる）
+    const diol: Mol = { atoms: ['O', 'C', 'C', 'O'], bonds: [[0, 1, 1], [1, 2, 1], [2, 3, 1]] };
+    expect(canonical(diol)).toBe(canonical({ atoms: ['C', 'O', 'O', 'C'], bonds: [[3, 2, 1], [0, 3, 1], [1, 0, 1]] }));
+    expect(isValid(diol)).toBe(false);
+    const amine: Mol = { atoms: ['N', 'C', 'C'], bonds: [[1, 0, 1], [1, 2, 1]] };
+    expect(byKey(canonical(amine))!.name).toBe('エチルアミン');
+  });
+});
+
 describe('構造決定の問題', () => {
   const N = 300;
   const polite = /です|ます|ください|でしょう/;
@@ -382,7 +531,7 @@ describe('構造決定の問題', () => {
   it('決められる化合物が十分にある', () => {
     // 手がかりで 1 つに決まる化合物の種類を、分子式ごとに数える
     const got = new Map<string, Set<string>>();
-    for (const level of levels) for (let seed = 0; seed < 600; seed++) {
+    for (const level of levels) for (let seed = 0; seed < 4000; seed++) {
       const p = makeIdentify(rngOf(seed * 13 + level * 7), level);
       const id = specText(p.spec);
       if (!got.has(id)) got.set(id, new Set());
@@ -393,5 +542,18 @@ describe('構造決定の問題', () => {
     expect(got.get('C4H8O2')!.size).toBe(6);
     expect(got.get('C7H8O')!.size).toBe(5);
     expect(got.get('C8H10')!.size).toBe(4);
+    expect(got.get('C3H9N')!.size).toBe(4);
+    expect(got.get('C3H7NO')!.size).toBe(4);
+    expect(got.get('C4H9NO2')!.size).toBe(5);
+    expect(got.get('C6H3Cl3')!.size).toBe(3);
+    expect(got.get('C9H12')!.size).toBe(8);
+    expect(got.get('C7H6Cl2')!.size).toBe(10);
+    expect(got.get('C7H9N')!.size).toBe(5);
+    expect(got.get('C8H9NO')!.size).toBe(11);
+    // 6 種類のジメチルフェノールもすべて決められる
+    expect([...got.get('C8H10O')!].filter((k) => k.includes('Tr')).length).toBe(6);
+    // 正解は必ず、問題文で言い切った範囲に入っている
+    for (const k of got.get('C4H9NO2')!) expect(byKey(k)!.props.grade).toBe(1);
+    for (const k of got.get('C8H9NO')!) expect(byKey(k)!.cls).toBe('amide');
   });
 });

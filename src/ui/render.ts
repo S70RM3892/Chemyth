@@ -2,7 +2,7 @@ import { ZONES, hubRect, isSea, zoneAt, zoneSpots, type Zone } from '../content/
 import { ELEMENTS } from '../content/elements';
 import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { beltSpeed, currentGoal, DX, DY, fedTier, goalCount, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, railOf, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { beltSpeed, currentGoal, DX, DY, fedTier, goalCount, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, railOf, stationTargets, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 
@@ -580,31 +580,35 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
 
   // ---- 貨物線：積む駅から降ろす駅へ、設備の上を越える高架の線路と列車。
-  //      線路は横に進んでから縦に曲がる。積む駅ごとに少しずらすので、同じ行き先でも重ならない ----
+  //      自動の線路は横に進んでから縦に曲がる。降ろす駅がいくつもあれば、それぞれへ線路が分かれる ----
   for (const e of w.ents.values()) {
     if (e.kind !== 'station' || e.role !== 'in') continue;
-    const route = railOf(w, e);
-    if (!route) continue;
-    const pts = route.pts;
-    const xs = pts.map((q) => sx(q[0])), ys = pts.map((q) => sy(q[1]));
-    if (Math.max(...xs) < -50 || Math.min(...xs) > cw + 50 || Math.max(...ys) < -50 || Math.min(...ys) > ch + 50) continue;
+    const own = railOf(w, e);
+    if (!own) continue;
+    const routes = own.custom ? [own] : stationTargets(w, e).map((d) => railOf(w, e, d)!);
     const col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length], lift2 = z * 0.3;
-    const path = (ox: number, oy: number) => { ctx.beginPath(); xs.forEach((x, k) => (k ? ctx.lineTo(x + ox, ys[k] + oy) : ctx.moveTo(x + ox, ys[k] + oy))); };
+    const screen = routes.map((r) => ({ r, xs: r.pts.map((q) => sx(q[0])), ys: r.pts.map((q) => sy(q[1])) }));
     ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
-    // 地面の影 → 枕木 → 桁 → 路線色
-    ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2; path(lift2 * 0.5, lift2); ctx.stroke();
-    ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = z * 0.26; ctx.setLineDash([z * 0.07, z * 0.2]); path(0, 0); ctx.stroke(); ctx.setLineDash([]);
-    ctx.lineWidth = z * 0.13; path(0, 0); ctx.stroke();
-    ctx.strokeStyle = col; ctx.lineWidth = z * 0.07; path(0, 0); ctx.stroke();
-    // 列車：道のりに沿って進む
-    const tr = e.tr;
-    if (tr && z >= 10) {
-      // 道のりの何マス目にいるかから、どの区間のどこかを求める
+    for (const { xs, ys } of screen) {
+      if (Math.max(...xs) < -50 || Math.min(...xs) > cw + 50 || Math.max(...ys) < -50 || Math.min(...ys) > ch + 50) continue;
+      const path = (ox: number, oy: number) => { ctx.beginPath(); xs.forEach((x, k) => (k ? ctx.lineTo(x + ox, ys[k] + oy) : ctx.moveTo(x + ox, ys[k] + oy))); };
+      // 地面の影 → 枕木 → 桁 → 路線色
+      ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2; path(lift2 * 0.5, lift2); ctx.stroke();
+      ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = z * 0.26; ctx.setLineDash([z * 0.07, z * 0.2]); path(0, 0); ctx.stroke(); ctx.setLineDash([]);
+      ctx.lineWidth = z * 0.13; path(0, 0); ctx.stroke();
+      ctx.strokeStyle = col; ctx.lineWidth = z * 0.07; path(0, 0); ctx.stroke();
+    }
+    // 列車：それぞれの行き先の道のりに沿って進む
+    if (z >= 10) for (const tr of [e.tr, ...(e.xtr ?? [])]) {
+      if (!tr) continue;
+      const sc = screen.find((q) => `${q.r.dest.x},${q.r.dest.y}` === tr.to) ?? screen[0];
+      const { xs, ys } = sc, pts = sc.r.pts;
       const segs = pts.slice(1).map((q, k) => Math.abs(q[0] - pts[k][0]) + Math.abs(q[1] - pts[k][1]));
       let d = Math.max(0, Math.min(1, tr.p)) * segs.reduce((x, y) => x + y, 0), a = 0;
       while (a < segs.length - 1 && d > segs[a]) { d -= segs[a]; a++; }
       const f = segs[a] ? Math.min(1, d / segs[a]) : 0;
       const tx = xs[a] + (xs[a + 1] - xs[a]) * f, ty = ys[a] + (ys[a + 1] - ys[a]) * f;
+      if (tx < -60 || tx > cw + 60 || ty < -60 || ty > ch + 60) continue;
       const ang = Math.atan2(ys[a + 1] - ys[a], xs[a + 1] - xs[a]) + (tr.back ? Math.PI : 0);
       ctx.save();
       ctx.translate(tx, ty); ctx.rotate(ang);

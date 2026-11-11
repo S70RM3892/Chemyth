@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
-import { STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
+import { STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, stationTargets, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
@@ -848,6 +848,53 @@ describe('工場の動作', () => {
     expect(railOf(w, a)).toBeNull();
     b.ch = 1; remove(w, 30, 10);
     expect(railOf(w, a)).toBeNull();
+  });
+
+  it('列車は、降ろす駅がいくつもあれば順番に配り、編成を増やせば多く運ぶ', () => {
+    // 分岐：同じ番線の降ろす駅 2 つへ、交互に届く
+    const w = newWorld();
+    place(w, 'station', 10, 10, 0); place(w, 'station', 30, 10, 0); place(w, 'station', 10, 40, 0);
+    const a = at(w, 10, 10)!, b1 = at(w, 30, 10)!, b2 = at(w, 10, 40)!;
+    b1.role = 'out'; b2.role = 'out';
+    expect(stationTargets(w, a)).toEqual([b1, b2]);   // 近い順
+    for (let i = 0; i < 60 * 60; i++) { a.buf = Array(STATION_CAP).fill('N2'); step(w, 1 / 60); if (b1.buf!.length > 40) b1.buf = []; if (b2.buf!.length > 40) b2.buf = []; }
+    expect(b1.buf!.length + b2.buf!.length).toBeGreaterThan(0);
+    const w1 = newWorld();
+    place(w1, 'station', 10, 10, 0); place(w1, 'station', 30, 10, 0); place(w1, 'station', 10, 40, 0);
+    at(w1, 30, 10)!.role = 'out'; at(w1, 10, 40)!.role = 'out';
+    at(w1, 10, 10)!.buf = Array(TRAIN_CAP * 2).fill('O2');
+    run(w1, 30);
+    expect(at(w1, 30, 10)!.buf!.length).toBe(TRAIN_CAP);  // 1 便目と 2 便目が別々の駅へ
+    expect(at(w1, 10, 40)!.buf!.length).toBe(TRAIN_CAP);
+    // 自分で線路を敷くと、その 1 か所だけに送る
+    const w2 = newWorld();
+    place(w2, 'station', 10, 10, 0); place(w2, 'station', 30, 10, 0); place(w2, 'station', 10, 40, 0);
+    at(w2, 30, 10)!.role = 'out'; at(w2, 10, 40)!.role = 'out';
+    Object.assign(at(w2, 10, 10)!, { rail: [[10.5, 10.5], [10.5, 40.5]], railTo: '10,40', buf: Array(TRAIN_CAP * 2).fill('O2') });
+    run(w2, 40);
+    expect(at(w2, 30, 10)!.buf!.length).toBe(0);
+    expect(at(w2, 10, 40)!.buf!.length).toBe(TRAIN_CAP * 2);
+    // 増発：3 編成にすると、1 編成のときの 2 倍以上運ぶ
+    const moved = (cars: number) => {
+      const f = newWorld();
+      place(f, 'station', 0, 100, 0); place(f, 'station', 60, 140, 0);
+      const src = at(f, 0, 100)!, dst = at(f, 60, 140)!;
+      dst.role = 'out'; src.cars = cars;
+      let n = 0;
+      for (let i = 0; i < 90 * 60; i++) { src.buf = Array(STATION_CAP).fill('N2'); n += dst.buf!.length; dst.buf = []; step(f, 1 / 60); }
+      return n;
+    };
+    const one = moved(1), three = moved(3);
+    expect(three).toBeGreaterThan(one * 2);
+    // 編成を減らすと、駅に戻った空の編成から外れる
+    const g = newWorld();
+    place(g, 'station', 10, 10, 0); place(g, 'station', 20, 10, 0);
+    at(g, 20, 10)!.role = 'out';
+    const src = at(g, 10, 10)!;
+    src.cars = 3; run(g, 1);
+    expect(src.xtr!.length).toBe(2);
+    src.cars = 1; run(g, 1);
+    expect(src.xtr!.length).toBe(0);
   });
 
   it('コンビナートの最初の指令を、実際に工場を組んで通す（入り江 → 蒸留 → 電解 → 列車 → 納品所）', () => {

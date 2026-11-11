@@ -1,6 +1,6 @@
 import { pretty } from '../chem/formula';
 import {
-  byKey, cisTransCount, dehydCount, isomers, methylCount, monoSubCount, ringPos, ringSubCount, skeleton, specOf, specText, stereoCount,
+  byKey, cisTransCount, dehydCount, isomers, methylCount, monoSubCount, ringPos, ringSubCount, skeleton, specOf, specText, stereoCount, triPattern, twinPos,
   type IsoClass, type Isomer, type Spec,
 } from '../chem/isomers';
 
@@ -10,9 +10,9 @@ import {
  *  - makeIdentify：実験結果を並べ、ただ 1 つに決まる化合物を答えさせる
  * 文章はすべてここで組み立てる。同じ乱数列からは同じ問題ができる。
  *
- * 数え上げの範囲は isomers.ts の規則による（単官能の鎖式化合物と、一置換・二置換ベンゼン）。
+ * 数え上げの範囲は isomers.ts の規則による（単官能の鎖式化合物、アミノ酸、三置換までのベンゼン）。
  * 現実にはその外にも異性体がある分子式では、問題文で範囲を言い切る
- * （「アルケン」「カルボニル化合物」「置換基は 2 個以下」など）。
+ * （「アルケン」「カルボニル化合物」「アミド」「–NH₂ と –COOH を 1 個ずつもつ」など）。
  */
 
 /** [0, 1) の乱数 */
@@ -58,6 +58,7 @@ export const SPECS: { spec: Spec; level: 1 | 2 | 3; note: string }[] = [
   { spec: { c: 3, h: 7, cl: 1 }, level: 1, note: '2 種類' },
   { spec: { c: 4, h: 9, cl: 1 }, level: 1, note: '4 種類。不斉炭素原子をもつものが 1 つ' },
   { spec: { c: 3, h: 6, cl: 2 }, level: 1, note: '4 種類' },
+  { spec: { c: 2, h: 7, n: 1 }, level: 1, note: 'アミン 2' },
 
   { spec: { c: 5, h: 12 }, level: 2, note: 'アルカン 3' },
   { spec: { c: 6, h: 14 }, level: 2, note: 'アルカン 5' },
@@ -68,16 +69,26 @@ export const SPECS: { spec: Spec; level: 1 | 2 | 3; note: string }[] = [
   { spec: { c: 5, h: 10, o: 2 }, level: 2, note: 'カルボン酸 4、エステル 9' },
   { spec: { c: 5, h: 11, cl: 1 }, level: 2, note: '8 種類' },
   { spec: { c: 4, h: 8, cl: 2 }, level: 2, note: '9 種類' },
+  { spec: { c: 3, h: 9, n: 1 }, level: 2, note: 'アミン 4（第一級 2、第二級 1、第三級 1）' },
+  { spec: { c: 4, h: 11, n: 1 }, level: 2, note: 'アミン 8（第一級 4、第二級 3、第三級 1）' },
+  { spec: { c: 3, h: 7, n: 1, o: 1 }, level: 2, note: 'アミド 4' },
+  { spec: { c: 3, h: 7, n: 1, o: 2 }, level: 2, note: 'アラニン、β-アラニン、N-メチルグリシン' },
 
   { spec: { c: 7, h: 16 }, level: 3, note: 'アルカン 9' },
   { spec: { c: 6, h: 12 }, level: 3, note: 'アルケン 13' },
   { spec: { c: 7, h: 8, o: 1 }, level: 3, note: 'ベンジルアルコール、アニソール、クレゾール 3' },
   { spec: { c: 8, h: 10 }, level: 3, note: 'エチルベンゼンとキシレン 3' },
-  { spec: { c: 8, h: 10, o: 1 }, level: 3, note: '一置換体 4、二置換体 9（ジメチルフェノール 6 種は範囲外）' },
+  { spec: { c: 8, h: 10, o: 1 }, level: 3, note: 'フェノール類 9（うちジメチルフェノール 6）、アルコール 5、エーテル 5' },
   { spec: { c: 8, h: 8, o: 1 }, level: 3, note: '芳香族のアルデヒド 4、ケトン 1' },
-  { spec: { c: 9, h: 12 }, level: 3, note: '一置換体 2、二置換体 3（トリメチルベンゼン 3 種は範囲外）' },
+  { spec: { c: 9, h: 12 }, level: 3, note: '一置換体 2、二置換体 3、三置換体 3' },
   { spec: { c: 8, h: 8, o: 2 }, level: 3, note: '芳香族のカルボン酸 4、エステル 6' },
-  { spec: { c: 9, h: 10, o: 2 }, level: 3, note: '芳香族のカルボン酸 8、エステル 18' },
+  { spec: { c: 9, h: 10, o: 2 }, level: 3, note: '芳香族のカルボン酸 14、エステル 24' },
+  { spec: { c: 6, h: 3, cl: 3 }, level: 3, note: 'トリクロロベンゼン 3' },
+  { spec: { c: 7, h: 6, cl: 2 }, level: 3, note: 'ジクロロトルエン 6 を含む 10 種類' },
+  { spec: { c: 4, h: 9, n: 1, o: 2 }, level: 3, note: '–NH₂ と –COOH をもつもの 5（α-アミノ酸 2）' },
+  { spec: { c: 7, h: 9, n: 1 }, level: 3, note: 'ベンジルアミン、N-メチルアニリン、トルイジン 3' },
+  { spec: { c: 8, h: 11, n: 1 }, level: 3, note: '芳香族アミン 20（ジメチルアニリン 6 を含む）' },
+  { spec: { c: 8, h: 9, n: 1, o: 1 }, level: 3, note: '芳香族アミド 11（アセトアニリドなど）' },
 ];
 
 // ---------------------------------------------------------------- 共通
@@ -86,14 +97,14 @@ const F = (spec: Spec): string => pretty(specText(spec));
 const show = (i: Isomer): string => pretty(i.formula) + (i.name ? `（${i.name}）` : '');
 const isClass = (...cs: IsoClass[]) => (i: Isomer): boolean => cs.includes(i.cls);
 
-interface Shape { rings: number; dbl: number; o: number; hal: number; extra: number }
+interface Shape { rings: number; dbl: number; o: number; n: number; hal: number; extra: number }
 
 /** 分子式から決まる形。extra は環以外の原子（H を除く）の数 */
 function shapeOf(spec: Spec): Shape {
-  const o = spec.o || 0, hal = (spec.cl || 0) + (spec.br || 0);
-  const dou = (2 * spec.c + 2 - spec.h - hal) / 2;
+  const o = spec.o || 0, n = spec.n || 0, hal = (spec.cl || 0) + (spec.br || 0);
+  const dou = (2 * spec.c + 2 + n - spec.h - hal) / 2;
   const rings = Math.floor(dou / 4);
-  return { rings, dbl: dou - 4 * rings, o, hal, extra: spec.c - 6 * rings + o + hal };
+  return { rings, dbl: dou - 4 * rings, o, n, hal, extra: spec.c - 6 * rings + o + n + hal };
 }
 
 const pick = <T>(rng: Rng, list: T[]): T => list[Math.min(list.length - 1, Math.floor(rng() * list.length))];
@@ -108,6 +119,13 @@ function shuffle<T>(rng: Rng, list: T[]): T[] {
 }
 
 const acidOf = (i: Isomer): Isomer | undefined => (i.props.hydrolysis ? byKey(i.props.hydrolysis.acid) : undefined);
+/** アミドの加水分解で得られるアミン（アンモニアを含む） */
+const amineOf = (i: Isomer): Isomer | undefined => (i.props.hydrolysis?.amine ? byKey(i.props.hydrolysis.amine) : undefined);
+/** –NH2 と –COOH を 1 個ずつもつ */
+const primaryAA = (i: Isomer): boolean => i.cls === 'aminoacid' && i.props.grade === 1;
+/** N に H が残っているアミン（無水酢酸でアミドになる） */
+const hasNH = (i: Isomer): boolean => i.cls === 'amine' && i.props.grade !== undefined && i.props.grade < 3;
+const ringKind = (i: Isomer): string => (i.mol.atoms.includes('Tr') ? 'Tr' : i.mol.atoms.includes('Ar') ? 'Ar' : i.mol.atoms.includes('Ph') ? 'Ph' : '');
 const alcOf = (i: Isomer): Isomer | undefined => (i.props.hydrolysis ? byKey(i.props.hydrolysis.alcohol) : undefined);
 
 /** 第一級アルコールを十分に酸化して得られるカルボン酸の key */
@@ -126,6 +144,9 @@ const BENZOIC = byKey('C(=O)(O)(Ph)')!.key;
 const PHTHALIC = byKey('Aro(C(=O)(O))(C(=O)(O))')!.key;
 const DIACIDS = [PHTHALIC, byKey('Arm(C(=O)(O))(C(=O)(O))')!.key, byKey('Arp(C(=O)(O))(C(=O)(O))')!.key];
 const FORMALDEHYDE = byKey('C(=O)')!.key;
+const FORMIC = byKey('C(=O)(O)')!.key;
+const AMMONIA = byKey('N')!.key;
+const ANILINE = byKey('N(Ph)')!.key;
 
 // ---------------------------------------------------------------- 数える問題
 
@@ -140,6 +161,13 @@ function universesOf(spec: Spec, all: Isomer[]): Universe[] {
     if (list.length) out.push({ label, list, pred });
   };
   const any = (): boolean => true;
+  if (s.n) {
+    if (s.n !== 1 || s.hal) return out;
+    if (s.o === 0 && s.dbl === 0) add(s.rings ? 'ベンゼン環をもつアミン' : 'アミン', any);
+    else if (s.o === 1 && s.dbl === 1) add(s.rings ? 'ベンゼン環をもつアミド' : 'アミド', isClass('amide'));
+    else if (s.o === 2 && s.dbl === 1 && !s.rings) add('、アミノ基 –NH₂ とカルボキシ基 –COOH を 1 個ずつもつ化合物', primaryAA);
+    return out;
+  }
   if (s.rings === 0) {
     if (s.o === 0 && s.dbl === 0) add(s.hal ? '化合物' : 'アルカン', any);
     else if (s.o === 0 && s.dbl === 1) add(s.hal ? '鎖式の化合物' : 'アルケン', any);
@@ -192,6 +220,7 @@ const noEster = (u: Isomer[]): boolean => u.every((i) => i.cls !== 'ester');
 const allChain = (u: Isomer[]): boolean => u.every((i) => skeleton(i) !== undefined);
 const oneRing = (u: Isomer[]): boolean => u.every((i) => ringSubCount(i) !== undefined);
 const allAlkane = (u: Isomer[]): boolean => u.every((i) => i.cls === 'alkane');
+const allAmide = (u: Isomer[]): boolean => u.every((i) => i.cls === 'amide' && !!i.props.hydrolysis?.amine);
 
 const CONDS: Cond[] = [
   C('na', 'na', '金属ナトリウムと反応して水素を発生し', '金属ナトリウムと反応して水素を発生する', (i) => i.props.na, 'ナトリウムと反応するのは –OH をもつ化合物。'),
@@ -204,7 +233,7 @@ const CONDS: Cond[] = [
   C('iodoform', 'iodoform', 'ヨードホルム反応を示し', 'ヨードホルム反応を示す', (i) => i.props.iodoform, 'ヨードホルム反応を示すのは CH₃CH(OH)– か CH₃CO– の構造をもつ化合物。', noEster),
   C('ox-ald', 'oxid', '酸化するとアルデヒドになり', '酸化するとアルデヒドになる', (i) => i.props.oxid === 'aldehyde', '酸化してアルデヒドになるのは第一級アルコール。'),
   C('ox-ket', 'oxid', '酸化するとケトンになり', '酸化するとケトンになる', (i) => i.props.oxid === 'ketone', '酸化してケトンになるのは第二級アルコール。'),
-  C('ox-none', 'oxid', '第三級アルコールであり', '第三級アルコールである', (i) => i.props.grade === 3, '–OH のついた炭素に炭素が 3 個結合している。酸化されにくい。'),
+  C('ox-none', 'oxid', '第三級アルコールであり', '第三級アルコールである', (i) => i.props.oxid === 'none', '–OH のついた炭素に炭素が 3 個結合している。酸化されにくい。'),
   C('chiral', 'chiral', '不斉炭素原子をもち', '不斉炭素原子をもつ', (i) => i.chiral > 0, '4 種類の異なる原子・原子団が結合した炭素を探す。'),
   C('dehyd0', 'dehyd', '分子内脱水でアルケンを生じず', '分子内脱水でアルケンを生じない', (i) => dehydCount(i) === 0, '–OH のついた炭素の隣に、H をもつ炭素がない。', allAlcohol),
   C('dehyd1', 'dehyd', '分子内脱水で生じるアルケンが 1 種類だけであり', '分子内脱水で生じるアルケンが 1 種類だけである', (i) => dehydCount(i) === 1, '隣の炭素から H がとれる向きを数える。', allAlcohol),
@@ -223,7 +252,18 @@ const CONDS: Cond[] = [
   C('side-bz', 'side', '過マンガン酸カリウムで酸化すると安息香酸になり', '過マンガン酸カリウムで酸化すると安息香酸になる', (i) => i.props.sideOxid === BENZOIC, '側鎖が 1 本なら、長さによらず安息香酸になる。'),
   C('side-di', 'side', '過マンガン酸カリウムで酸化すると 2 価のカルボン酸になり', '過マンガン酸カリウムで酸化すると 2 価のカルボン酸になる', (i) => !!i.props.sideOxid && DIACIDS.includes(i.props.sideOxid), '側鎖が 2 本あれば、それぞれが –COOH になる。'),
   ...[1, 2, 3, 4].map((n) => C('ring' + n, 'ring', `ベンゼン環の水素原子 1 個を塩素原子で置換してできる構造異性体が ${n} 種類であり`, `ベンゼン環の水素原子 1 個を塩素原子で置換してできる構造異性体が ${n} 種類である`,
-    (i) => ringSubCount(i) === n, '環上の等価でない水素原子を数える。一置換体は 3 種類、二置換体は置換基が同じなら o 2・m 3・p 1、異なれば o 4・m 4・p 2。', oneRing)),
+    (i) => ringSubCount(i) === n, '環上の等価でない水素原子を数える。一置換体は 3 種類、二置換体は置換基が同じなら o 2・m 3・p 1、異なれば o 4・m 4・p 2。三置換体は環の対称性から数える。', oneRing)),
+  C('mono', 'nsub', 'ベンゼンの一置換体であり', 'ベンゼンの一置換体である', (i) => ringKind(i) === 'Ph', '環に結合した置換基が 1 個。', oneRing),
+  C('di', 'nsub', 'ベンゼンの二置換体であり', 'ベンゼンの二置換体である', (i) => ringKind(i) === 'Ar', '環に結合した置換基が 2 個。オルト・メタ・パラの 3 通りを考える。', oneRing),
+  C('tri', 'nsub', 'ベンゼンの三置換体であり', 'ベンゼンの三置換体である', (i) => ringKind(i) === 'Tr', '環に結合した置換基が 3 個。位置は 1,2,3、1,2,4、1,3,5 の 3 通りで、置換基の並べ方も数える。', oneRing),
+  ...[1, 2, 3].map((n) => C('am' + n, 'amine', `第${'一二三'[n - 1]}級アミンであり`, `第${'一二三'[n - 1]}級アミンである`, (i) => i.cls === 'amine' && i.props.grade === n,
+    `窒素原子に炭素が ${n} 個結合している。`)),
+  C('bleach', 'bleach', 'さらし粉水溶液で呈色し', 'さらし粉水溶液で呈色する', (i) => i.props.bleach, '呈色するのは、ベンゼン環に直接 –NH₂ が結合した化合物。'),
+  C('amd-nh3', 'amd', '加水分解するとアンモニアを生じ', '加水分解するとアンモニアを生じる', (i) => i.props.hydrolysis?.amine === AMMONIA, '–CONH₂ の形のアミド。', allAmide),
+  C('amd-prim', 'amd', '加水分解すると第一級アミンを生じ', '加水分解すると第一級アミンを生じる', (i) => amineOf(i)?.props.grade === 1, 'アミド結合の N に、C=O の炭素のほかに炭素が 1 個結合している。', allAmide),
+  C('amd-aniline', 'amd', '加水分解するとアニリンを生じ', '加水分解するとアニリンを生じる', (i) => i.props.hydrolysis?.amine === ANILINE, '–NH– がベンゼン環に直接結合し、環にほかの置換基がない。', allAmide),
+  C('amd-formic', 'amd-acid', '加水分解するとギ酸を生じ', '加水分解するとギ酸を生じる', (i) => allAmide([i]) && i.props.hydrolysis?.acid === FORMIC, 'HCO–N< の形のアミド。', allAmide),
+  C('alpha', 'alpha', 'α-アミノ酸であり', 'α-アミノ酸である', (i) => i.props.alpha === true, '–NH₂ と –COOH が同じ炭素に結合している。'),
   C('branched', 'chain', '炭素鎖に枝分かれがあり', '炭素鎖に枝分かれがある', (i) => skeleton(i) === 'branched', '炭素 3 個以上と結合した炭素がある。', allChain),
   C('linear', 'chain', '炭素鎖に枝分かれがなく', '炭素鎖に枝分かれがない', (i) => skeleton(i) === 'linear', 'どの炭素も、結合している炭素は 2 個以下。', allChain),
   ...[1, 2, 3, 4].map((n) => C('me' + n, 'methyl', `メチル基を ${n} 個もち`, `メチル基を ${n} 個もつ`, (i) => methylCount(i) === n, '–CH₃ を数える。', allChain)),
@@ -305,13 +345,13 @@ export function makeCount(rng: Rng, level?: 1 | 2 | 3): CountProblem {
   let text = `分子式 ${F(spec)} で表される${u.label}`;
   if (conds.length === 0) text += 'は何種類あるか。';
   else text += `のうち、${conds.map((c, k) => (k < conds.length - 1 ? c.te : c.rentai)).join('、')}ものは何種類あるか。`;
-  if (s.rings === 1 && s.extra >= 3) text += 'ただし、ベンゼン環に直接結合した置換基が 3 個以上のものは考えない。';
+  if (s.rings === 1 && s.extra >= 4) text += 'ただし、ベンゼン環に直接結合した置換基が 4 個以上のものは考えない。';
   text += stereo === 'none' ? '立体異性体は区別しない。'
     : stereo === 'ct' ? 'シス-トランス異性体は区別して数えろ（鏡像異性体は区別しない）。'
       : list.some((i) => i.props.br2) ? '立体異性体（シス-トランス異性体と鏡像異性体）も区別して数えろ。' : '鏡像異性体も区別して数えろ。';
 
   let how = '';
-  if (conds.length) how += `${u.label}は構造異性体が ${u.list.length} 種類。${conds.map((c) => c.why).join('')}当てはまるのは `;
+  if (conds.length) how += `${u.label.replace(/^、/, '')}は構造異性体が ${u.list.length} 種類。${conds.map((c) => c.why).join('')}当てはまるのは `;
   else how += '構造異性体は ';
   how += `${list.map(show).join('、')} の ${list.length} 種類。`;
   if (stereo !== 'none') {
@@ -345,7 +385,12 @@ function scopeOf(spec: Spec): Clue[] {
   const out: Clue[] = [];
   const add = (id: string, text: string, check: (i: Isomer) => boolean, why: string): void => { out.push({ id, tier: 1, text, check, why }); };
   if (s.rings === 1) {
-    add('scope-ring', s.extra >= 3 ? 'A はベンゼン環を 1 個もち、環に直接結合した置換基は 2 個以下である。' : 'A はベンゼン環をもつ。', () => true, '');
+    add('scope-ring', s.extra >= 4 ? 'A はベンゼン環を 1 個もち、環に直接結合した置換基は 3 個以下である。' : 'A はベンゼン環をもつ。', () => true, '');
+  }
+  if (s.n) {
+    if (s.o === 1 && s.dbl === 1) add('scope-amide', 'A はアミドである。', isClass('amide'), 'N と O は –CO–N< の形で使われている。');
+    if (s.o === 2 && s.dbl === 1) add('scope-aa', 'A は –NH₂ と –COOH を 1 個ずつもつ。', primaryAA, 'アミノ酸。炭素の並び方と –NH₂ の位置を決めればよい。');
+    return out;
   }
   if (s.dbl === 1 && s.o === 0 && s.rings === 0) add('scope-chain', 'A は鎖式の化合物である。', () => true, '');
   if (s.dbl === 1 && s.o === 1) {
@@ -378,7 +423,7 @@ function cluesFor(t: Isomer): Clue[] {
     ['A にアンモニア性硝酸銀水溶液を加えて温めると、銀が析出した。', '銀鏡反応を示すのでホルミル基をもつ。'],
     ['A にアンモニア性硝酸銀水溶液を加えて温めても、銀は析出しなかった。', 'ホルミル基をもたない。']);
   // エステルは NaOH で加水分解されるので、そのままのヨードホルム反応は手がかりにしない
-  if (t.cls !== 'ester') {
+  if (t.cls !== 'ester' && t.cls !== 'amide') {
     yn('iodoform', 1, P.iodoform, (i) => i.props.iodoform,
       ['A にヨウ素と水酸化ナトリウム水溶液を加えて温めると、黄色の沈殿が生じた。', 'ヨードホルム反応。CH₃CH(OH)– か CH₃CO– の構造をもつ。'],
       ['A にヨウ素と水酸化ナトリウム水溶液を加えて温めても、黄色の沈殿は生じなかった。', 'CH₃CH(OH)– も CH₃CO– ももたない。']);
@@ -386,6 +431,30 @@ function cluesFor(t: Isomer): Clue[] {
   yn('br2', 1, P.br2, (i) => i.props.br2,
     ['A に臭素を作用させると、付加反応が起こった。', 'C=C 結合をもつ。'],
     ['A は臭素と付加反応しなかった。', 'C=C 結合をもたない。']);
+
+  // アミン
+  if (t.mol.atoms.includes('N')) {
+    yn('basic', 1, P.basic, (i) => i.props.basic,
+      ['A は希塩酸と塩をつくって溶けた。', '塩基性を示す。アミノ基をもつ。'],
+      ['A は希塩酸と塩をつくらなかった。', '塩基性を示すアミノ基をもたない。']);
+    if (ringKind(t) && (t.cls === 'amine' || P.bleach)) {
+      yn('bleach', 1, P.bleach, (i) => i.props.bleach,
+        ['A にさらし粉水溶液を加えると、赤紫色に呈色した。', 'ベンゼン環に直接 –NH₂ が結合している。'],
+        ['A にさらし粉水溶液を加えても、呈色しなかった。', 'ベンゼン環に直接結合した –NH₂ をもたない。']);
+    }
+    if (t.cls === 'amine' && P.grade) {
+      const g = P.grade;
+      yn('acyl', 1, hasNH(t), hasNH,
+        ['A に無水酢酸を作用させると、アミドが生じた。', 'N に H が結合している。第一級か第二級のアミン。'],
+        ['A に無水酢酸を作用させても、アミドは生じなかった。', 'N に H がない。第三級アミン。']);
+      add('ngrade', 2, `A の窒素原子には、炭素原子が ${g} 個結合している。`, (i) => i.cls === 'amine' && i.props.grade === g, `第${'一二三'[g - 1]}級アミン。`);
+    }
+    if (t.cls === 'aminoacid' && P.alpha !== undefined) {
+      yn('alpha', 2, P.alpha, (i) => i.props.alpha === true,
+        ['A は α-アミノ酸である。', '–NH₂ と –COOH が同じ炭素に結合している。'],
+        ['A は α-アミノ酸ではない。', '–NH₂ は –COOH のついた炭素にはない。']);
+    }
+  }
 
   // アルコールの酸化と脱水
   if (t.cls === 'alcohol' && P.oxid) {
@@ -448,6 +517,47 @@ function cluesFor(t: Isomer): Clue[] {
     }
   }
 
+  // アミドの加水分解
+  if (t.cls === 'amide' && P.hydrolysis?.amine) {
+    const acid = acidOf(t), am = amineOf(t);
+    if (acid && am) {
+      const nh3 = am.key === AMMONIA;
+      const head = nh3 ? 'A を加水分解すると、カルボン酸 B とアンモニアが得られた。' : 'A を加水分解すると、カルボン酸 B とアミン C が得られた。';
+      const base = (i: Isomer): boolean => !!amineOf(i) && (amineOf(i)!.key === AMMONIA) === nh3;
+      const fact = (id: string, tier: 1 | 2 | 3, text: string, f: (i: Isomer) => boolean, why: string): void => {
+        out.push({ id, tier, text, check: (i) => base(i) && f(i), why, group: 'amd', head });
+      };
+      fact('amd', 1, '', () => true, nh3 ? 'A は –CONH₂ の形のアミド。' : 'A はアミド結合の N に炭素が結合したアミド。');
+      const af = specText(specOf(acid.mol));
+      fact('amd-formula', 1, `B の分子式は ${pretty(af)} であった。`, (i) => !!acidOf(i) && specText(specOf(acidOf(i)!.mol)) === af, nh3 ? '酸の部分の炭素数が決まる。' : '酸の部分の炭素数が決まり、残りが C の炭素数になる。');
+      const sv = acid.props.silver;
+      fact('amd-silver', 1, sv ? 'B は銀鏡反応を示した。' : 'B は銀鏡反応を示さなかった。', (i) => acidOf(i)?.props.silver === sv, sv ? 'B はギ酸。' : 'B はギ酸ではない。');
+      if (!nh3) {
+        if (ringKind(am)) {
+          const bl = am.props.bleach;
+          fact('amd-bleach', 1, bl ? 'C はさらし粉水溶液で赤紫色に呈色した。' : 'C はさらし粉水溶液で呈色しなかった。', (i) => amineOf(i)?.props.bleach === bl,
+            bl ? 'C はベンゼン環に直接 –NH₂ が結合したアミン。' : 'C の –NH₂ はベンゼン環に直接結合していない。');
+        }
+        const g = am.props.grade;
+        if (g) fact('amd-grade', 2, `C の窒素原子には、炭素原子が ${g} 個結合している。`, (i) => amineOf(i)?.props.grade === g, `C は第${'一二三'[g - 1]}級アミン。`);
+        if (am.chiral > 0) fact('amd-chiral', 2, 'C は不斉炭素原子をもつ。', (i) => (amineOf(i)?.chiral || 0) > 0, 'C に、異なる 4 つの原子・原子団が結合した炭素がある。');
+      }
+      for (const [x, nm, get] of [[acid, 'B', acidOf], [am, 'C', amineOf]] as const) {
+        if (nm === 'C' && nh3) continue;
+        const sk = skeleton(x);
+        if (sk) {
+          fact('amd-chain-' + nm, 2, sk === 'linear' ? `${nm} の炭素鎖に枝分かれはない。` : `${nm} の炭素鎖には枝分かれがある。`, (i) => !!get(i) && skeleton(get(i)!) === sk,
+            sk === 'linear' ? `${nm} は直鎖。` : `${nm} は枝分かれをもつ。`);
+        }
+        const rn = ringSubCount(x);
+        if (rn !== undefined) {
+          fact('amd-ring-' + nm, 2, `${nm} のベンゼン環の水素原子 1 個を塩素原子で置換すると、${rn} 種類の構造異性体が考えられる。`, (i) => !!get(i) && ringSubCount(get(i)!) === rn,
+            `${nm} の環上の等価でない水素原子が ${rn} 種類。一置換体は 3、二置換体は置換基が異なれば o 4・m 4・p 2。`);
+        }
+      }
+    }
+  }
+
   // アルケン
   if (P.ozonolysis) {
     const prods = P.ozonolysis.map((k) => byKey(k)).filter((x): x is Isomer => !!x);
@@ -475,7 +585,7 @@ function cluesFor(t: Isomer): Clue[] {
   }
 
   // 置換体の数
-  const chainOnly = !t.mol.atoms.includes('Ph') && !t.mol.atoms.includes('Ar');
+  const chainOnly = !ringKind(t);
   if (chainOnly && !P.br2 && (t.cls === 'alkane' || t.cls === 'halide' || t.cls === 'ether')) {
     const n = monoSubCount(t);
     add('sub', 1, n === 1 ? 'A の炭素原子に結合した水素原子 1 個を塩素原子で置換した化合物は、1 種類しか考えられない。' : `A の炭素原子に結合した水素原子 1 個を塩素原子で置換すると、${n} 種類の構造異性体が考えられる。`,
@@ -484,7 +594,7 @@ function cluesFor(t: Isomer): Clue[] {
   const rn = ringSubCount(t);
   if (rn !== undefined) {
     add('ring', 2, `A のベンゼン環の水素原子 1 個を塩素原子で置換すると、${rn} 種類の構造異性体が考えられる。`, (i) => ringSubCount(i) === rn,
-      `環上の等価でない水素原子が ${rn} 種類。一置換体は 3、二置換体は置換基が同じなら o 2・m 3・p 1、異なれば o 4・m 4・p 2。`);
+      `環上の等価でない水素原子が ${rn} 種類。一置換体は 3、二置換体は置換基が同じなら o 2・m 3・p 1、異なれば o 4・m 4・p 2。三置換体は環の対称性から数える。`);
   }
   if (P.sideOxid) {
     const k = P.sideOxid;
@@ -504,6 +614,24 @@ function cluesFor(t: Isomer): Clue[] {
   }
   const me = methylCount(t);
   add('methyl', 2, me === 0 ? 'A はメチル基をもたない。' : `A は分子内にメチル基を ${me} 個もつ。`, (i) => methylCount(i) === me, `–CH₃ が ${me} 個。`);
+  const kind = ringKind(t);
+  if (kind && rn !== undefined) {
+    const word = kind === 'Ph' ? '一' : kind === 'Ar' ? '二' : '三';
+    add('nsub', 2, `A はベンゼンの${word}置換体である。`, (i) => ringKind(i) === kind, `環に結合した置換基は ${kind === 'Ph' ? 1 : kind === 'Ar' ? 2 : 3} 個。`);
+  }
+  const pat = triPattern(t);
+  if (pat) {
+    add('tri', 3,
+      pat === '123' ? 'A の 3 個の置換基は、ベンゼン環の隣り合う 3 個の炭素原子に結合している。'
+        : pat === '135' ? 'A の 3 個の置換基は、ベンゼン環の炭素原子に 1 個おきに結合している。'
+          : 'A の 3 個の置換基は、ベンゼン環の 1,2,4 位に結合している。',
+      (i) => triPattern(i) === pat, `置換基の位置は ${pat.split('').join(',')} 位。`);
+    const tw = twinPos(t);
+    if (tw) {
+      const word = tw === 'o' ? 'オルト' : tw === 'm' ? 'メタ' : 'パラ';
+      add('twin', 3, `A の 3 個の置換基のうち、同じ 2 個は互いに${word}位にある。`, (i) => twinPos(i) === tw, `同じ置換基どうしが${word}位。残る 1 個の位置が決まる。`);
+    }
+  }
   const p = ringPos(t);
   if (p) {
     const word = p === 'o' ? 'オルト' : p === 'm' ? 'メタ' : 'パラ';

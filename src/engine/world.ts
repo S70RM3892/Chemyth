@@ -21,6 +21,8 @@ export const TUNNEL_RANGE = 7;
 export const STATION_CAP = 60, TRAIN_CAP = 24;
 /** 路線の数 */
 export const LINES = 8;
+/** 1 つの積む駅が走らせられる編成の数 */
+export const MAX_CARS = 3;
 
 /** 流れている物質。p は 0〜1 の進み具合、m は最後に動いた tick、rc は搬出口から出た印 */
 export interface Item { s: string; p: number; m: number; rc?: boolean; d?: Dir }
@@ -77,6 +79,9 @@ export interface Ent {
   /** 積む駅：自分で敷いた線路。曲がり角の座標（マスの中心）と、行き先の駅のキー。なければ自動で引く */
   rail?: [number, number][];
   railTo?: string;
+  /** 積む駅：走らせる編成の数（1〜3）と、2 編成目以降の列車 */
+  cars?: number;
+  xtr?: { p: number; back: boolean; cargo: string[]; wait: number; to?: string }[];
 }
 
 /** 有毒な気体と、無害にする方法。捨てても罰はないが、処理の反応は入試で問われる */
@@ -174,10 +179,10 @@ export const trainSpeed = (w: World) => 14 * (1 + 0.35 * w.up.belt);
 export const railLength = (a: Ent, b: Ent) => Math.max(1, Math.abs(b.x - a.x) + Math.abs(b.y - a.y));
 export const pathLength = (pts: [number, number][]) => Math.max(1, pts.slice(1).reduce((a, q, i) => a + Math.abs(q[0] - pts[i][0]) + Math.abs(q[1] - pts[i][1]), 0));
 /** 積む駅 e の線路：自分で敷いたものがあればそれ、なければ自動（横に進んでから縦に曲がる。駅ごとに少しずらす） */
-export function railOf(w: World, e: Ent): { pts: [number, number][]; dest: Ent; len: number; custom: boolean } | null {
+export function railOf(w: World, e: Ent, to?: Ent): { pts: [number, number][]; dest: Ent; len: number; custom: boolean } | null {
   const own = e.rail && e.railTo ? w.ents.get(e.railTo) : undefined;
   if (own && own.kind === 'station' && own.role === 'out' && own.ch === e.ch && e.rail!.length >= 2) return { pts: e.rail!, dest: own, len: pathLength(e.rail!), custom: true };
-  const dest = stationTarget(w, e);
+  const dest = to ?? stationTarget(w, e);
   if (!dest) return null;
   const off = ((((e.x * 7 + e.y * 13) % 5) + 5) % 5 - 2) * 0.24;
   const pts: [number, number][] = [[e.x + 1, e.y + 1 + off], [dest.x + 1 + off, e.y + 1 + off], [dest.x + 1 + off, dest.y + 1]];
@@ -531,16 +536,15 @@ export function tunnelPair(w: World, e: Ent): Ent | null {
   }
   return null;
 }
-/** 積む駅 e の行き先：同じ路線の降ろす駅のうち、いちばん近いもの */
-export function stationTarget(w: World, e: Ent): Ent | null {
-  let best: Ent | null = null, bd = Infinity;
-  for (const n of w.ents.values()) {
-    if (n.kind !== 'station' || n.role !== 'out' || n.ch !== e.ch) continue;
-    const d = Math.hypot(n.x - e.x, n.y - e.y);
-    if (d < bd) { bd = d; best = n; }
-  }
-  return best;
+/** 積む駅 e とつながる降ろす駅：同じ路線のものを、近い順に */
+export function stationTargets(w: World, e: Ent): Ent[] {
+  const out: Ent[] = [];
+  for (const n of w.ents.values()) if (n.kind === 'station' && n.role === 'out' && n.ch === e.ch) out.push(n);
+  const d = (n: Ent) => Math.abs(n.x - e.x) + Math.abs(n.y - e.y);
+  return out.sort((a, b) => d(a) - d(b) || a.x - b.x || a.y - b.y);
 }
+/** いちばん近い降ろす駅 */
+export const stationTarget = (w: World, e: Ent): Ent | null => stationTargets(w, e)[0] ?? null;
 
 /** 立体交差 b を向き d に通り抜ける流れがあるか（立体交差が続いていてもたどる） */
 function through(w: World, b: Ent, d: Dir, depth = 0): boolean {
@@ -815,32 +819,37 @@ export function step(w: World, dt: number) {
           }
           break;
         }
-        // 積む駅：列車を 1 編成走らせる
-        const tr = (e.tr ??= { p: 0, back: false, cargo: [], wait: 0 });
-        if (tr.p <= 0 && !tr.back) {
-          while (tr.cargo.length < TRAIN_CAP && buf.length) tr.cargo.push(buf.shift()!);
-          tr.wait += dt;
-          // 満載か、少し待っても増えなければ発車する
-          if (tr.cargo.length && (tr.cargo.length >= TRAIN_CAP || tr.wait > 2.5)) {
-            const to = railOf(w, e)?.dest;
-            if (to) { tr.to = key(to.x, to.y); tr.p = 1e-6; tr.wait = 0; }
+        // 積む駅：列車を走らせる。編成は 3 つまで増やせる。降ろす駅がいくつもあれば、順番に配る（分岐）
+        const trains = [(e.tr ??= { p: 0, back: false, cargo: [], wait: 0 }), ...(e.xtr ??= [])];
+        while (trains.length < Math.min(MAX_CARS, e.cars || 1)) { const t2 = { p: 0, back: false, cargo: [], wait: 0 }; e.xtr.push(t2); trains.push(t2); }
+        // 減らしたときは、駅に戻っている空の編成から外す
+        while (e.xtr.length > Math.max(0, Math.min(MAX_CARS, e.cars || 1) - 1)) { const k = e.xtr.findIndex((t2) => t2.p <= 0 && !t2.back && !t2.cargo.length); if (k < 0) break; e.xtr.splice(k, 1); }
+        for (const tr of [e.tr, ...e.xtr]) {
+          if (tr.p <= 0 && !tr.back) {
+            while (tr.cargo.length < TRAIN_CAP && buf.length) tr.cargo.push(buf.shift()!);
+            tr.wait += dt;
+            // 満載か、少し待っても増えなければ発車する
+            if (tr.cargo.length && (tr.cargo.length >= TRAIN_CAP || tr.wait > 2.5)) {
+              const own = railOf(w, e), ts = own?.custom ? [own.dest] : stationTargets(w, e);
+              if (ts.length) { e.rr = ((e.rr || 0) + 1) % ts.length; const to = ts[e.rr]; tr.to = key(to.x, to.y); tr.p = 1e-6; tr.wait = 0; }
+            }
+            continue;
           }
-          break;
-        }
-        const dest = tr.to ? w.ents.get(tr.to) : undefined;
-        const ok = !!dest && dest.kind === 'station' && dest.role === 'out' && dest.ch === e.ch;
-        if (!ok) tr.back = true; // 行き先がなくなった：引き返す
-        const v = (trainSpeed(w) * dt) / (ok ? (railOf(w, e)?.len ?? railLength(e, dest!)) : 12);
-        if (!tr.back) {
-          tr.p = Math.min(1, tr.p + v);
-          if (tr.p >= 1) {
-            const db = (dest!.buf ??= []);
-            while (tr.cargo.length && db.length < STATION_CAP) db.push(tr.cargo.shift()!);
-            if (!tr.cargo.length) { tr.back = true; e.n = (e.n || 0) + 1; }
+          const dest = tr.to ? w.ents.get(tr.to) : undefined;
+          const ok = !!dest && dest.kind === 'station' && dest.role === 'out' && dest.ch === e.ch;
+          if (!ok) tr.back = true; // 行き先がなくなった：引き返す
+          const v = (trainSpeed(w) * dt) / (ok ? (railOf(w, e, dest)?.len ?? railLength(e, dest!)) : 12);
+          if (!tr.back) {
+            tr.p = Math.min(1, tr.p + v);
+            if (tr.p >= 1) {
+              const db = (dest!.buf ??= []);
+              while (tr.cargo.length && db.length < STATION_CAP) db.push(tr.cargo.shift()!);
+              if (!tr.cargo.length) { tr.back = true; e.n = (e.n || 0) + 1; }
+            }
+          } else {
+            tr.p = Math.max(0, tr.p - v);
+            if (tr.p <= 0) { tr.p = 0; tr.back = false; if (tr.cargo.length) buf.unshift(...tr.cargo.splice(0)); }
           }
-        } else {
-          tr.p = Math.max(0, tr.p - v);
-          if (tr.p <= 0) { tr.p = 0; tr.back = false; if (tr.cargo.length) buf.unshift(...tr.cargo.splice(0)); }
         }
         break;
       }

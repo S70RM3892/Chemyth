@@ -9,7 +9,7 @@ import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
 import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
-import { LINES, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { LINES, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { chip, equation, openConfig, type SheetActions } from './config';
 import { h } from './dom';
 import { sfx } from './sound';
@@ -327,8 +327,11 @@ export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
       return b;
     })),
     h('p', { class: 'status' }, e.role === 'in'
-      ? (to && route ? `行き先：線路 ${Math.round(route.len)} マス先の降ろす駅（${route.custom ? '自分で敷いた線路' : '自動で引いた線路'}）。片道 約 ${(route.len / trainSpeed(c.w)).toFixed(1)} 秒、1 編成 ${TRAIN_CAP} 個で、1 分あたり およそ ${Math.round((TRAIN_CAP * 60) / ((2 * route.len) / trainSpeed(c.w) + 1))} 個まで運べる。列車は ${e.tr && (e.tr.p > 0 || e.tr.back) ? (e.tr.back ? '戻っている' : `${e.tr.cargo.length} 個を運んでいる`) : '駅で積んでいる'}。` : `${e.ch} 番線の降ろす駅がまだない。行き先に貨物駅を置き、「降ろす駅」にして同じ番号にしろ。`)
+      ? (to && route ? `行き先：線路 ${Math.round(route.len)} マス先の降ろす駅（${route.custom ? '自分で敷いた線路' : '自動で引いた線路'}）。片道 約 ${(route.len / trainSpeed(c.w)).toFixed(1)} 秒、1 編成 ${TRAIN_CAP} 個で、1 分あたり およそ ${Math.round(((e.cars || 1) * TRAIN_CAP * 60) / ((2 * route.len) / trainSpeed(c.w) + 1))} 個まで運べる。列車は ${e.tr && (e.tr.p > 0 || e.tr.back) ? (e.tr.back ? '戻っている' : `${e.tr.cargo.length} 個を運んでいる`) : '駅で積んでいる'}。` : `${e.ch} 番線の降ろす駅がまだない。行き先に貨物駅を置き、「降ろす駅」にして同じ番号にしろ。`)
       : `${e.ch} 番線の積む駅：${feeders} か所。届いたものは、正面の 2 つの口から出る。${(e.buf?.length ?? 0) >= STATION_CAP ? '満杯で、列車が降ろせずに待っている。出口にベルトをつなげ。' : ''}`),
+    e.role === 'in' ? h('h3', {}, '③ 編成の数') : null,
+    e.role === 'in' ? h('div', { class: 'row' }, ...[1, 2, 3].map((n) => h('button', { class: 'ghost' + ((e.cars || 1) === n ? ' picked on' : ''), type: 'button', id: `st-cars-${n}`, onclick: () => { e.cars = n; sfx.tap(); again(); } }, `${n} 編成`)), h('span', { class: 'muted' }, '増やすと、そのぶん多く運べる。')) : null,
+    e.role === 'in' && !e.rail && stationTargets(c.w, e).length > 1 ? h('p', { class: 'muted' }, `この番線には降ろす駅が ${stationTargets(c.w, e).length} か所ある。列車は順番に配る（分岐）。1 か所だけに送りたいときは、線路を自分で敷け。`) : null,
     e.role === 'in' ? h('p', { class: 'muted' }, '線路は自動で引かれる。道筋を自分で決めたいときは、道具「線路」で、この駅から降ろす駅まで指でなぞれ。') : null,
     e.rail ? h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'st-auto', onclick: () => { e.rail = undefined; e.railTo = undefined; e.tr = undefined; sfx.tap(); again(); } }, '線路を自動に戻す')) : null,
     h('p', { class: 'muted' }, `駅にあるもの：${buf.length} / ${STATION_CAP} 個`),
