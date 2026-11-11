@@ -2,7 +2,7 @@ import { ZONES, hubRect, isSea, resourceAt, zoneAt, zoneSpots, type Zone } from 
 import { ELEMENTS } from '../content/elements';
 import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { FLOOR_DY, TANK_CAP, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { BRASS, BRASS_DARK, mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 import { districtsOf, type District } from '../engine/districts';
@@ -379,6 +379,25 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.globalAlpha = 1;
   }
 
+  // ---- 夜景：指令を達成した資源地に、家々の灯りがともる ----
+  {
+    const lit = litZones(w);
+    if (lit.size) {
+      if (!light) ctx.globalCompositeOperation = 'lighter';
+      for (const sp of zoneSpots(x0, y0, x1, y1)) {
+        if (!lit.has(sp.zone)) continue;
+        for (let i = 0; i < 9; i++) {
+          const a = hash(i * 7 + 3, Math.round(sp.cx * 3)) * Math.PI * 2, rad = 0.5 + 2.1 * hash(i * 5 + 1, Math.round(sp.cy * 3));
+          const px = sx(sp.cx + Math.cos(a) * rad), py = gy(sp.cy + Math.sin(a) * rad * 0.7 + 0.6), k = 0.6 + 0.4 * Math.sin(t * (1.3 + i * 0.21) + i * 2.1), r0 = Math.max(1.6, z * 0.075);
+          ctx.fillStyle = `rgba(255,214,107,${0.22 * k})`; ctx.beginPath(); ctx.arc(px, py, r0 * 3.2, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = `rgba(255,226,140,${0.6 + 0.4 * k})`; ctx.beginPath(); ctx.arc(px, py, r0, 0, Math.PI * 2); ctx.fill();
+          if (light) { ctx.strokeStyle = 'rgba(90,60,10,0.75)'; ctx.lineWidth = 1; ctx.stroke(); }
+        }
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    }
+  }
+
   // ---- 資源地の名前 ----
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
@@ -691,6 +710,26 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       continue;
     }
     machine(ctx, P, sx(e.x + sz / 2), sy(e.y + sz / 2), z * pop * sz, z, e, t);
+    // 習熟メッキ：その反応を、間隔を空けた復習で覚えているほど、縁が銅 → 銀 → 金になる。まちがえると剥がれる
+    const plate = isMachine(e.kind) && !e.sealed ? platingOf(w.srs, e.recipe) : 0;
+    if (plate) {
+      const u2 = z * pop * sz, pcx = sx(e.x + sz / 2), pcy = sy(e.y + sz / 2), col = ['', '#b8733a', '#cfd6dd', '#f4c531'][plate], dark = ['', '#6a3d1a', '#7d868f', '#8a6a10'][plate];
+      const rim = () => { if (punk) chamfer(ctx, pcx - u2 * 0.43, pcy - u2 * 0.43, u2 * 0.86, u2 * 0.86, u2 * 0.13); else rr(ctx, pcx - u2 * 0.42, pcy - u2 * 0.42, u2 * 0.84, u2 * 0.84, u2 * 0.12); };
+      const lw2 = Math.max(2.5, u2 * 0.05);
+      rim(); ctx.strokeStyle = dark; ctx.lineWidth = lw2 + 2; ctx.stroke();
+      rim(); ctx.strokeStyle = col; ctx.lineWidth = lw2; ctx.stroke();
+      // 縁を走る光（金は速く、銅はゆっくり）
+      const per = u2 * 0.84 * 4;
+      rim(); ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = lw2 * 0.45; ctx.lineCap = 'round';
+      ctx.setLineDash([per * 0.07, per * 0.93]); ctx.lineDashOffset = -((t * (0.12 + 0.07 * plate) + e.x * 0.13) % 1) * per; ctx.stroke(); ctx.setLineDash([]);
+      if (z >= 30) {
+        // 左下に、金・銀・銅の印
+        const mx2 = sx(e.x) + z * 0.24, my2 = sy(e.y + sz) - z * 0.24, mr = Math.max(7, z * 0.17);
+        ctx.beginPath(); ctx.arc(mx2, my2, mr, 0, Math.PI * 2); ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = dark; ctx.lineWidth = Math.max(1.2, z * 0.035); ctx.stroke();
+        ctx.fillStyle = '#1a1408'; ctx.font = `800 ${mr * 1.15}px ${FONT_UI}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(PLATING[plate], mx2, my2 + 0.5); ctx.textBaseline = 'alphabetic';
+      }
+    }
     // 状態灯：動いていれば緑、原料待ちは橙、出口の詰まりは赤の点滅。色だけに頼らないよう、形も変える（丸・三角・四角）
     if (z >= 26 && isMachine(e.kind) && e.recipe) {
       // 2×2 の装置は上辺の真ん中（出口と入口の間で、どの向きでも空いている）。1 マスの装置は左下の角
@@ -748,6 +787,19 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   }
   const hr = hubRect(w.hubSize);
   if (!off) hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
+  // 納品所のまわりの灯り：章を 1 つ終えるごとに 1 つともる
+  if (!off && z >= 12) {
+    const done = chaptersDone(w.progress), n = done.length, hcx = sx(hr.x + hr.s / 2), hcy = sy(hr.y + hr.s / 2), ring = (hr.s / 2 + 1.05) * z, lr = Math.max(2.2, z * 0.09);
+    if (done.some(Boolean)) for (let i = 0; i < n; i++) {
+      const a = -Math.PI / 2 + (i / n) * Math.PI * 2, px = hcx + Math.cos(a) * ring, py = hcy + Math.sin(a) * ring;
+      if (done[i]) {
+        const k = 0.75 + 0.25 * Math.sin(t * 2.2 + i);
+        ctx.fillStyle = `rgba(255,214,107,${0.28 * k})`; ctx.beginPath(); ctx.arc(px, py, lr * 2.8, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#ffe08a'; ctx.beginPath(); ctx.arc(px, py, lr, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = Math.max(1, z * 0.025); ctx.stroke();
+      } else { ctx.strokeStyle = punk ? 'rgba(255,255,255,0.25)' : P.soft; ctx.globalAlpha = 0.5; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(px, py, lr * 0.7, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1; }
+    }
+  }
 
   // ---- 貨物線：設備の上を越える高架の線路と列車。
   //      敷いた線路は、どの駅の列車も共有する網。つながっていない駅どうしは、自動の仮線路（横に進んでから縦に曲がる）で結ぶ ----

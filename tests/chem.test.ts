@@ -1828,3 +1828,44 @@ describe('模試：自分の工場から', () => {
     expect(JSON.stringify(again.qs)).not.toBe(JSON.stringify(other.qs));
   });
 });
+
+describe('達成の報酬', () => {
+  it('習熟メッキ：復習の間隔が伸びると銅 → 銀 → 金。まちがえると剥がれる', async () => {
+    const { platingOf, PLATING } = await import('../src/engine/world');
+    const w = newWorld();
+    expect(platingOf(w.srs, 'haber-bosch')).toBe(0);
+    learn(w, rec('haber-bosch'), true);                 // 初めて設定：間隔は最初（10 分）
+    expect(platingOf(w.srs, 'haber-bosch')).toBe(0);
+    const tiers: number[] = [];
+    for (let i = 0; i < 5; i++) { schedule(w, 'r:haber-bosch', true); tiers.push(platingOf(w.srs, 'haber-bosch')); }
+    expect(tiers).toEqual([0, 1, 2, 3, 3]);             // 1 日 → 3 日（銅）→ 7 日（銀）→ 16 日（金）→ 35 日（金）
+    expect(PLATING[3]).toBe('金');
+    schedule(w, 'r:haber-bosch', false);
+    expect(platingOf(w.srs, 'haber-bosch')).toBe(0);    // 剥がれる
+    expect(platingOf(w.srs, undefined)).toBe(0);
+  });
+
+  it('夜景・本棚・花火の元になる集計', async () => {
+    const { litZones, chaptersDone, flamesFed, summarize } = await import('../src/engine/world');
+    const { FLAMES } = await import('../src/content/looks');
+    const w = newWorld();
+    expect(litZones(w).size).toBe(0);
+    expect(chaptersDone(w.progress).every((x) => !x)).toBe(true);
+    // 資源地を使う指令を 1 つ終えると、その資源地に灯りがともる
+    const ci = CHAPTERS.findIndex((c) => c.goals.some((g) => g.zone)), gi = CHAPTERS[ci].goals.findIndex((g) => g.zone);
+    w.progress[ci] = gi;
+    expect(litZones(w).has(CHAPTERS[ci].goals[gi].zone!)).toBe(false);
+    w.progress[ci] = gi + 1;
+    expect(litZones(w).has(CHAPTERS[ci].goals[gi].zone!)).toBe(true);
+    w.progress[0] = CHAPTERS[0].goals.length;
+    expect(chaptersDone(w.progress)[0]).toBe(true);
+    // 花火の色：炎色反応を示す元素のうち、納品所が飲み込んだものだけ
+    for (const el of Object.keys(FLAMES)) expect(ELEMENTS.some((e) => e.sym === el), el).toBe(true);
+    expect(flamesFed(w)).toEqual([]);
+    w.fed.Na = 12; w.fed.Cu = 10; w.fed.Fe = 99;
+    expect(flamesFed(w).sort()).toEqual(['Cu', 'Na']);
+    // セーブの要約に、章ごとの進み具合が入る（タイトルの本棚に使う）
+    const sum = summarize(serialize(w))!;
+    expect(sum.progress[0]).toBe(CHAPTERS[0].goals.length);
+  });
+});

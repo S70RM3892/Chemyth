@@ -6,6 +6,7 @@ import { isBalanced, parseFormula } from '../chem/formula';
 import { ELEMENTS } from '../content/elements';
 import { isPositive, setById } from '../content/samples';
 import { RESEARCH, researchById, type Research } from '../content/research';
+import { FLAMES } from '../content/looks';
 import { isSep, sepAccepts, sepReady, sepRefusal, sepRun, sepSlots } from '../content/sep';
 
 /** 0:右 1:下 2:左 3:上 */
@@ -399,6 +400,23 @@ export function schedule(w: World, id: string, correct: boolean, now = Date.now(
   const iv = correct && cur ? Math.min(SRS_STEPS.length - 1, cur.iv + 1) : 0;
   w.srs[id] = { iv, due: now + SRS_STEPS[iv] * 60000 };
 }
+/** 習熟メッキ：その反応の復習の間隔が伸びるほど、装置が銅 → 銀 → 金になる。復習でまちがえると間隔が最初に戻り、メッキも剥がれる。
+ *  0 なし、1 銅（3 日空けて覚えていた）、2 銀（7 日）、3 金（16 日以上） */
+export const PLATING = ['', '銅', '銀', '金'];
+export function platingOf(srs: World['srs'], recipeId: string | undefined): 0 | 1 | 2 | 3 {
+  const iv = recipeId ? srs[`r:${recipeId}`]?.iv ?? 0 : 0;
+  return iv >= 4 ? 3 : iv >= 3 ? 2 : iv >= 2 ? 1 : 0;
+}
+/** 灯りのともる資源地：その資源地を使う指令を 1 つでも達成したところ */
+export function litZones(w: World): Set<string> {
+  const lit = new Set<string>();
+  CHAPTERS.forEach((c, ci) => c.goals.forEach((g, gi) => { if (g.zone && gi < (w.progress[ci] || 0)) lit.add(g.zone); }));
+  return lit;
+}
+/** 章ごとに、終えたかどうか（納品所のまわりの灯りと、タイトルの本棚に使う） */
+export const chaptersDone = (progress: number[]): boolean[] => CHAPTERS.map((c, i) => (progress[i] || 0) >= c.goals.length);
+/** 炎色反応で花火の色になる元素のうち、納品所が飲み込んだもの */
+export const flamesFed = (w: World): string[] => Object.keys(FLAMES).filter((el) => fedTier(w, el) >= 1);
 export const dueIds = (w: World, now = Date.now()) => Object.keys(w.srs).filter((k) => w.srs[k].due <= now).sort((a, b) => w.srs[a].due - w.srs[b].due);
 
 export const currentGoal = (w: World): Goal | undefined => CHAPTERS[w.chapter]?.goals[w.progress[w.chapter]];
@@ -1383,12 +1401,12 @@ export function deserialize(json: string): World | null {
 }
 
 /** セーブ枠の一覧に出す要約 */
-export function summarize(json: string | null): { done: number; chapter: number; playMs: number; savedAt: number; points: number } | null {
+export function summarize(json: string | null): { done: number; chapter: number; playMs: number; savedAt: number; points: number; progress: number[]; grades: Record<string, string> } | null {
   if (!json) return null;
   try {
     const d = JSON.parse(json);
     if (d.v !== SAVE_VERSION) return null;
-    return { done: (d.done ?? d.goal) | 0, chapter: d.chapter | 0, playMs: d.playMs || 0, savedAt: d.savedAt || 0, points: d.points | 0 };
+    return { done: (d.done ?? d.goal) | 0, chapter: d.chapter | 0, playMs: d.playMs || 0, savedAt: d.savedAt || 0, points: d.points | 0, progress: Array.isArray(d.progress) ? d.progress : [], grades: d.grades || {} };
   } catch {
     return null;
   }

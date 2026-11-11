@@ -1,5 +1,6 @@
 import { ELEMENTS } from '../content/elements';
 import { CHAPTERS, TOTAL_GOALS } from '../content/goals';
+import { chaptersDone } from '../engine/world';
 import { deserialize, summarize } from '../engine/world';
 import { $, h } from './dom';
 import { setSound, sfx, soundOn } from './sound';
@@ -14,7 +15,7 @@ const META = 'chemyth-v2-meta';
 export const store = {
   read(n: number): string | null { try { return localStorage.getItem(slotKey(n)); } catch { return null; } },
   write(n: number, json: string): boolean { try { localStorage.setItem(slotKey(n), json); return true; } catch { return false; } },
-  erase(n: number) { try { localStorage.removeItem(slotKey(n)); } catch { /* 同上 */ } },
+  erase(n: number) { try { localStorage.removeItem(slotKey(n)); localStorage.removeItem(`chemyth-v2-album-${n}`); } catch { /* 同上 */ } },
   meta(): { sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string; overlay?: boolean; music?: boolean } { try { return JSON.parse(localStorage.getItem(META) || '{}'); } catch { return {}; } },
   setMeta(m: { sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string; overlay?: boolean; music?: boolean }) { try { localStorage.setItem(META, JSON.stringify({ ...store.meta(), ...m })); } catch { /* 同上 */ } },
 };
@@ -38,6 +39,19 @@ export function skinButtons(after: () => void): HTMLElement[] {
   const cur = skinName();
   return ([['note', '文具'], ['punk', '工業'], ['arcane', '魔術']] as [Skin, string][]).map(([id, name]) =>
     h('button', { type: 'button', id: `skin-${id}`, class: cur === id ? 'on' : '', onclick: () => { store.setMeta({ skin: id }); applySkin(id); sfx.tap(); after(); } }, name));
+}
+
+/** 本棚：終えた章が、背表紙になって 1 冊ずつ並ぶ。途中の章は、進んだぶんだけ色がつく。評価 S・A だけで終えた章には印がつく */
+function shelf(progress: number[], grades: Record<string, string>): HTMLElement {
+  const done = chaptersDone(progress), n = done.filter(Boolean).length;
+  return h('div', { class: 'shelf', title: `${n} / ${CHAPTERS.length} 章を修了` }, ...CHAPTERS.map((c, i) => {
+    const frac = Math.min(1, (progress[i] || 0) / c.goals.length);
+    const fine = done[i] && c.goals.every((g, k) => g.strict || ['S', 'A'].includes(grades[`${i}:${k}`]));
+    const spine = h('i', { class: 'spine' + (done[i] ? ' done' : frac > 0 ? ' part' : '') + (fine ? ' fine' : ''), title: `${c.name}　${progress[i] || 0} / ${c.goals.length}` }, String(i + 1));
+    spine.style.setProperty('--fill', `${Math.round(frac * 100)}%`);
+    spine.style.setProperty('--hue', String((i * 47) % 360));
+    return spine;
+  }), h('span', { class: 'shelf-n' }, `${n} / ${CHAPTERS.length} 冊`));
 }
 
 export function initTitle(api: TitleApi) {
@@ -85,7 +99,8 @@ export function initTitle(api: TitleApi) {
       return h('div', { class: 'slotcard' },
         h('div', { class: 'stack tight' }, h('b', {}, slotName(n)),
           h('span', {}, sum.done >= TOTAL_GOALS ? `全 ${TOTAL_GOALS} 指令を達成` : `${CHAPTERS[sum.chapter]?.name ?? ''}　達成 ${sum.done} / ${TOTAL_GOALS}`),
-          h('span', { class: 'muted' }, `${fmtTime(sum.playMs)}　研究点 ${sum.points}　${fmtDate(sum.savedAt)}`)),
+          h('span', { class: 'muted' }, `${fmtTime(sum.playMs)}　研究点 ${sum.points}　${fmtDate(sum.savedAt)}`),
+          shelf(sum.progress, sum.grades)),
         h('div', { class: 'row' },
           h('button', { class: 'primary', type: 'button', id: `slot-${n}-go`, onclick: () => { sfx.ok(); api.start(n, json); } }, 'つづける'),
           h('button', { class: 'ghost', type: 'button', id: `slot-${n}-export`, onclick: () => exportFrom(n, json!) }, '書き出す'),

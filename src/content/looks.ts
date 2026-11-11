@@ -84,6 +84,15 @@ export const LOOKS: Record<string, Look> = {
   crudeCu: L('#b5693f', '赤色', { metal: true }),
 };
 
+/** 炎色反応の色。章を終えたときの花火は、納品所が飲み込んだ元素のこの色で上がる */
+export const FLAMES: Record<string, { hex: string; word: string }> = {
+  Na: { hex: '#ffd43a', word: '黄色' },
+  K: { hex: '#c98bff', word: '赤紫色' },
+  Ca: { hex: '#ff7b3a', word: '橙赤色' },
+  Ba: { hex: '#b9e24a', word: '黄緑色' },
+  Cu: { hex: '#3ad9b4', word: '青緑色' },
+};
+
 /** 色を言わない物質の、絵に使う控えめな色 */
 const PLAIN = { gas: '#e4ecf1', liquid: '#cfe2ee', solid: '#ecebe6' };
 

@@ -3,7 +3,7 @@ import { HUB_CENTER, LAND, ZONES, hubRect, resourceAt, zoneAt } from './content/
 import { ELEMENTS } from './content/elements';
 import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
-import { BIG, FEED_TIERS, addRail, removeRail, setRailMask, stationRoutes, FLOOR_DY, floorOf, groundY, has, liftPartner, footprint, inDoors, maxLanes, mergeDirs, slotCount, slotPort, at, autoDir, beltSpeed, configure, currentGoal, extractInterval, fedTier, flowStats, goalRate, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { BIG, FEED_TIERS, flamesFed, addRail, removeRail, setRailMask, stationRoutes, FLOOR_DY, floorOf, groundY, has, liftPartner, footprint, inDoors, maxLanes, mergeDirs, slotCount, slotPort, at, autoDir, beltSpeed, configure, currentGoal, extractInterval, fedTier, flowStats, goalRate, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
 import { recipeById } from './content/recipes';
 import { about, chip, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
@@ -16,6 +16,8 @@ import { CASES, CASE_KIND, CASE_REWARD, limitStock, type Case, type CaseState } 
 import { appearance, equationOf } from './content/looks';
 import { isSep, sepSlots } from './content/sep';
 import { showMock } from './ui/mock';
+import { drawFireworks, launchFireworks } from './ui/fireworks';
+import { FLAMES } from './content/looks';
 import { decodeBlueprint, encodeBlueprint, type Stamp } from './engine/blueprint';
 import { showStats, type StatsCtx } from './ui/stats';
 import { setSound, sfx, soundOn, unlockAudio } from './ui/sound';
@@ -116,12 +118,12 @@ function boot(data: HotData) {
   resize();
   const nearZoom = () => Math.max(40, Math.min(54, cw / 24));
   /** 建てたもの全体が収まる視野 */
-  const fitView = (): Camera => {
+  const fitView = (vw = cw, vh = ch - 150): Camera => {
     const hr = hubRect(world.hubSize);
     let x0 = hr.x, y0 = hr.y, x1 = hr.x + hr.s, y1 = hr.y + hr.s;
     for (const e of world.ents.values()) { const gy = groundY(e.y); x0 = Math.min(x0, e.x); y0 = Math.min(y0, gy); x1 = Math.max(x1, e.x + 1); y1 = Math.max(y1, gy + 1); }
     const w0 = Math.max(60, x1 - x0 + 16), h0 = Math.max(40, y1 - y0 + 16);
-    return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 + 2, z: Math.max(Z_MIN, Math.min(nearZoom(), cw / w0, (ch - 150) / h0)) };
+    return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 + (vh === ch - 150 ? 2 : 0), z: Math.max(Z_MIN, Math.min(nearZoom(), vw / w0, vh / h0)) };
   };
 
   // ---- トースト ----
@@ -298,6 +300,8 @@ function boot(data: HotData) {
       h('li', {}, h('b', {}, '手早く置く'), '設備の道具で空いたマスを押し続けると、置く前の見本（占めるマス・出口・入口）が出る。そのまま指を動かして場所を選び、離すと置く。棚の右端で、ベルトをまとめて引く本数と、設備を置く向きを決められる。'),
       h('li', {}, h('b', {}, '研究する'), '「強化」の下の「研究」で、3 本・4 本引き、長い地下ベルト、信号（検知器と弁）、2 階、列車や装置の能力を開く。二者択一の組は、工場の形に合うほうを選べ。'),
       h('li', {}, h('b', {}, '分ける'), '終盤の章は、混ざったものを順に分ける。金属イオンの混合溶液は「沈殿槽」で試薬の順に、芳香族のエーテル溶液は「分液ろうと」で水層へ移す順に、アミノ酸の混合水溶液は「電気泳動槽」で pH を決めて分ける。混合物は「試薬棚」から出る。作ったものは「貯蔵タンク」にためておける。'),
+      h('li', {}, h('b', {}, '試す'), 'メニューの「課題」は、自分の工場とは別の小さな工場を渡す：1 か所だけ誤った工場を直す、数の決まった原料からできる数を先に計算する、封印された装置の反応を数の比から当てる。「模試」は、自分の工場で動いている反応が、そのまま問題文になる。'),
+      h('li', {}, h('b', {}, '残る'), '章を終えると、納品所が飲み込んだ元素の炎色で花火が上がる。反応を、日を空けた復習で思い出せるほど、装置が銅 → 銀 → 金になる（まちがえると剥がれる）。達成した瞬間の工場は「アルバム」に残り、タイトルの本棚に背表紙が増え、地図に灯りがともる。'),
       h('li', {}, h('b', {}, '網にする'), '道具「線路」で駅から駅へ線路を敷くと、列車はそこを 1.5 倍の速さで走る。線路は枝分かれさせて何駅でも共有できるが、混むと待ちが出る。地図を引くと、区画ごとに「何を毎分いくつ作っているか」の札が出る。'),
     ),
     h('p', { class: 'muted' }, '物質の絵柄は、元素ごとに決まった形の組み合わせでできている（「図鑑」で確認できる）。置いたものをタップすると、その場に「設定・回す・消す」が出る。間違えたら右上の「元に戻す」。'),
@@ -311,7 +315,8 @@ function boot(data: HotData) {
       h('h3', {}, '工場'),
       h('div', { class: 'menu' },
         item('m-chapters', '指令の一覧（章を切り替える）', () => showChapters(panel())),
-        item('m-stats', '統計（納品の速さ・装置の稼働率・学習の進み）', () => showStats(statsCtx()))),
+        item('m-stats', '統計（納品の速さ・装置の稼働率・学習の進み）', () => showStats(statsCtx())),
+        item('m-album', 'アルバム（達成した瞬間の工場の写真）', () => showAlbum())),
       h('h3', {}, '京大形式の演習'),
       h('div', { class: 'menu' },
         item('m-drills', '連鎖計算（理論の大問。数値は毎回変わる）', () => showDrills(panel())),
@@ -852,6 +857,40 @@ function boot(data: HotData) {
       h('p', { class: 'muted' }, '数の比から反応式を書け。条件や触媒は、出てくる物から考える。わかったら、空の装置に同じ反応を設定しろ。'));
   }
 
+  // ---- 花火：章を終えたら、納品所が飲み込んだ元素の炎色で上げる ----
+  const fireworks = (count: number) => launchFireworks(flamesFed(world).map((sym) => ({ sym, ...FLAMES[sym] })), count);
+  // 確認用：アドレスに ?fw を付けると、花火を上げる関数と、いまの視点を外から読める
+  if (typeof location !== 'undefined' && location.search.includes('fw')) Object.assign(window, { __fireworks: fireworks, __cam: cam });
+
+  // ---- アルバム：指令を達成した瞬間の工場を、上から撮って残す（章ごとに最新の 1 枚と、最初の 1 枚）----
+  interface Photo { k: string; cap: string; d: string; done: number; ms: number }
+  const albumKey = () => `chemyth-v2-album-${slot}`;
+  const album = (): Photo[] => { try { return JSON.parse(localStorage.getItem(albumKey()) || '[]'); } catch { return []; } };
+  const snap = (key: string, cap: string) => {
+    try {
+      const W = 560, H = 350, cvs = document.createElement('canvas');
+      cvs.width = W; cvs.height = H;
+      draw(cvs.getContext('2d')!, W, H, world, fitView(W, H), performance.now() / 1000, 0, { floor: 0, tool: 'pan', selected: null });
+      let list = album();
+      const photo: Photo = { k: list.length ? key : 'first', cap, d: cvs.toDataURL('image/jpeg', 0.62), done: doneCount(world), ms: Math.round(world.playMs) };
+      list = [...list.filter((p) => p.k !== photo.k), photo].slice(-26);
+      // 保存先がいっぱいなら、古いものから減らして入れ直す
+      for (let tries = 0; tries < 4; tries++) { try { localStorage.setItem(albumKey(), JSON.stringify(list)); break; } catch { list = [list[0], ...list.slice(Math.ceil(list.length / 2))].filter((p, i, a) => a.indexOf(p) === i); } }
+    } catch { /* 撮れなくても遊べる */ }
+  };
+  const showAlbum = (big?: Photo) => {
+    const list = album();
+    if (big) {
+      const img = h('img', { class: 'photo-big', src: big.d, alt: big.cap });
+      showSheet(h('header', {}, h('h2', {}, 'アルバム'), h('button', { class: 'ghost', type: 'button', id: 'album-back', onclick: () => showAlbum() }, '戻る')), img, h('p', {}, big.cap), h('p', { class: 'muted' }, `達成 ${big.done} / ${TOTAL_GOALS}`));
+      return;
+    }
+    showSheet(h('header', {}, h('h2', {}, 'アルバム'), closeBtn()),
+      h('p', { class: 'muted' }, '指令を達成した瞬間の工場を、上から撮ったもの。最初の 1 枚と、章ごとに最新の 1 枚が残る。この端末にだけ保存される。'),
+      list.length ? h('div', { class: 'album' }, ...list.map((ph, i) => { const fig = h('button', { class: 'photo', type: 'button', id: `photo-${i}`, onclick: () => showAlbum(ph) }, h('img', { src: ph.d, alt: ph.cap }), h('span', {}, ph.cap)); return fig; }))
+        : h('p', {}, 'まだ写真はない。指令を 1 つ達成すると、最初の 1 枚が撮られる。'));
+  };
+
   // ---- 指令の表示 ----
   const goalIco = $<HTMLCanvasElement>('goal-ico');
   let rateTick = -99;
@@ -922,7 +961,7 @@ function boot(data: HotData) {
   const toTitle = () => { leaveCase(); save(); slot = 0; selected = null; app.classList.add('in-title'); title.show(); };
 
   // ---- ループ ----
-  let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0;
+  let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0, chapterBefore = 0;
   const STEP = 1 / 60;
   const frame = (now: number) => {
     const dt = Math.min(0.1, (now - prev) / 1000);
@@ -938,6 +977,7 @@ function boot(data: HotData) {
         if (acc > STEP * 4) acc = 0;
       }
       if (sandbox && !sandbox.done && modal.hidden) { const st = sandbox.c.check(world); if (st.done) finishCase(st); }
+      if (!world.events.length) chapterBefore = world.chapter;
       for (const ev of world.events.splice(0)) {
         if (sandbox) continue;   // 課題の工場の出来事は、本編の進み具合に数えない
         if (ev === 'goal-done' || ev === 'chapter-done') {
@@ -959,7 +999,14 @@ function boot(data: HotData) {
         if (ev === 'fed-all') { stamp('全元素'); toast('納品所が全 ' + ELEMENTS.length + ' 元素を飲み込んだ。研究点 +300。', 7000); sfx.goal(); }
         if (ev === 'hub-grow') { toast(`納品所が ${world.hubSize}×${world.hubSize} に広がった。重なった設備は撤去され、求められる数も増える。`, 6000); selected = null; }
         if (ev === 'goal-done' || ev === 'chapter-done' || ev === 'all-done') void submitScore(world);
-        if (ev === 'chapter-done') { stamp('修了'); toast(`章を終えた。${CHAPTERS[world.chapter].name} へ進む。`, 5000); sfx.goal(); refreshTools(true); }
+        if (ev === 'goal-done' || ev === 'chapter-done' || ev === 'all-done') snap(`c${chapterBefore}`, `${CHAPTERS[chapterBefore].name}　${world.progress[chapterBefore]} / ${CHAPTERS[chapterBefore].goals.length}`);
+        if (ev === 'chapter-done') {
+          stamp('修了'); sfx.goal(); refreshTools(true);
+          const fl = flamesFed(world);
+          toast(`章を終えた。${CHAPTERS[world.chapter].name} へ進む。${fl.length ? `花火の色は、納品所が飲み込んだ ${fl.join('・')} の炎色反応。` : '炎色反応を示す元素（Na・K・Ca・Ba・Cu）を納めると、花火に色がつく。'}`, 7000);
+          fireworks(12 + fl.length * 2);
+        }
+        if (ev === 'all-done') fireworks(36);
         if (ev === 'wrong-sample' && now - lastWrong > 2500) { lastWrong = now; toast('違う物質が納品所に入った。2 個減点。検査を見直せ。', 3200); sfx.bad(); }
         if (ev === 'all-done') { toast('すべての指令を終えた。', 6000); sfx.goal(); }
         save();
@@ -977,6 +1024,7 @@ function boot(data: HotData) {
       if (lastRes !== world.research.length) { lastRes = world.research.length; refreshTools(true); paintOpts(); paintFloor(); }
       const d0 = PERF ? performance.now() : 0;
       draw(ctx, cw, ch, world, cam, now / 1000, dt, { floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : toolGhost() });
+      drawFireworks(ctx, cw, ch, dt);
       if (PERF) { PERF.draw.push(performance.now() - d0); if (PERF.draw.length > 600) { PERF.draw.shift(); PERF.step.shift(); } }
       hud();
     }

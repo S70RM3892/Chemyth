@@ -3,7 +3,7 @@ import { ELEMENTS } from '../content/elements';
 import { MACHINES } from '../content/machines';
 import { CONDITIONS, SHIFTS, electronsOf, productsOf, recipeById, type MachineKind, type Recipe } from '../content/recipes';
 import { label, sameAtoms, sub, subByFormula, SUBSTANCES } from '../content/substances';
-import { BIG_ORDER, DX, DY, clearRecipe, configure, currentGoal, inDoors, reactionsPerMin, judge, learn, moveOutput, sizeOf, slotCount, slotPort, SLOT_NAMES, type Ent, type Kind, type World } from '../engine/world';
+import { PLATING, platingOf, BIG_ORDER, DX, DY, clearRecipe, configure, currentGoal, inDoors, reactionsPerMin, judge, learn, moveOutput, sizeOf, slotCount, slotPort, SLOT_NAMES, type Ent, type Kind, type World } from '../engine/world';
 import { h } from './dom';
 import { reactionScene } from './scene';
 import { sfx } from './sound';
@@ -15,6 +15,14 @@ const NAMED = SUBSTANCES.filter((s) => s.named);
 export function equation(r: Recipe): string {
   const side = (s: [string, number][], coef: boolean) => s.map(([id, n]) => (!coef || n === 1 ? '' : n) + label(id)).join(' + ');
   return `${side(r.inputs, !r.loose)} → ${side(productsOf(r), !r.loose && !r.mix)}`;
+}
+
+/** 習熟メッキの説明：復習の間隔が伸びるほど、装置が銅 → 銀 → 金になる */
+export function platingText(w: World, r: Recipe): string {
+  const tier = platingOf(w.srs, r.id);
+  return tier === 3 ? '習熟メッキ：金。16 日以上空けても思い出せた。復習でまちがえると剥がれる。'
+    : tier ? `習熟メッキ：${PLATING[tier]}。次の復習でも思い出せれば ${PLATING[tier + 1]} になる。まちがえると剥がれる。`
+    : '習熟メッキ：まだない。この反応を、日を空けた復習（1 日後 → 3 日後）で続けて思い出せると、装置が銅になる。7 日後で銀、16 日後で金。';
 }
 
 /** 設定済みの装置が、いま何をしているか */
@@ -178,6 +186,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
             h('p', { class: 'status', id: 'cfg-status' }, statusOf(e, r)),
             h('p', { class: 'status', id: 'cfg-cap' }, capacityText(w, e, r)),
             h('p', { class: 'muted', id: 'cfg-util' }, utilText(e)),
+            h('p', { class: 'muted', id: 'cfg-plate' }, platingText(w, r)),
             h('p', { class: 'note' }, r.note),
             h('p', { class: 'muted' }, `${cond.label}：${r.accept.join(' または ')}` + (isBat ? `　負極 ${label(r.neg!)}　正極 ${label(r.pos!)}` : '') + (r.shift ? `　平衡上有利：${r.shift}` : '')),
             h('button', { class: 'ghost', type: 'button', id: 'cfg-redo', onclick: () => { clearRecipe(e); render(); } }, '設定をやり直す'),
