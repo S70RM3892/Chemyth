@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
-import { TOXIC, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
+import { TOXIC, fedTier, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
@@ -74,14 +74,14 @@ describe('内容データ', () => {
         for (const [s] of r.outputs) if (!have.has(s)) { have.add(s); grew = true; }
       }
     }
-    for (const g of GOALS) expect(have.has(g.s), g.s).toBe(true);
+    for (const g of GOALS) for (const x of [g.s, ...(g.also ?? [])]) expect(have.has(x), x).toBe(true);
     // 使われない反応がない
     for (const r of RECIPES) expect(r.inputs.every(([s]) => have.has(s)), r.id).toBe(true);
   });
   it('章と指令の対応', () => {
     expect(GOALS.length).toBe(CHAPTERS.reduce((a, c) => a + c.goals.length, 0));
     expect(chapterOf(0)?.name).toContain('第1章');
-    expect(chapterOf(GOALS.length - 1)?.name).toContain('第19章');
+    expect(chapterOf(GOALS.length - 1)?.name).toContain('第20章');
     expect(CHAPTERS[13].name).toContain('総合演習');
     expect(CHAPTERS[13].goals.length).toBeGreaterThan(60);
     expect(chapterOf(GOALS.length)).toBeNull();
@@ -404,10 +404,11 @@ describe('工場の動作', () => {
 
   it('章を終えると次の章へ進み、道具が解禁される', () => {
     const w = newWorld();
-    expect(toolUnlocked(w, MACHINES.analyzer)).toBe(false);
+    expect(toolUnlocked(w, MACHINES.analyzer)).toBe(true); // 選別に使うので最初からある
+    expect(toolUnlocked(w, MACHINES.sampler)).toBe(false);
     expect(toolUnlocked(w, MACHINES.bridge)).toBe(true);
     setChapter(w, 9);
-    expect(toolUnlocked(w, MACHINES.analyzer)).toBe(true);
+    expect(toolUnlocked(w, MACHINES.sampler)).toBe(true);
     expect(toolUnlocked(w, MACHINES.battery)).toBe(true);
     setChapter(w, 0);
     w.progress[0] = 2; w.counts[0] = 19;
@@ -643,6 +644,50 @@ describe('工場の動作', () => {
   });
 
   it('電池の e⁻ で電解槽が加速し、有毒な気体を捨てると研究点を失い、指令に操業評価がつく', () => {
+    // 選別：指定した物質だけを正面へ通す
+    {
+      const f = newWorld();
+      place(f, 'analyzer', 30, 30, 0);
+      at(f, 30, 30)!.test = 'is:NaCl';
+      place(f, 'belt', 31, 30, 0); place(f, 'belt', 30, 31, 1);
+      at(f, 30, 30)!.item = { s: 'NaCl', p: 1, m: 0 }; run(f, 0.05);
+      expect(at(f, 31, 30)!.item?.s).toBe('NaCl');
+      at(f, 30, 30)!.item = { s: 'H2O', p: 1, m: 0 }; run(f, 0.05);
+      expect(at(f, 30, 31)!.item?.s).toBe('H2O');
+    }
+    // 納品所は元素を飲み込む：NaCl 10 個で Na と Cl が段階 1 になり、研究点が入る
+    {
+      const f = newWorld();
+      place(f, 'belt', hx - 1, hy, 0);
+      for (let i = 0; i < 10; i++) { at(f, hx - 1, hy)!.item = { s: 'NaCl', p: 1, m: 0 }; run(f, 0.1); }
+      expect(f.fed).toEqual({ Na: 10, Cl: 10 });
+      expect(fedTier(f, 'Na')).toBe(1);
+      expect(fedTier(f, 'Fe')).toBe(0);
+      expect(f.events).toContain('fed:Na:1');
+      expect(f.points).toBe(20);
+      expect(deserialize(serialize(f))!.fed.Cl).toBe(10);
+    }
+    // コンビナート：3 つとも必要な数に達して、はじめて達成
+    {
+      const f = newWorld();
+      const ch = CHAPTERS.findIndex((c) => c.name.includes('コンビナート'));
+      setChapter(f, ch);
+      const g = currentGoal(f)!;
+      expect(g.also).toEqual(['Cl2', 'H2']);
+      const need = requiredOf(f, g);
+      place(f, 'belt', hx - 1, hy, 0);
+      const give = (s: string, n: number) => { for (let i = 0; i < n; i++) { at(f, hx - 1, hy)!.item = { s, p: 1, m: 0 }; run(f, 0.1); } };
+      give('NaOH', need + 5);
+      expect(goalCount(f)).toBe(0);            // ほかの 2 つがまだ 0
+      expect(f.multi.NaOH).toBe(need);         // 必要な数を超えた分は数えない
+      give('Cl2', need);
+      expect(f.progress[ch]).toBe(0);
+      give('H2', need - 1);
+      expect(goalCount(f)).toBe(need - 1);
+      give('H2', 1);
+      expect(f.progress[ch]).toBe(1);
+      expect(f.multi).toEqual({});
+    }
     // 電力
     const run2 = (boost: boolean) => {
       const w = newWorld();
@@ -663,10 +708,9 @@ describe('工場の動作', () => {
     place(w, 'belt', 19, 20, 0);
     for (let i = 0; i < 10; i++) { at(w, 19, 20)!.item = { s: 'Cl2', p: 1, m: 0 }; run(w, 0.1); }
     expect(w.emitted.Cl2).toBe(10);
-    expect(w.points).toBe(8);
-    expect(w.events.some((e) => e === 'toxic:Cl2')).toBe(true);
+    expect(w.points).toBe(10); // 捨てても罰はない。数だけ残る
     for (let i = 0; i < 10; i++) { at(w, 19, 20)!.item = { s: 'O2', p: 1, m: 0 }; run(w, 0.1); }
-    expect(w.points).toBe(8);
+    expect(w.points).toBe(10);
     expect(w.emitted.O2).toBeUndefined();
     // 有毒な気体には、処理の反応が用意されている
     for (const g of ['Cl2', 'SO2', 'NO2', 'H2S', 'HCl', 'NH3', 'CO']) {

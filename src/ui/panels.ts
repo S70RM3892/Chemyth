@@ -288,7 +288,16 @@ export function showAnalyzer(c: PanelCtx, e: Ent, extra: HTMLElement) {
   c.show(h('header', {}, h('h2', {}, '分析器'), closeBtn(c)),
     cur ? h('div', { class: 'answer' }, h('p', {}, h('b', {}, `いまの検査：${cur.name}`)), h('p', {}, `陽性（正面へ）：${cur.sees}`), h('p', { class: 'muted' }, 'そうならなかったものは陰性として右手へ出る。'),
       h('details', { class: 'named' }, h('summary', {}, 'この検査でわかること（まず自分で思い出せ）'), h('p', { class: 'note' }, cur.means)))
-      : h('p', {}, '行う検査を 1 つ選べ。陽性は正面、陰性は右手へ流れる。'),
+      : e.test?.startsWith('is:') ? h('div', { class: 'answer' }, h('p', {}, h('b', {}, `いまの設定：${sub(e.test.slice(3)).name} だけを正面へ通す`)), h('p', { class: 'muted' }, 'それ以外は右手へ出る。'))
+      : h('p', {}, '物質を指定するか、行う検査を 1 つ選べ。当てはまるものは正面、そうでないものは右手へ流れる。'),
+    h('h3', {}, '物質を指定して分ける（選別）'),
+    h('p', { class: 'muted' }, '1 本のベルトに混ざった物質から、指定したものだけを抜き出す。副生成物を別々の行き先へ振り分けるのに使う。'),
+    h('div', { class: 'chips' }, ...c.w.discovered.filter((s) => s !== 'e' && !sub(s).mask && !s.startsWith('jar-')).map((s) => {
+      const b = chip(s, e.test === `is:${s}` ? 'on' : '');
+      b.id = `is-${s}`;
+      b.onclick = () => { e.test = `is:${s}`; sfx.ok(); showAnalyzer(c, e, extra); };
+      return b;
+    })),
     ...(Object.keys(GROUP) as (keyof typeof GROUP)[]).flatMap((g) => [
       h('h3', {}, GROUP[g]),
       h('div', { class: 'menu' }, ...TESTS.filter((t) => t.group === g).map((t) =>
@@ -307,7 +316,7 @@ export function showChapters(c: PanelCtx) {
       const done = w.progress[i], total = ch.goals.length, g = ch.goals[done];
       return h('button', { class: 'ghost chapter' + (i === w.chapter ? ' picked' : ''), type: 'button', id: `chapter-${i}`,
         onclick: () => { setChapter(w, i); sfx.ok(); c.close(); } },
-        h('span', {}, h('b', {}, ch.name), h('span', { class: 'muted' }, g ? `　次：${sub(g.s).name}` : '　完了')),
+        h('span', {}, h('b', {}, ch.name), h('span', { class: 'muted' }, g ? `　次：${[g.s, ...(g.also ?? [])].map((x) => sub(x).name).join('・')}` : '　完了')),
         h('span', { class: 'formula' }, `${done} / ${total}`));
     })));
 }

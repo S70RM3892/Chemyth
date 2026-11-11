@@ -1,8 +1,9 @@
 import { CHAPTERS, TOTAL_GOALS } from './content/goals';
 import { HUB_CENTER, LAND, ZONES, hubRect, resourceAt, zoneAt } from './content/map';
+import { ELEMENTS } from './content/elements';
 import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
-import { BIG, TOXIC, at, autoDir, configure, currentGoal, flowStats, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { BIG, FEED_TIERS, at, autoDir, configure, currentGoal, fedTier, flowStats, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
 import { recipeById } from './content/recipes';
 import { about, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
@@ -15,10 +16,12 @@ import { setSound, sfx, soundOn } from './ui/sound';
 import { initTitle, skinButtons, slotName, store, themeButtons } from './ui/title';
 import { applySkin, applyTheme } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
-import { drawToken } from './ui/token';
+import { drawToken, elementIcon } from './ui/token';
 
 type Placeable = Exclude<Kind, 'hub' | 'part'>;
-type Tool = 'pan' | 'erase' | Placeable;
+type Tool = 'pan' | 'erase' | 'area' | Placeable;
+/** 範囲コピーした設計図。左上からのずれで持つ */
+interface Stamp { kind: Placeable; dx: number; dy: number; dir: Dir; recipe?: string; outOrder?: string[]; outSlot?: number[]; test?: string; sub?: string }
 type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir };
 const SESSION_LIMIT_MS = 25 * 60 * 1000;
 const BUILD: Placeable[] = ['belt', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'sampler', 'analyzer', 'collector', 'splitter', 'bridge', 'depot', 'vent'];
@@ -29,6 +32,7 @@ interface Clone { kind: Placeable; recipe?: string; outOrder?: string[]; outSlot
 const TOOLS: { id: Tool; glyph: string; name: string; tip: string; color?: string; need: { done?: number; chapter?: number } }[] = [
   { id: 'pan', glyph: '☝', name: '見る', need: {}, tip: 'タップで選ぶ。装置やベルトから指を引くとベルトが伸びる。何もない所を引くと地図が動く。' },
   ...BUILD.map((id) => ({ id, glyph: MACHINES[id].glyph, name: MACHINES[id].name, tip: MACHINES[id].tip, color: MACHINES[id].color, need: MACHINES[id] })),
+  { id: 'area', glyph: '▭', name: '範囲', need: {}, color: '#4a5a78', tip: '指でなぞって四角く囲む。囲んだ設備をまとめてコピーして別の場所に貼りつけたり、まとめて消したりできる。ラインを丸ごと増設するのに使う。' },
   { id: 'erase', glyph: '✕', name: '消す', need: {}, color: '#b0453f', tip: 'タップするか、なぞると消える。間違えたら右上の「元に戻す」。' },
 ];
 
@@ -48,7 +52,10 @@ function boot(data: HotData) {
   let clone: Clone | null = null;
   /** なぞり書きで、いま乗っている「横切るかもしれない」ベルト */
   let cross: [number, number] | null = null;
-  let lastWrong = 0, lastToxic = -1e9;
+  let lastWrong = 0;
+  /** 範囲選択の 2 つの角と、コピーした設計図 */
+  let areaA: [number, number] | null = null, areaB: [number, number] | null = null;
+  let blueprint: Stamp[] | null = null;
   /** 地図に稼働率の札を出すか */
   let overlay = store.meta().overlay === true;
   const app = $('app');
@@ -185,7 +192,13 @@ function boot(data: HotData) {
     if (e.kind === 'hub') {
       const g = currentGoal(world);
       showSheet(h('header', {}, h('h2', {}, '納品所'), closeBtn()),
-        h('p', {}, '指定された物質をここへ運ぶ。どの側からでも受け取る。指定と違う物質も受け取って在庫にする。在庫は「搬出口」で取り出せる。'),
+        h('p', {}, '全元素を欲しがる機械。指定された物質をここへ運べ。どの側からでも飲み込む。指定と違う物質も飲み込んで在庫にする。在庫は「搬出口」で取り出せる。'),
+        h('h3', {}, `飲み込んだ元素　${ELEMENTS.filter((x) => fedTier(world, x.sym) >= 1).length} / ${ELEMENTS.length}`),
+        h('p', { class: 'muted' }, `納めた物質の化学式から、原子を元素ごとに数える。${FEED_TIERS.join('・')} 個に達するたびに段階が上がり、研究点が入る（+10・+30・+100）。全元素を 1 段階まで上げると +300。機械の外周の印が灯る。`),
+        h('div', { class: 'fed' }, ...ELEMENTS.map((el) => {
+          const n = world.fed[el.sym] || 0, tier = fedTier(world, el.sym);
+          return h('span', { class: 'fed-el' + (tier ? ' on' : '') }, elementIcon(el.sym, 20), h('b', {}, el.sym), h('span', { class: 'muted' }, n >= 10000 ? `${Math.round(n / 1000)}k` : String(n)), h('span', { class: 'fed-t' }, '●'.repeat(tier) + '○'.repeat(FEED_TIERS.length - tier)));
+        })),
         h('p', { class: 'muted' }, g ? `いまの指令：${sub(g.s).name} を ${requiredOf(world, g)} 個（${goalCount(world)} 個 納品済み）` : 'この章の指令は終えた。'),
         h('p', { class: 'muted' }, `いまの大きさは ${world.hubSize}×${world.hubSize} マス。指令を達成していくと大きくなり、受け取れる口が増える。そのぶん 1 つの指令で求められる数も増える。`),
         h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', onclick: () => showChapters(panel()) }, '指令の一覧を開く')));
@@ -270,6 +283,8 @@ function boot(data: HotData) {
   const pick = (id: Tool, keepClone = false) => {
     tool = id;
     if (!keepClone) clone = null;
+    if (id !== 'area') { blueprint = null; areaA = areaB = null; }
+    paintArea();
     const t = TOOLS.find((x) => x.id === id)!;
     for (const [k, el] of buttons) { el.classList.toggle('on', k === tool); el.setAttribute('aria-pressed', String(k === tool)); }
     tip.replaceChildren(h('b', {}, clone ? `${t.name}をコピー中` : t.name), clone ? 'タップした場所に、同じ設定のものを貼りつける。ほかの道具を選ぶとやめる。' : t.tip);
@@ -331,8 +346,9 @@ function boot(data: HotData) {
   const pullsBelt = (x: number, y: number) => { const e = at(world, x, y); return !!e && e.kind !== 'hub' && e.kind !== 'vent'; };
   const input = attachInput(cv, cam, {
     begin: () => { group = null; camTo = null; cross = null; },
-    mode: (x, y) => (tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y)) ? 'stroke' : 'pan'),
+    mode: (x, y) => (tool === 'area' ? (blueprint ? 'pan' : 'stroke') : tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y)) ? 'stroke' : 'pan'),
     tap(x, y) {
+      if (tool === 'area') { if (blueprint) pasteAt(x, y); else { areaA = areaB = null; paintArea(); } return; }
       const e = at(world, x, y);
       if (tool === 'erase') { if (e?.kind === 'hub') toast('納品所は消せない'); else if (doErase(x, y)) sfx.erase(); else toast('ここには何もない', 1200); return; }
       if (e) {
@@ -363,6 +379,7 @@ function boot(data: HotData) {
     },
     stroke(x, y, prev) {
       selected = null;
+      if (tool === 'area') { if (!prev || !areaA) areaA = [x, y]; areaB = [x, y]; paintArea(); return; }
       if (tool === 'erase') { doErase(x, y); return; }
       if (prev) {
         const nd = (x > prev[0] ? 0 : x < prev[0] ? 2 : y > prev[1] ? 1 : 3) as Dir;
@@ -384,6 +401,53 @@ function boot(data: HotData) {
     },
   });
 
+  // ---- 範囲：まとめてコピー・貼りつけ・消去 ----
+  const areaAct = $('area-act');
+  const areaRect = (): [number, number, number, number] | null => (areaA && areaB ? [Math.min(areaA[0], areaB[0]), Math.min(areaA[1], areaB[1]), Math.max(areaA[0], areaB[0]), Math.max(areaA[1], areaB[1])] : null);
+  const inArea = () => {
+    const r = areaRect();
+    return r ? [...world.ents.values()].filter((e) => e.kind !== 'hub' && e.kind !== 'part' && e.x >= r[0] && e.x <= r[2] && e.y >= r[1] && e.y <= r[3]) : [];
+  };
+  function paintArea() {
+    const n = inArea().length;
+    areaAct.hidden = tool !== 'area' || (!blueprint && !areaRect());
+    $('area-n').textContent = blueprint ? `設計図 ${blueprint.length} 個を貼りつけ中。左上にしたい場所をタップ。` : `${n} 個を選択中`;
+    $('area-copy').hidden = $('area-del').hidden = !!blueprint || n === 0;
+  }
+  $('area-copy').onclick = () => {
+    const r = areaRect(), es = inArea();
+    if (!r || !es.length) return;
+    blueprint = es.map((e) => ({ kind: e.kind as Placeable, dx: e.x - r[0], dy: e.y - r[1], dir: e.dir, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, test: e.test, sub: e.sub }));
+    areaA = areaB = null;
+    sfx.ok();
+    paintArea();
+  };
+  $('area-del').onclick = () => {
+    group = null;
+    for (const e of inArea()) doErase(e.x, e.y);
+    areaA = areaB = null;
+    sfx.erase();
+    paintArea();
+  };
+  $('area-cancel').onclick = () => { blueprint = null; areaA = areaB = null; paintArea(); };
+  function pasteAt(x: number, y: number) {
+    if (!blueprint) return;
+    group = null;
+    let ok = 0;
+    // 大きい装置から先に置く（ベルトに場所を取られないように）
+    for (const b of [...blueprint].sort((p, q) => Number(BIG.includes(q.kind)) - Number(BIG.includes(p.kind)))) {
+      if (doPlace(b.kind, x + b.dx, y + b.dy, b.dir)) continue;
+      ok++;
+      const placed = at(world, x + b.dx, y + b.dy)!;
+      const r = recipeById(b.recipe);
+      if (r && b.outOrder) { configure(placed, r, b.outOrder.filter((s) => s !== 'e')); placed.outOrder = [...b.outOrder]; placed.outBuf = b.outOrder.map(() => 0); if (b.outSlot) placed.outSlot = [...b.outSlot]; }
+      placed.test = b.test;
+      placed.sub = b.sub;
+    }
+    if (ok < blueprint.length) toast(`${blueprint.length} 個のうち ${ok} 個を置いた。残りは場所がふさがっていた。`); else toast(`${ok} 個を貼りつけた。`, 1500);
+    ok ? sfx.place() : sfx.bad();
+  }
+
   // ---- 指令の表示 ----
   const goalIco = $<HTMLCanvasElement>('goal-ico');
   const hud = () => {
@@ -400,14 +464,16 @@ function boot(data: HotData) {
       goalIco.hidden = !g;
       $('goal-step').textContent = `${ch2.name}　${Math.min(world.progress[world.chapter] + 1, ch2.goals.length)} / ${ch2.goals.length}`;
       const s2 = g ? sub(g.s) : null;
-      $('goal-name').textContent = g && s2 ? `${s2.name}${s2.formula && !s2.mask ? ' ' + label(g.s) : g.s === 'e' ? ' e⁻' : ''} を ${requiredOf(world, g)} 個` : doneCount(world) >= TOTAL_GOALS ? 'すべての指令を終えた' : 'この章は完了。ここを押して別の章へ';
+      $('goal-name').textContent = g?.also ? `${[g.s, ...g.also].map((x) => label(x)).join('・')} を各 ${requiredOf(world, g)} 個`
+        : g && s2 ? `${s2.name}${s2.formula && !s2.mask ? ' ' + label(g.s) : g.s === 'e' ? ' e⁻' : ''} を ${requiredOf(world, g)} 個` : doneCount(world) >= TOTAL_GOALS ? 'すべての指令を終えた' : 'この章は完了。ここを押して別の章へ';
       $('goal-hint').textContent = g ? g.hint : '記録を開いて、間違えた反応を紙に書き出して確認しろ。';
     }
     $('goal-count').textContent = g ? `${goalCount(world)} / ${requiredOf(world, g)}` : '';
     // 納品の速さと、終わるまでの見込み。1 秒に 2 回だけ計算する
     if (g && world.tick % 30 === 0) {
       const f = flowStats(world);
-      $('goal-rate').textContent = f.goalPerMin > 0 ? `${f.goalPerMin.toFixed(1)} 個/分${f.etaSec !== null && f.etaSec > 0 ? `　あと約 ${f.etaSec >= 90 ? `${Math.round(f.etaSec / 60)} 分` : `${Math.max(5, Math.round(f.etaSec / 5) * 5)} 秒`}` : ''}` : '';
+      const each = g.also ? [g.s, ...g.also].map((x) => `${label(x)} ${world.multi[x] || 0}`).join('　') + '　' : '';
+      $('goal-rate').textContent = each || f.goalPerMin > 0 ? each + (f.goalPerMin <= 0 ? '' : `${f.goalPerMin.toFixed(1)} 個/分${f.etaSec !== null && f.etaSec > 0 ? `　あと約 ${f.etaSec >= 90 ? `${Math.round(f.etaSec / 60)} 分` : `${Math.max(5, Math.round(f.etaSec / 5) * 5)} 秒`}` : ''}`) : '';
     } else if (!g) $('goal-rate').textContent = '';
     $('goal-bar').style.width = g ? `${Math.min(100, (goalCount(world) / requiredOf(world, g)) * 100)}%` : '100%';
   };
@@ -457,12 +523,13 @@ function boot(data: HotData) {
             sfx.goal(); refreshTools(true);
           }
         }
-        if (ev.startsWith('toxic:') && now - lastToxic > 20000) {
-          lastToxic = now;
-          const s2 = ev.slice(6);
-          toast(`有毒な ${label(s2)} をそのまま捨てている。5 個ごとに研究点 −1。${TOXIC[s2]}。`, 6000);
-          sfx.bad();
+        if (ev.startsWith('fed:')) {
+          // 納品所が新しい元素を飲み込んだ
+          const [, el, tier] = ev.split(':');
+          const n = ELEMENTS.filter((x) => fedTier(world, x.sym) >= 1).length;
+          toast(tier === '1' ? `納品所が ${el} を飲み込んだ（${n} / ${ELEMENTS.length} 元素）。研究点 +10。` : `納品所が ${el} をさらに欲しがっている（段階 ${tier}）。研究点 +${tier === '2' ? 30 : 100}。`, 3200);
         }
+        if (ev === 'fed-all') { stamp('全元素'); toast('納品所が全 ' + ELEMENTS.length + ' 元素を飲み込んだ。研究点 +300。', 7000); sfx.goal(); }
         if (ev === 'hub-grow') { toast(`納品所が ${world.hubSize}×${world.hubSize} に広がった。重なった設備は撤去され、求められる数も増える。`, 6000); selected = null; }
         if (ev === 'goal-done' || ev === 'chapter-done' || ev === 'all-done') void submitScore(world);
         if (ev === 'chapter-done') { stamp('修了'); toast(`章を終えた。${CHAPTERS[world.chapter].name} へ進む。`, 5000); sfx.goal(); refreshTools(true); }
@@ -480,7 +547,7 @@ function boot(data: HotData) {
       } else input.tick(dt);
       if (selected && at(world, selected.x, selected.y) !== selected) selected = null;
       if (lastSeen !== world.seen) { lastSeen = world.seen; refreshTools(true); }
-      draw(ctx, cw, ch, world, cam, now / 1000, dt, { tool, selected, stats: overlay });
+      draw(ctx, cw, ch, world, cam, now / 1000, dt, { tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null });
       hud();
     }
     placeAct();

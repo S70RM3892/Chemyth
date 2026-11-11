@@ -2,7 +2,8 @@ import { recipeById, RECIPES, CONDITIONS, electronsOf, productsOf, type MachineK
 import { HUB_AT, HUB_CENTER, HUB_DEMAND, HUB_SIZES, hubTiles, resourceAt } from '../content/map';
 import { CHAPTERS, TOTAL_GOALS, type Goal } from '../content/goals';
 import { hasSub, label, sub } from '../content/substances';
-import { isBalanced } from '../chem/formula';
+import { isBalanced, parseFormula } from '../chem/formula';
+import { ELEMENTS } from '../content/elements';
 import { isPositive, setById } from '../content/samples';
 
 /** 0:右 1:下 2:左 3:上 */
@@ -63,14 +64,12 @@ export interface Ent {
   pw?: number;
 }
 
-/** そのまま捨ててはいけない有毒な気体と、その処理の手がかり */
+/** 有毒な気体と、無害にする方法。捨てても罰はないが、処理の反応は入試で問われる */
 export const TOXIC: Record<string, string> = {
   Cl2: '水酸化ナトリウム水溶液に吸収させる', SO2: '水酸化ナトリウム水溶液か石灰（Ca(OH)₂）に吸収させる', NO2: '水酸化ナトリウム水溶液に吸収させる',
   H2S: '水酸化ナトリウム水溶液に吸収させる', HCl: '水酸化ナトリウムで中和する', HF: '水酸化カルシウムで中和する', NH3: '硫酸に吸収させて肥料（硫安）にする',
   CO: '燃やして二酸化炭素にする', NO: '酸素で NO₂ にしてから吸収させる', Br2: '捨てずに製品として使う', O3: '捨てずに使う', HCN: '捨てずに原料として使う',
 };
-/** 有毒な気体を何個捨てるごとに、研究点を 1 点失うか */
-export const TOXIC_PER_POINT = 5;
 /** 電池の e⁻ 1 個で、電解槽が加速する秒数と、ためておける上限 */
 const POWER_SEC = 2.5, POWER_MAX = 20;
 /** 操業評価：指令を終えた時点の、直近 1 分の納品の速さ（個/分）で決まる */
@@ -135,6 +134,10 @@ export interface World {
   made: Record<string, number>;
   vented: Record<string, number>;
   spilled: Record<string, number>;
+  /** 納品所が飲み込んだ原子の数（元素ごとの累計）。納品した物質の化学式から数える */
+  fed: Record<string, number>;
+  /** 複数の物質を同時に求める指令で、物質ごとに納めた数 */
+  multi: Record<string, number>;
   /** そのまま捨てた有毒な気体の数（物質ごとの累計） */
   emitted: Record<string, number>;
   /** 指令ごとの操業評価（いちばん良かったもの）。キーは '章:番号' */
@@ -144,7 +147,7 @@ export interface World {
   /** 直近の流れ。10 秒ごとの区切りで 5 分ぶん。保存しない */
   buckets: Bucket[];
   /** 画面効果のきっかけ。保存しない */
-  fx: { x: number; y: number; type: 'react' | 'deliver' | 'spill'; s: string }[];
+  fx: { x: number; y: number; type: 'react' | 'deliver' | 'spill' | 'vent'; s: string }[];
 }
 
 export const beltSpeed = (w: World) => 2 * (1 + 0.35 * w.up.belt);
@@ -198,7 +201,7 @@ export function newWorld(): World {
   const w: World = {
     ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
-    up: { extract: 0, belt: 0, machine: 0 }, solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, buckets: [], playMs: 0, tick: 0, events: [], fx: [],
+    up: { extract: 0, belt: 0, machine: 0 }, solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, buckets: [], playMs: 0, tick: 0, events: [], fx: [],
   };
   for (const [x, y] of hubTiles(2)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
   return w;
@@ -525,8 +528,18 @@ function deliver(w: World, s: string, x: number, y: number, rc?: boolean) {
   if (rc) return; // 搬出口や試薬棚から出して納めただけのものは数えない
   w.delivered[s] = (w.delivered[s] || 0) + 1;
   bucket(w).deliver++;
+  feed(w, s);
   const g = currentGoal(w), ch = w.chapter;
   if (!g) return;
+  if (g.also) {
+    // 複数の物質を同時に求める指令：どれも必要な数に達したら達成。いちばん遅れているものが進み具合になる
+    const all = [g.s, ...g.also], need = requiredOf(w, g);
+    if (!all.includes(s)) return;
+    if ((w.multi[s] || 0) < need) { w.multi[s] = (w.multi[s] || 0) + 1; w.points++; bucket(w).goal++; }
+    w.counts[ch] = Math.min(...all.map((x) => w.multi[x] || 0));
+    if (w.counts[ch] >= need) { w.multi = {}; finishGoal(w, g, ch); }
+    return;
+  }
   if (g.s !== s) {
     // 仕分け課題で、同じ試料の別の物質を納めたら減点
     if (g.strict && setById(g.strict)?.members.includes(s)) {
@@ -539,7 +552,33 @@ function deliver(w: World, s: string, x: number, y: number, rc?: boolean) {
   w.counts[ch]++;
   bucket(w).goal++;
   w.points++;
-  if (w.counts[ch] >= requiredOf(w, g)) {
+  if (w.counts[ch] >= requiredOf(w, g)) finishGoal(w, g, ch);
+}
+
+/** 納品所が飢えている元素の段階：原子をこの数だけ飲み込むと、その元素の段階が上がる */
+export const FEED_TIERS = [10, 100, 1000];
+const FEED_BONUS = [10, 30, 100];
+export const fedTier = (w: World, sym: string) => FEED_TIERS.filter((n) => (w.fed[sym] || 0) >= n).length;
+/** 納めた物質に含まれる原子を、元素ごとに数える */
+function feed(w: World, s: string) {
+  const su = sub(s);
+  let atoms: Record<string, number> = {};
+  try { if (su.formula) atoms = parseFormula(su.formula); else for (const el of su.rep ?? []) atoms[el] = (atoms[el] || 0) + 1; } catch { return; }
+  for (const el in atoms) {
+    if (!ELEMENTS.some((e) => e.sym === el)) continue;
+    const before = fedTier(w, el);
+    w.fed[el] = (w.fed[el] || 0) + atoms[el];
+    const after = fedTier(w, el);
+    if (after > before) {
+      w.points += FEED_BONUS[after - 1];
+      w.events.push(`fed:${el}:${after}`);
+      if (after === 1 && ELEMENTS.every((e) => fedTier(w, e.sym) >= 1)) { w.points += 300; w.events.push('fed-all'); }
+    }
+  }
+}
+
+function finishGoal(w: World, g: Goal, ch: number) {
+  {
     // 操業評価：仕分けの指令は速さを競うものではないので付けない
     if (!g.strict) {
       const rate = flowStats(w).goalPerMin, gr = GRADES.find((x) => rate >= x.min)!, gk = `${ch}:${w.progress[ch]}`;
@@ -589,13 +628,9 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): 
     case 'vent':
       bump(w.vented, s);
       bucket(w).vent++;
-      if (TOXIC[s]) {
-        // 有毒な気体をそのまま捨てると、研究点を失う
-        bump(w.emitted, s);
-        const total = Object.values(w.emitted).reduce((a2, n) => a2 + n, 0);
-        if (total % TOXIC_PER_POINT === 0) w.points = Math.max(0, w.points - 1);
-        w.events.push(`toxic:${s}`);
-      }
+      // 有毒な気体も、そのまま捨ててよい。数だけ記録する
+      if (TOXIC[s]) bump(w.emitted, s);
+      w.fx.push({ x, y, type: 'vent', s });
       return true;
     case 'extractor':
     case 'depot':
@@ -651,7 +686,8 @@ export function step(w: World, dt: number) {
         if (!it || !e.test) break;
         it.p = Math.min(1, it.p + speed * dt);
         if (it.p < 1 || it.m === w.tick) break;
-        const d = portDir(e.dir, isPositive(it.s, e.test) ? 0 : 1);
+        // 'is:物質' は選別：その物質だけを正面へ通す
+        const d = portDir(e.dir, (e.test.startsWith('is:') ? it.s === e.test.slice(3) : isPositive(it.s, e.test)) ? 0 : 1);
         if (push(w, e.x + DX[d], e.y + DY[d], d, it.s, it.rc)) e.item = null;
         break;
       }
@@ -742,7 +778,7 @@ export function serialize(w: World): string {
   return JSON.stringify({
     v: SAVE_VERSION, ents: [...w.ents.values()].filter((e) => e.kind !== 'part'), chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
     hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
-    discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades,
+    discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
     playMs: Math.round(w.playMs), savedAt: Date.now(),
   });
 }
@@ -799,6 +835,8 @@ export function deserialize(json: string): World | null {
     w.spilled = d.spilled || {};
     w.emitted = d.emitted || {};
     w.grades = d.grades || {};
+    w.fed = d.fed || {};
+    w.multi = d.multi || {};
     w.playMs = d.playMs || 0;
     return w;
   } catch {

@@ -4,7 +4,7 @@ import { MACHINES } from '../content/machines';
 import { QUESTIONS } from '../content/questions';
 import { recipeById, RECIPES } from '../content/recipes';
 import { SYLLABUS } from '../content/syllabus';
-import { BUCKET_SEC, TOXIC, TOXIC_PER_POINT, doneCount, dueIds, flowStats, isMachine, machineState, type Ent, type World } from '../engine/world';
+import { BUCKET_SEC, TOXIC, doneCount, dueIds, flowStats, isMachine, machineState, type Ent, type World } from '../engine/world';
 import { label } from '../content/substances';
 import { chip, statusOf } from './config';
 import { h } from './dom';
@@ -111,9 +111,9 @@ export function showStats(c: StatsCtx) {
       tile('装置の稼働率', f.util === null ? '—' : pct(f.util), f.util === null ? '' : '%', `設定済み ${f.machines} 台の、直近 20 秒ほどの平均`, 'st-util'),
       tile('捨てた割合', f.wasteRate === null ? '—' : pct(f.wasteRate), f.wasteRate === null ? '' : '%', '直近 5 分に作ったもののうち、廃棄口とあふれで失った分', 'st-waste'),
       tile('操業評価', `S ${grade('S')}・A ${grade('A')}`, '', `B ${grade('B')}・C ${grade('C')}。指令を終えた時点の速さが毎分 30 個で S、15 個で A、6 個で B`, 'st-grade'),
-      tile('有毒ガスの排出', String(emitted), '個', emitted ? `そのまま捨てた数。${TOXIC_PER_POINT} 個ごとに研究点 −1。多いのは ${worst.map(([s2, n]) => `${label(s2)} ${n}`).join('、')}` : 'そのまま捨てた有毒な気体はない', 'st-toxic'),
+      tile('有毒ガスの排出', String(emitted), '個', emitted ? `大気へそのまま捨てた数。罰はない。多いのは ${worst.map(([s2, n]) => `${label(s2)} ${n}`).join('、')}` : 'まだ有毒な気体を捨てていない', 'st-toxic'),
     ),
-    worst.length ? h('p', { class: 'muted' }, `処理のしかた：${worst.map(([s2]) => `${label(s2)} は${TOXIC[s2]}`).join('。')}。`) : null,
+    worst.length ? h('p', { class: 'muted' }, `捨てずに無害にするなら（入試で問われる）：${worst.map(([s2]) => `${label(s2)} は${TOXIC[s2]}`).join('。')}。`) : null,
     h('p', { class: 'states' },
       h('span', { class: 'state bad' }, h('i', {}, '✕'), `出口詰まり ${f.jammed} 台`),
       h('span', { class: 'state warn' }, h('i', {}, '▲'), `原料待ちで止まりがち ${f.starved} 台`),

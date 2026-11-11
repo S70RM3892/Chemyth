@@ -1,12 +1,13 @@
 import { ZONES, hubRect, isSea, zoneAt, zoneSpots, type Zone } from '../content/map';
+import { ELEMENTS } from '../content/elements';
 import { MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { beltSpeed, currentGoal, DX, DY, goalCount, inDoors, inflow, isMachine, machineState, outPort, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { beltSpeed, currentGoal, DX, DY, fedTier, goalCount, inDoors, inflow, isMachine, machineState, outPort, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { mix, onThemeChange, palette, type Palette } from './theme';
-import { sprite } from './token';
+import { drawElement, sprite } from './token';
 
 export interface Camera { x: number; y: number; z: number }
-export interface View { tool: string; selected: Ent | null; stats?: boolean }
+export interface View { tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null }
 
 // 方眼ノートに描いた工場の図面。輪郭線と斜線で描き、ぼかしや発光は使わない
 let FONT_HAND = '"Klee One", sans-serif';
@@ -250,7 +251,7 @@ function chunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
 interface Mote { x: number; y: number; v: number; s: number; ph: number }
 const motes: Mote[] = Array.from({ length: 46 }, (_, i) => ({ x: hash(i, 3), y: hash(i, 5), v: 0.02 + hash(i, 7) * 0.05, s: 0.6 + hash(i, 9) * 1.8, ph: hash(i, 11) * 6.28 }));
 
-interface Particle { x: number; y: number; vx: number; vy: number; age: number; life: number; color: string; text?: string; r: number }
+interface Particle { x: number; y: number; vx: number; vy: number; age: number; life: number; color: string; text?: string; r: number; tint?: string }
 const particles: Particle[] = [];
 const born = new WeakMap<Ent, number>();
 
@@ -258,6 +259,9 @@ function spawn(w: World, P: Palette) {
   for (const f of w.fx.splice(0)) {
     if (f.type === 'deliver') {
       particles.push({ x: f.x + 0.5, y: f.y + 0.2, vx: 0, vy: -0.9, age: 0, life: 0.9, color: P.red, text: '+1', r: 0 });
+    } else if (f.type === 'vent') {
+      // 廃棄口は煙突：捨てた物質の色の煙を吐く
+      particles.push({ x: f.x + 0.5 + (Math.random() - 0.5) * 0.2, y: f.y + 0.3, vx: 0.2 + Math.random() * 0.15, vy: -0.6 - Math.random() * 0.3, age: 0, life: 1.6 + Math.random() * 0.8, color: 'smoke', r: 0.13 + Math.random() * 0.07, tint: mix(sub(f.s).color, '#3a3d42', 0.45) });
     } else if (f.type === 'spill') {
       particles.push({ x: f.x + 0.5, y: f.y + 0.5, vx: (Math.random() - 0.5) * 0.8, vy: 0.5, age: 0, life: 0.5, color: P.red, r: 0.06 });
     } else {
@@ -554,6 +558,17 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     }
   }
 
+  // ---- 範囲選択 ----
+  if (view.area) {
+    const [ax0, ay0, ax1, ay1] = view.area;
+    ctx.fillStyle = punk ? `rgba(${P.glow},0.12)` : 'rgba(255,225,77,0.2)';
+    ctx.fillRect(sx(ax0), sy(ay0), (ax1 - ax0 + 1) * z, (ay1 - ay0 + 1) * z);
+    ctx.strokeStyle = P.hi; ctx.lineWidth = lw(0.08);
+    ctx.setLineDash([z * 0.3, z * 0.2]); ctx.lineDashOffset = -t * z * 0.6;
+    ctx.strokeRect(sx(ax0), sy(ay0), (ax1 - ax0 + 1) * z, (ay1 - ay0 + 1) * z);
+    ctx.setLineDash([]);
+  }
+
   // ---- 選んだものは蛍光ペンで囲む ----
   if (view.selected && view.selected.kind !== 'hub') {
     const e = view.selected;
@@ -591,7 +606,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     if (p.color === 'smoke') {
       // 蒸気：上がりながら広がって薄れる
       ctx.globalAlpha = k * (punk ? (light ? 0.5 : 0.3) : 0.32);
-      ctx.fillStyle = punk ? (light ? '#ffffff' : '#aeb7bf') : P.soft;
+      ctx.fillStyle = p.tint ?? (punk ? (light ? '#ffffff' : '#aeb7bf') : P.soft);
       ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y), z * p.r * (2.6 - k * 1.6), 0, Math.PI * 2); ctx.fill();
     } else if (p.color === 'spark') {
       ctx.strokeStyle = punk && !light ? P.hi : P.red;
@@ -1107,90 +1122,129 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
   }
 }
 
+/** 納品所：全元素を欲しがる機械。大きくなるほど、歯・煙突・棘・回る環が増えていかつくなる。
+ *  外周に並ぶ元素の印は、その元素を飲み込むと灯る */
 function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, z: number, size: number, w: World, t: number) {
-  const s = z * size, m = z * 0.1, line = Math.max(1.5, z * 0.05), u = s / 2; // u：2 マスのときの 1 マスぶん
-  const punk = P.skin === 'punk', light = P.name === 'light';
-  ctx.lineJoin = 'round';
-  ctx.fillStyle = P.shadow;
-  if (punk) chamfer(ctx, px + m + z * 0.14, py + m + z * 0.34, s - 2 * m, s - 2 * m, z * 0.3); else rr(ctx, px + m + z * 0.12, py + m + z * 0.3, s - 2 * m, s - 2 * m, z * 0.12);
-  ctx.fill();
-  // 厚み：納品所はほかの装置より背が高い
-  ctx.fillStyle = punk ? '#14181d' : mix(P.hi, P.ink, 0.45);
-  ctx.strokeStyle = punk ? '#000' : P.ink; ctx.lineWidth = line;
-  if (punk) chamfer(ctx, px + m, py + m + z * 0.2, s - 2 * m, s - 2 * m, z * 0.3); else rr(ctx, px + m, py + m + z * 0.2, s - 2 * m, s - 2 * m, z * 0.12);
-  ctx.fill(); ctx.stroke();
-  let ink = P.ink;
-  if (punk) {
-    // 危険表示の縞で縁どった搬入口
-    chamfer(ctx, px + m, py + m, s - 2 * m, s - 2 * m, z * 0.3);
-    ctx.save();
-    ctx.clip();
-    ctx.fillStyle = P.hi;
-    ctx.fillRect(px, py, s, s);
-    ctx.strokeStyle = '#14181d';
-    ctx.lineWidth = z * 0.16;
-    ctx.beginPath();
-    for (let d = -s + mod(t * z * 0.25, z * 0.46); d < s * 2; d += z * 0.46) { ctx.moveTo(px + d, py); ctx.lineTo(px + d - s, py + s); }
-    ctx.stroke();
-    ctx.restore();
-    chamfer(ctx, px + m, py + m, s - 2 * m, s - 2 * m, z * 0.3);
-    ctx.strokeStyle = light ? P.ink : '#000';
-    ctx.lineWidth = line;
-    ctx.stroke();
-    chamfer(ctx, px + m + z * 0.22, py + m + z * 0.22, s - 2 * m - z * 0.44, s - 2 * m - z * 0.44, z * 0.2);
-    ctx.fillStyle = light ? P.plate : '#0b0c0f';
-    ctx.fill();
-    ctx.stroke();
-    ink = light ? P.ink : P.hi;
-  } else {
-    rr(ctx, px + m, py + m, s - 2 * m, s - 2 * m, z * 0.12);
-    ctx.fillStyle = light ? P.hi : P.plate;
-    ctx.fill();
-    ctx.strokeStyle = light ? P.ink : P.hi;
-    ctx.lineWidth = line;
-    ctx.stroke();
-    rr(ctx, px + m + z * 0.1, py + m + z * 0.1, s - 2 * m - z * 0.2, s - 2 * m - z * 0.2, z * 0.06);
-    ctx.lineWidth = line * 0.5;
-    ctx.stroke();
-    ink = light ? P.ink : P.hi;
+  const s = z * size, lv = Math.max(0, [2, 4, 6, 8].indexOf(size)), punk = P.skin === 'punk', light = P.name === 'light';
+  const cxh = px + s / 2, cyh = py + s / 2, line = Math.max(1.5, z * 0.05), m = z * 0.06, c = z * 0.3;
+  const INK = punk ? '#07090b' : P.ink;
+  const hull = punk ? (light ? '#2e353d' : '#171b20') : light ? '#2b3550' : '#1a2620';
+  const steel = punk ? (light ? '#8d969e' : '#4d545c') : light ? '#8792ab' : '#6f8176';
+  const hot = punk ? P.hi : light ? P.red : P.hi, core = punk ? '#ff3c24' : P.red;
+  const pulse = 0.5 + 0.5 * Math.sin(t * (2.2 + lv * 0.5));
+  const box = (ox: number, oy: number, grow = 0) => chamfer(ctx, px + m - grow + ox, py + m - grow + oy, s - 2 * m + grow * 2, s - 2 * m + grow * 2, c);
+  ctx.lineJoin = 'miter';
+
+  // 地面の影と、背の高い側面
+  const th = z * (0.22 + lv * 0.06);
+  ctx.fillStyle = punk ? `rgba(0,0,0,${light ? 0.3 : 0.55})` : P.shadow;
+  box(th * 0.7, th * 1.8); ctx.fill();
+  // 棘：段階 2 から外へ突き出す。段階 3 では脈打つ
+  if (lv >= 2) {
+    const n = size * 2, len = z * (lv >= 3 ? 0.42 + 0.08 * pulse : 0.3), half = z * 0.16;
+    ctx.fillStyle = steel; ctx.strokeStyle = INK; ctx.lineWidth = line * 0.8;
+    for (let side = 0; side < 4; side++) for (let k = 0; k < n; k++) {
+      const u = ((k + 0.5) / n - 0.5) * (s - z * 0.9);
+      const [bx, by, nx, ny] = side === 0 ? [cxh + u, py + m, 0, -1] : side === 1 ? [px + s - m, cyh + u, 1, 0] : side === 2 ? [cxh + u, py + s - m, 0, 1] : [px + m, cyh + u, -1, 0];
+      ctx.beginPath(); ctx.moveTo(bx - ny * half, by + nx * half); ctx.lineTo(bx + nx * len, by + ny * len); ctx.lineTo(bx + ny * half, by - nx * half); ctx.closePath();
+      ctx.fill(); ctx.stroke();
+    }
   }
+  box(0, th); ctx.fillStyle = punk ? '#0b0d10' : mix(hull, '#000000', 0.35); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = line; ctx.stroke();
+  // 筐体
+  box(0, 0); ctx.fillStyle = hull; ctx.fill(); ctx.stroke();
+  if (punk) {
+    // 縁の危険表示
+    ctx.save(); box(0, 0); ctx.clip();
+    ctx.strokeStyle = P.hi; ctx.lineWidth = z * 0.1; ctx.globalAlpha = light ? 0.9 : 0.75;
+    ctx.setLineDash([z * 0.22, z * 0.22]); ctx.lineDashOffset = -t * z * 0.3;
+    chamfer(ctx, px + m + z * 0.07, py + m + z * 0.07, s - 2 * m - z * 0.14, s - 2 * m - z * 0.14, c * 0.8); ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
+  }
+
+  // 四辺の搬入口：歯が噛み合う口。マスごとに 1 つ
+  const chomp = 0.5 + 0.5 * Math.sin(t * 7);
+  for (let side = 0; side < 4; side++) for (let k = 0; k < size; k++) {
+    const u = (k + 0.5 - size / 2) * z;
+    ctx.save();
+    ctx.translate(side === 0 ? cxh + u : side === 1 ? px + s - m : side === 2 ? cxh + u : px + m, side === 0 ? py + m : side === 1 ? cyh + u : side === 2 ? py + s - m : cyh + u);
+    ctx.rotate((side * Math.PI) / 2);
+    const jw = z * 0.34, jh = z * 0.26;
+    ctx.fillStyle = '#050607'; ctx.fillRect(-jw, 0, jw * 2, jh);
+    ctx.fillStyle = core; ctx.globalAlpha = 0.25 + 0.3 * pulse; ctx.fillRect(-jw, jh * 0.55, jw * 2, jh * 0.45); ctx.globalAlpha = 1;
+    ctx.fillStyle = steel;
+    for (let i = 0; i < 4; i++) {
+      const x0 = -jw + (i * jw) / 2, d = jh * (0.35 + 0.3 * (i % 2 ? chomp : 1 - chomp));
+      ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x0 + jw / 4, d); ctx.lineTo(x0 + jw / 2, 0); ctx.closePath(); ctx.fill();
+    }
+    ctx.strokeStyle = INK; ctx.lineWidth = line * 0.7; ctx.strokeRect(-jw, 0, jw * 2, jh);
+    ctx.restore();
+  }
+
+  // 元素の環：飲み込んだ元素は色がつき、まだのものは影だけ
+  const els = ELEMENTS, ringR = s / 2 - z * (0.42 + (lv ? 0.1 : 0)), er = Math.max(2.5, Math.min(z * 0.17, (ringR * 8) / els.length / 2.6));
+  if (z >= 16) els.forEach((el, i) => {
+    const a = (i / els.length) * Math.PI * 2 - Math.PI / 2 + (lv >= 3 ? t * 0.05 : 0);
+    const k = Math.SQRT2, ex = cxh + ringR * Math.max(-1, Math.min(1, Math.cos(a) * k)), ey = cyh + ringR * Math.max(-1, Math.min(1, Math.sin(a) * k));
+    const tier = fedTier(w, el.sym);
+    ctx.beginPath(); ctx.arc(ex, ey, er * 1.25, 0, Math.PI * 2);
+    ctx.fillStyle = tier ? '#f3f1e8' : '#0a0c0e'; ctx.fill();
+    ctx.strokeStyle = tier >= 3 ? hot : tier ? INK : steel; ctx.lineWidth = tier >= 2 ? line * 0.9 : line * 0.5; ctx.stroke();
+    ctx.globalAlpha = tier ? 1 : 0.28;
+    drawElement(ctx, el.sym, ex, ey, er * 0.8);
+    ctx.globalAlpha = 1;
+  });
+
+  // 中央の口：回る歯の環と、赤く脈打つ炉心
+  const R = Math.min(s * 0.3, s / 2 - z * 0.72 - (lv ? z * 0.1 : 0)) + (lv === 0 ? z * 0.1 : 0);
+  const ring = (r: number, teeth: number, rot: number, depth: number, fill: string) => {
+    ctx.beginPath();
+    for (let i = 0; i < teeth * 2; i++) { const a = rot + (i / (teeth * 2)) * Math.PI * 2, rr2 = i % 2 ? r : r + depth; ctx.lineTo(cxh + Math.cos(a) * rr2, cyh + Math.sin(a) * rr2); }
+    ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = line * 0.8; ctx.stroke();
+  };
+  if (lv >= 3) ring(R * 1.34, 28, -t * 0.25, R * 0.1, steel);
+  if (lv >= 1) ring(R * 1.14, 10 + lv * 4, t * 0.35, R * 0.12, mix(steel, hull, 0.35));
+  ctx.beginPath(); ctx.arc(cxh, cyh, R * 1.04, 0, Math.PI * 2); ctx.fillStyle = '#050607'; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = line; ctx.stroke();
+  const glow = ctx.createRadialGradient(cxh, cyh, R * 0.15, cxh, cyh, R);
+  glow.addColorStop(0, punk && !light ? 'rgba(255,90,40,0.55)' : 'rgba(210,63,58,0.42)'); glow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.globalAlpha = 0.55 + 0.45 * pulse; ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(cxh, cyh, R, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+  // 内向きの牙
+  const fangs = 8 + lv * 4;
+  ctx.fillStyle = steel; ctx.strokeStyle = INK; ctx.lineWidth = line * 0.6;
+  for (let i = 0; i < fangs; i++) {
+    const a = t * -0.5 + (i / fangs) * Math.PI * 2, wd = (Math.PI / fangs) * 0.7, r1 = R * 1.02, r2 = R * (0.8 - 0.05 * chomp);
+    ctx.beginPath(); ctx.moveTo(cxh + Math.cos(a - wd) * r1, cyh + Math.sin(a - wd) * r1); ctx.lineTo(cxh + Math.cos(a) * r2, cyh + Math.sin(a) * r2); ctx.lineTo(cxh + Math.cos(a + wd) * r1, cyh + Math.sin(a + wd) * r1); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+  }
+
+  // 煙突：段階 1 から四隅に立ち、煙を吐く
+  if (lv >= 1) {
+    const off = s / 2 - z * 0.62;
+    for (const [ax, ay] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      const x = cxh + ax * off, y = cyh + ay * off, r = z * (0.2 + lv * 0.03);
+      ctx.beginPath(); ctx.arc(x, y + r * 0.35, r, 0, Math.PI * 2); ctx.fillStyle = '#0b0d10'; ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = steel; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = line * 0.8; ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, r * 0.6, 0, Math.PI * 2); ctx.fillStyle = '#050607'; ctx.fill();
+      if (particles.length < 260 && Math.random() < 0.025 * lv) { const hr = hubRect(size); particles.push({ x: hr.x + (x - px) / z, y: hr.y + (y - py) / z, vx: 0.18 + Math.random() * 0.1, vy: -0.55 - Math.random() * 0.2, age: 0, life: 1.8 + Math.random(), color: 'smoke', r: 0.14 + lv * 0.02, tint: '#30343a' }); }
+    }
+  }
+
+  // いま欲しがっているもの
+  const u = Math.min(s / 2, R * 2.1);
   ctx.textAlign = 'center';
+  const ink = punk ? P.hi : '#f3f1e8';
   ctx.fillStyle = ink;
-  ctx.font = `700 ${u * 0.2}px ${FONT_SMALL}`;
-  ctx.fillText('納品所', px + s / 2, py + s / 2 - u * 0.5);
   const goal = currentGoal(w);
   const gs = goal ? sub(goal.s) : null;
   const plain = !gs?.formula || !!gs.mask;
-  const tx = !gs ? '完了' : plain ? (goal!.s === 'e' ? 'e⁻' : gs.name.replace(/（.*）| .*$/g, '')) : label(goal!.s);
-  ctx.font = `600 ${u * Math.min(0.44, 1.2 / Math.max(1, tx.length * (plain ? 1 : 0.62)))}px ${plain ? FONT_HAND : FONT_MONO}`;
-  ctx.fillText(tx, px + s / 2, py + s / 2 - u * 0.02);
+  const tx = !gs ? '満腹' : goal!.also ? `${label(goal!.s)} ほか` : plain ? (goal!.s === 'e' ? 'e⁻' : gs.name.replace(/（.*）| .*$/g, '')) : label(goal!.s);
+  ctx.lineWidth = Math.max(2, u * 0.05); ctx.strokeStyle = 'rgba(0,0,0,0.85)'; ctx.lineJoin = 'round';
+  ctx.font = `600 ${u * Math.min(0.4, 1.15 / Math.max(1, tx.length * (plain ? 1 : 0.62)))}px ${plain ? FONT_HAND : FONT_MONO}`;
+  ctx.strokeText(tx, cxh, cyh - u * 0.06); ctx.fillText(tx, cxh, cyh - u * 0.06);
   if (goal) {
-    ctx.font = `500 ${u * 0.22}px ${FONT_MONO}`;
-    ctx.fillText(`${goalCount(w)} / ${requiredOf(w, goal)}`, px + s / 2, py + s / 2 + u * 0.46);
-  }
-  if (punk) {
-    // 進み具合は区切りのあるランプ列
-    if (goal) {
-      const n = Math.min(20, requiredOf(w, goal)), lit = Math.floor((goalCount(w) / requiredOf(w, goal)) * n), bw = (s - z * 0.9) / n;
-      for (let i = 0; i < n; i++) {
-        ctx.fillStyle = i < lit ? P.hi : light ? 'rgba(20,24,29,0.18)' : 'rgba(255,255,255,0.1)';
-        ctx.fillRect(px + z * 0.45 + i * bw, py + s / 2 + u * 0.64, bw * 0.7, u * 0.09);
-      }
-    }
-    // 四隅の警告灯は交互に点滅する
-    [[0.2, 0.2], [size - 0.2, 0.2], [size - 0.2, size - 0.2], [0.2, size - 0.2]].forEach(([ox, oy], i) => {
-      const on = Math.sin(t * 5 + i * Math.PI) > 0;
-      ctx.beginPath(); ctx.arc(px + ox * z, py + oy * z, z * 0.09, 0, Math.PI * 2);
-      ctx.fillStyle = on ? P.red : '#3a1410'; ctx.fill();
-      ctx.strokeStyle = '#000'; ctx.lineWidth = line * 0.6; ctx.stroke();
-      if (on && !light) {
-        ctx.globalCompositeOperation = 'lighter';
-        const g = ctx.createRadialGradient(px + ox * z, py + oy * z, 0, px + ox * z, py + oy * z, z * 0.7);
-        g.addColorStop(0, 'rgba(255,60,36,0.5)'); g.addColorStop(1, 'rgba(255,60,36,0)');
-        ctx.fillStyle = g; ctx.fillRect(px + (ox - 0.7) * z, py + (oy - 0.7) * z, z * 1.4, z * 1.4);
-        ctx.globalCompositeOperation = 'source-over';
-      }
-    });
+    ctx.font = `600 ${u * 0.2}px ${FONT_MONO}`;
+    const ct = `${goalCount(w)} / ${requiredOf(w, goal)}`;
+    ctx.strokeText(ct, cxh, cyh + u * 0.3); ctx.fillText(ct, cxh, cyh + u * 0.3);
   }
 }
 

@@ -217,6 +217,17 @@ b { font-weight: 700; }
 .clues li::marker { font-family: var(--font-mono); font-weight: 600; color: var(--red); }
 .pep-line { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .pep-line .slot { min-width: 0; flex: 0 1 auto; padding: 6px 10px; font-size: 16px; }
+#area-act { position: absolute; left: 50%; bottom: 196px; transform: translateX(-50%); display: flex; gap: 6px; align-items: center; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px; padding: 6px 8px 6px 12px; box-shadow: 2px 2px 0 var(--shadow); font-size: 13px; max-width: calc(100% - 32px); }
+#area-act button { border: var(--bw) solid var(--ink); background: var(--card); color: var(--ink); border-radius: 4px; padding: 6px 12px; min-height: 40px; font-weight: 700; font-family: inherit; }
+#area-act #area-del { color: var(--red); }
+.in-title #area-act { display: none; }
+[data-skin="punk"] #area-act { background: var(--panel); color: #f0e9dc; border-radius: 0; border-color: #000; }
+[data-skin="punk"] #area-act button { border-radius: 0; background: var(--key); color: var(--key-ink); border-color: var(--key-edge); }
+.fed { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 5px; }
+.fed-el { display: grid; grid-template-columns: auto auto 1fr; gap: 0 6px; align-items: center; border: 1px solid var(--rule); padding: 4px 8px; font-size: 13px; opacity: 0.6; }
+.fed-el.on { opacity: 1; border-color: var(--ink); }
+.fed-el .muted { text-align: right; font-family: var(--font-mono); font-size: 12px; }
+.fed-t { grid-column: 1 / -1; font-size: 9px; letter-spacing: 2px; color: var(--red); line-height: 1; }
 /* ---- 統計 ---- */
 #goal-rate { margin: 4px 0 0; font-family: var(--font-mono); font-size: 12px; color: var(--ink); min-height: 0; }
 #goal-rate:empty { display: none; }
