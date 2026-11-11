@@ -73,7 +73,7 @@ export function diagram(e: Ent): HTMLElement {
   return g;
 }
 
-export interface SheetActions { close(): void; rotate(e: Ent): void; erase(e: Ent): void; toast(msg: string): void }
+export interface SheetActions { close(): void; rotate(e: Ent): void; erase(e: Ent): void; toast(msg: string): void; stamp(text: string): void }
 
 /** 物質の選択チップ */
 export function chip(id: string, extra = ''): HTMLButtonElement {
@@ -128,12 +128,52 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
     sheet.append(h('div', { class: 'split' }, about(kind), side()), form());
   };
 
+  /** 設定が合ったあとに、運転条件の計算を問う */
+  const askCondition = (r: Recipe, pass: () => void) => {
+    const q = r.ask!;
+    let text = '';
+    const box = h('div', { class: 'cfg', id: 'cfg-ask' });
+    const display = h('div', { class: 'slot on numslot', id: 'ask-display' }, '');
+    const fb = h('div', { class: 'answer', hidden: true });
+    const paint = () => { display.textContent = text || '答えを入れる'; display.classList.toggle('empty', !text); };
+    const press = (k: string) => {
+      if (k === '⌫') text = text.slice(0, -1);
+      else if (k === '.') { if (!text.includes('.')) text += text === '' ? '0.' : '.'; }
+      else if (text.replace('.', '').length < 8) text += k;
+      sfx.tap();
+      paint();
+    };
+    const keys = h('div', { class: 'keys numpad' }, ...['7', '8', '9', '4', '5', '6', '1', '2', '3', '0', '.', '⌫'].map((k) =>
+      h('button', { class: 'key ' + (k === '⌫' ? 'fn' : 'n'), type: 'button', id: `ask-${k === '.' ? 'dot' : k === '⌫' ? 'del' : k}`, onclick: () => press(k) }, k)));
+    const ok = h('button', { class: 'primary', type: 'button', id: 'ask-ok' }, '答える');
+    ok.onclick = () => {
+      const x = parseFloat(text);
+      if (Number.isNaN(x)) return;
+      if (Math.abs(x - q.answer) <= Math.max(Math.abs(q.answer) * 0.02, 1e-9)) { box.remove(); pass(); return; }
+      w.mistakes.push({ machine: kind, recipe: r.id, part: 'calc', t: Date.now() });
+      sfx.bad();
+      fb.replaceChildren(h('p', {}, h('b', {}, '不正解。')), h('p', { class: 'note' }, q.how), h('p', { class: 'muted' }, '考え方を読んだら、数字を消して入れ直せ。'));
+      fb.hidden = false;
+      text = '';
+      paint();
+    };
+    paint();
+    box.append(h('h3', {}, '運転条件の計算'), h('p', { class: 'qtext' }, q.text),
+      h('div', { class: 'row' }, display, h('span', { class: 'formula' }, q.unit)), keys, fb, h('div', { class: 'row' }, ok));
+    const formEl = sheet.querySelector('form.cfg') as HTMLElement;
+    formEl.hidden = true;
+    sheet.querySelector('#cfg-ask')?.remove();
+    sheet.append(box);
+    sheet.scrollTop = sheet.scrollHeight;
+  };
+
   const form = () => {
     const picked = new Map<string, number>();
     /** 生成物の欄。化学式を打つか、名前で選ぶ */
     const prods: { coef: number; formula: string; id?: string }[] = [];
     let active = 0, condition = '', neg = '', pos = '', electrons = 1, shift = '';
     let lastRecipe: Recipe | null = null;
+    let asked = false;
 
     const reactRows = h('div', { class: 'rows' });
     const prodRows = h('div', { class: 'rows' });
@@ -283,13 +323,16 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
       if (verdict.ok && review) {
         if (verdict.recipe.id !== review.recipe.id) { feedback.textContent = `それは別の反応（${verdict.recipe.name}）だ。`; return; }
         sfx.ok();
+        act.stamp('正解');
         review.done(fails === 0);
         return;
       }
+      if (verdict.ok && verdict.recipe.ask && !asked) { askCondition(verdict.recipe, () => { asked = true; f.requestSubmit(); }); return; }
       if (verdict.ok) {
         configure(e, verdict.recipe, isCol ? productsOf(verdict.recipe).map(([s]) => s) : products.map(([p]) => p!));
         const gain = learn(w, verdict.recipe, fails === 0);
         sfx.ok();
+        act.stamp('正解');
         if (gain) act.toast(`${verdict.recipe.name}　研究点 +${gain}` + (fails === 0 ? '（一発正解）' : ''));
         render();
         return;

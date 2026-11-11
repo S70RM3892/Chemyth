@@ -79,10 +79,15 @@ describe('内容データ', () => {
   it('章と指令の対応', () => {
     expect(GOALS.length).toBe(CHAPTERS.reduce((a, c) => a + c.goals.length, 0));
     expect(chapterOf(0)?.name).toContain('第1章');
-    expect(chapterOf(GOALS.length - 1)?.name).toContain('第11章');
+    expect(chapterOf(GOALS.length - 1)?.name).toContain('第12章');
     expect(chapterOf(GOALS.length)).toBeNull();
     expect(CHAPTERS[MACHINES.battery.chapter!].goals[0].s).toBe('e');
     for (const g of GOALS) if (g.strict) expect(SETS.find((x) => x.id === g.strict)!.members, g.s).toContain(g.s);
+  });
+  it('運転条件の計算つきの反応は、問いと答えがそろっている', () => {
+    const asks = RECIPES.filter((r) => r.ask);
+    expect(asks.length).toBe(3);
+    for (const r of asks) { expect(r.ask!.text.length).toBeGreaterThan(20); expect(Number.isFinite(r.ask!.answer)).toBe(true); }
   });
   it('計算問題の id が重複せず、答えは許容誤差つきで判定される', () => {
     expect(new Set(QUESTIONS.map((q) => q.id)).size).toBe(QUESTIONS.length);
@@ -144,7 +149,7 @@ describe('採点', () => {
     expect(v('reactor', { ...haber, reactants: [['N2', 1], ['H2', 2]] })).toBe('coefficients');
     expect(v('reactor', { ...haber, condition: 'Pt' })).toBe('condition');
     expect(v('reactor', { ...haber, products: [[null, 1]] })).toBe('products');
-    expect(v('reactor', { ...haber, reactants: [['N2', 1]] })).toBe('reactants');
+    expect(v('reactor', { ...haber, reactants: [['N2', 1], ['O2', 1]] })).toBe('reactants');
   });
   it('電解槽は陰極と陽極の取り違えを見抜く', () => {
     expect(v('electrolyzer', { reactants: [['H2O', 2]], products: [['O2', 1], ['H2', 2]], condition: '水 + NaOH' })).toBe('electrodes');

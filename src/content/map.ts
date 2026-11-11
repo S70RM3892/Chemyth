@@ -1,7 +1,7 @@
 export const MAP_W = 84;
 export const MAP_H = 56;
 
-export type Zone = 'sea' | 'sulfur' | 'limestone' | 'iron' | 'coal' | 'bauxite' | 'copper' | 'zinc' | 'lead' | 'oil' | 'gas' | 'farm' | 'grove' | 'ranch';
+export type Zone = 'sea' | 'sulfur' | 'limestone' | 'iron' | 'coal' | 'bauxite' | 'copper' | 'zinc' | 'lead' | 'oil' | 'gas' | 'farm' | 'grove' | 'ranch' | 'rubber';
 
 export interface ZoneInfo {
   name: string;
@@ -83,6 +83,11 @@ export const ZONES: Record<Zone, ZoneInfo> = {
     name: 'オリーブ畑', resource: 'fat', form: '化合物', tint: ['#2f3b22', '#6f8a3c'], at: [76, 9, 2.6],
     about: '油脂は、グリセリン 1 分子と高級脂肪酸 3 分子からなるエステル。',
     exam: 'けん化価・ヨウ素価の計算、セッケンの性質（弱塩基性、硬水で沈殿）、硬化油。',
+  },
+  rubber: {
+    name: 'ゴム園', resource: 'rubber', form: '化合物', tint: ['#2e3a2a', '#5f9a6a'], at: [12, 45, 2.4],
+    about: 'ゴムの木の樹液（ラテックス）を固めた生ゴムは、イソプレンが付加重合した形のポリイソプレンで、二重結合がシス形になっている。',
+    exam: '天然ゴムの単量体はイソプレン。シス形だから弾性がある。硫黄を加えて加熱する加硫で架橋構造ができ、弾性と強度が増す。',
   },
   ranch: {
     name: '牧場', resource: 'protein', form: '化合物', tint: ['#3a3326', '#a08a5c'], at: [28, 30, 2.4],

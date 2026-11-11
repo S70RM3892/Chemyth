@@ -4,6 +4,7 @@ import { deserialize, summarize } from '../engine/world';
 import { $, h } from './dom';
 import { setSound, sfx, soundOn } from './sound';
 import { drawElement } from './token';
+import { applyTheme, type ThemeChoice } from './theme';
 
 export const SLOTS = 3;
 const slotKey = (n: number) => `chemyth-v2-slot-${n}`;
@@ -14,14 +15,21 @@ export const store = {
   read(n: number): string | null { try { return localStorage.getItem(slotKey(n)); } catch { return null; } },
   write(n: number, json: string): boolean { try { localStorage.setItem(slotKey(n), json); return true; } catch { return false; } },
   erase(n: number) { try { localStorage.removeItem(slotKey(n)); } catch { /* 同上 */ } },
-  meta(): { sound?: boolean } { try { return JSON.parse(localStorage.getItem(META) || '{}'); } catch { return {}; } },
-  setMeta(m: { sound?: boolean }) { try { localStorage.setItem(META, JSON.stringify(m)); } catch { /* 同上 */ } },
+  meta(): { sound?: boolean; theme?: ThemeChoice } { try { return JSON.parse(localStorage.getItem(META) || '{}'); } catch { return {}; } },
+  setMeta(m: { sound?: boolean; theme?: ThemeChoice }) { try { localStorage.setItem(META, JSON.stringify({ ...store.meta(), ...m })); } catch { /* 同上 */ } },
 };
 
 const fmtTime = (ms: number) => { const m = Math.floor(ms / 60000); return m >= 60 ? `${Math.floor(m / 60)} 時間 ${m % 60} 分` : `${m} 分`; };
 const fmtDate = (t: number) => { if (!t) return ''; const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
 export interface TitleApi { start(slot: number, json: string | null): void }
+
+/** テーマの切り替えボタン（自動・ノート・黒板） */
+export function themeButtons(after: () => void): HTMLElement[] {
+  const cur = store.meta().theme ?? 'auto';
+  return ([['auto', '自動'], ['light', 'ノート'], ['dark', '黒板']] as [ThemeChoice, string][]).map(([id, name]) =>
+    h('button', { type: 'button', id: `theme-${id}`, class: cur === id ? 'on' : '', onclick: () => { store.setMeta({ theme: id }); applyTheme(id); sfx.tap(); after(); } }, name));
+}
 
 export function initTitle(api: TitleApi) {
   const root = $('title'), list = $('slots'), bg = $<HTMLCanvasElement>('title-bg'), panel = $('title-panel');
@@ -45,7 +53,7 @@ export function initTitle(api: TitleApi) {
     for (const f of floats) {
       f.x = (f.x + f.vx * dt + 1) % 1;
       f.y = (f.y + f.vy * dt + 1.1) % 1.1;
-      ctx.globalAlpha = f.a;
+      ctx.globalAlpha = f.a * 0.55;
       drawElement(ctx, f.el.sym, f.x * w, f.y * hh - 20, f.r);
     }
     ctx.globalAlpha = 1;
@@ -58,7 +66,7 @@ export function initTitle(api: TitleApi) {
       const n = i + 1, json = store.read(n), sum = summarize(json);
       if (!sum) {
         return h('div', { class: 'slotcard empty' },
-          h('div', { class: 'stack tight' }, h('b', {}, `セーブ ${n}`), h('span', { class: 'muted' }, json ? '古い版のデータ（読めない）' : 'からっぽ')),
+          h('div', { class: 'stack tight' }, h('b', {}, `ノート ${n} 冊目`), h('span', { class: 'muted' }, json ? '古い版のデータ（読めない）' : 'まだ何も書いていない')),
           h('div', { class: 'row' },
             h('button', { class: 'primary', type: 'button', id: `slot-${n}-new`, onclick: () => { sfx.ok(); api.start(n, null); } }, 'はじめる'),
             h('button', { class: 'ghost', type: 'button', id: `slot-${n}-import`, onclick: () => importInto(n) }, '読み込む')));
@@ -66,7 +74,7 @@ export function initTitle(api: TitleApi) {
       const erase = h('button', { class: 'ghost warn', type: 'button', id: `slot-${n}-erase` }, confirmErase === n ? '本当に消す' : '消す');
       erase.onclick = () => { if (confirmErase === n) { store.erase(n); confirmErase = 0; sfx.erase(); } else confirmErase = n; paint(); };
       return h('div', { class: 'slotcard' },
-        h('div', { class: 'stack tight' }, h('b', {}, `セーブ ${n}`),
+        h('div', { class: 'stack tight' }, h('b', {}, `ノート ${n} 冊目`),
           h('span', {}, sum.done >= TOTAL_GOALS ? `全 ${TOTAL_GOALS} 指令を達成` : `${CHAPTERS[sum.chapter]?.name ?? ''}　達成 ${sum.done} / ${TOTAL_GOALS}`),
           h('span', { class: 'muted' }, `${fmtTime(sum.playMs)}　研究点 ${sum.points}　${fmtDate(sum.savedAt)}`)),
         h('div', { class: 'row' },
@@ -76,12 +84,13 @@ export function initTitle(api: TitleApi) {
     }));
     const snd = $('title-sound');
     snd.textContent = soundOn() ? '音：あり' : '音：なし';
+    $('title-theme').replaceChildren(...themeButtons(paint));
   };
 
   const exportFrom = (n: number, json: string) => {
     const area = h('textarea', { id: 'io-text', readOnly: true, value: json, rows: 5 });
     const note = h('p', { class: 'muted' }, '');
-    panel.replaceChildren(h('b', {}, `セーブ ${n} の書き出し`),
+    panel.replaceChildren(h('b', {}, `ノート ${n} 冊目の書き出し`),
       h('p', { class: 'muted' }, 'この文字列を控えておけば、別の端末やブラウザの「読み込む」で同じ状態に戻せる。'), area,
       h('div', { class: 'row' },
         h('button', { class: 'primary', type: 'button', id: 'io-copy', onclick: () => {
@@ -93,7 +102,7 @@ export function initTitle(api: TitleApi) {
   const importInto = (n: number) => {
     const area = h('textarea', { id: 'io-text', rows: 5, placeholder: '書き出した文字列をここに貼り付ける' });
     const note = h('p', { class: 'feedback' }, '');
-    panel.replaceChildren(h('b', {}, `セーブ ${n} に読み込む`), area,
+    panel.replaceChildren(h('b', {}, `ノート ${n} 冊目に読み込む`), area,
       h('div', { class: 'row' },
         h('button', { class: 'primary', type: 'button', id: 'io-load', onclick: () => {
           const text = area.value.trim();

@@ -10,7 +10,8 @@ import { attachInput, Z_MIN } from './ui/input';
 import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showUpgrades, type PanelCtx } from './ui/panels';
 import { draw, type Camera } from './ui/render';
 import { setSound, sfx, soundOn } from './ui/sound';
-import { initTitle, store } from './ui/title';
+import { initTitle, store, themeButtons } from './ui/title';
+import { applyTheme } from './ui/theme';
 import { drawToken } from './ui/token';
 
 type Placeable = Exclude<Kind, 'hub'>;
@@ -53,6 +54,7 @@ function boot(data: HotData) {
   let cw = 0, ch = 0;
 
   setSound(store.meta().sound !== false);
+  applyTheme(store.meta().theme ?? 'auto');
   const save = () => { if (slot) store.write(slot, serialize(world)); };
   hot?.snapshot?.(() => (slot ? { slot, save: serialize(world) } : {}));
 
@@ -75,6 +77,16 @@ function boot(data: HotData) {
     toastEl.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = window.setTimeout(() => { toastEl.hidden = true; }, ms);
+  };
+
+  // ---- 赤いはんこ：正解や達成のとき ----
+  const stampEl = $('stamp');
+  const stamp = (text: string) => {
+    stampEl.textContent = text;
+    stampEl.hidden = true;
+    void stampEl.offsetWidth;
+    stampEl.hidden = false;
+    window.setTimeout(() => { stampEl.hidden = true; }, 1000);
   };
 
   // ---- 置く・消す・回す（元に戻せる） ----
@@ -126,6 +138,7 @@ function boot(data: HotData) {
   const sheetActions = {
     close: closeModal,
     toast,
+    stamp,
     rotate: (e: Ent) => { group = null; doTurn(e, ((e.dir + 1) % 4) as Dir); },
     erase: (e: Ent) => { group = null; doErase(e.x, e.y); sfx.erase(); },
   };
@@ -194,10 +207,11 @@ function boot(data: HotData) {
       h('button', { class: 'ghost', type: 'button', id: 'm-passages', onclick: () => showPassages(panel()) }, 'リード文課題（京大形式の空欄補充）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-log', onclick: () => showLog(panel()) }, '記録（間違えたところ）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-help', onclick: () => showHelp() }, '遊び方'),
+      h('div', { class: 'row' }, h('span', { class: 'muted' }, '見た目'), h('span', { class: 'seg' }, ...themeButtons(showMenu))),
       h('button', { class: 'ghost', type: 'button', id: 'm-sound', onclick: () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); showMenu(); } }, soundOn() ? '音：あり' : '音：なし'),
       h('button', { class: 'ghost', type: 'button', id: 'm-title', onclick: () => { modal.hidden = true; sheet.replaceChildren(); toTitle(); } }, '保存してタイトルへ戻る'),
     ),
-    h('p', { class: 'muted' }, `セーブ ${slot}　この端末に自動で保存している。`),
+    h('p', { class: 'muted' }, `ノート ${slot} 冊目。この端末に自動で保存している。`),
   );
 
   $('b-menu').onclick = showMenu;
@@ -381,8 +395,8 @@ function boot(data: HotData) {
         if (acc > STEP * 4) acc = 0;
       }
       for (const ev of world.events.splice(0)) {
-        if (ev === 'goal-done') { toast('納品完了。研究点 +30。次の指令が出た。', 3500); sfx.goal(); refreshTools(true); }
-        if (ev === 'chapter-done') { toast(`章を終えた。${CHAPTERS[world.chapter].name} へ進む。`, 5000); sfx.goal(); refreshTools(true); }
+        if (ev === 'goal-done') { stamp('納品済'); toast('納品完了。研究点 +30。次の指令が出た。', 3500); sfx.goal(); refreshTools(true); }
+        if (ev === 'chapter-done') { stamp('修了'); toast(`章を終えた。${CHAPTERS[world.chapter].name} へ進む。`, 5000); sfx.goal(); refreshTools(true); }
         if (ev === 'wrong-sample' && now - lastWrong > 2500) { lastWrong = now; toast('違う物質が納品所に入った。2 個減点。検査を見直せ。', 3200); sfx.bad(); }
         if (ev === 'all-done') { toast('すべての指令を終えた。', 6000); sfx.goal(); }
         save();

@@ -18,6 +18,8 @@ export interface Recipe {
   mix?: boolean;
   /** 可逆反応：平衡を生成物側へ動かす温度と圧力 */
   shift?: string;
+  /** 運転条件の計算。設定が合ったあとに問う */
+  ask?: { text: string; answer: number; unit: string; how: string };
   /** 電池：負極・正極の活物質 */
   neg?: string;
   pos?: string;
@@ -43,7 +45,7 @@ export const CONDITIONS: Record<MachineKind, { label: string; options: string[] 
   reactor: {
     label: '触媒・条件',
     options: ['なし', '加熱', '光', '高温・高圧', '氷冷（5 ℃以下）', '希酸', '濃酸', '濃酸・加熱', 'Fe₃O₄', 'Pt', 'V₂O₅', 'Ni', 'Ag', 'MnO₂', 'Cu（加熱）', 'ZnO', '鉄粉', 'HgCl₂', 'PdCl₂とCuCl₂', 'リン酸', '希硫酸',
-      '濃硫酸（触媒）', '濃硫酸 130〜140 ℃', '濃硫酸 160〜170 ℃', '脱水剤 P₄O₁₀', '付加重合', '縮合重合', '付加縮合', 'けん化', 'アミラーゼ', 'マルターゼ', 'チマーゼ', 'ペプシン', 'ペプチダーゼ'],
+      '濃硫酸（触媒）', '濃硫酸 130〜140 ℃', '濃硫酸 160〜170 ℃', '脱水剤 P₄O₁₀', '付加重合', '縮合重合', '付加縮合', '共重合', '加硫', 'けん化', 'アミラーゼ', 'マルターゼ', 'チマーゼ', 'ペプシン', 'ペプチダーゼ'],
   },
   collector: {
     label: '捕集法と乾燥剤',
@@ -60,10 +62,10 @@ const side = (s: string): [string, number][] => s.split(' + ').map((t) => {
   return [m[2], m[1] ? +m[1] : 1];
 });
 
-type Opt = { time?: number; loose?: boolean; mix?: boolean; shift?: string; neg?: string; pos?: string };
+type Opt = { time?: number; loose?: boolean; mix?: boolean; shift?: string; neg?: string; pos?: string; ask?: Recipe['ask'] };
 const R = (id: string, machine: MachineKind, name: string, eq: string, accept: string[], source: string, note: string, o: Opt = {}): Recipe => {
   const [l, r] = eq.split(' -> ');
-  return { id, machine, name, inputs: side(l), outputs: side(r), accept, source, note, time: o.time ?? 1.6, loose: o.loose, mix: o.mix, shift: o.shift, neg: o.neg, pos: o.pos };
+  return { id, machine, name, inputs: side(l), outputs: side(r), accept, source, note, time: o.time ?? 1.6, loose: o.loose, mix: o.mix, shift: o.shift, neg: o.neg, pos: o.pos, ask: o.ask };
 };
 const ANY = ['なし', '加熱'];
 const HEAT = ['加熱'];
@@ -297,6 +299,27 @@ export const RECIPES: Recipe[] = [
     '[H⁺] = Ka × [CH₃COOH]/[CH₃COO⁻]。酢酸と酢酸ナトリウムを 1 : 1 で混ぜると [H⁺] = Ka = 2.0×10⁻⁵ mol/L で、pH = 4.7。少量の酸や塩基を加えても pH はほとんど変わらない。', { mix: true }),
   R('buffer-57', 'reactor', '酢酸緩衝液（pH 5.7）', '1 CH3COOH + 10 CH3COONa -> 11 buffer57', ['なし'], '化学：電離平衡（緩衝液）',
     'pH を 1 上げるには [H⁺] を 1/10 にする。[CH₃COOH]/[CH₃COO⁻] = 1/10、つまり酢酸 1 に対して酢酸ナトリウム 10。', { mix: true }),
+
+  // ================= 油脂・ゴム・イオン交換 =================
+  R('hydrogenation', 'reactor', '油脂への水素付加（硬化油）', '1 fat + 3 H2 -> 1 hardfat', ['Ni'], '化学：有機化合物（油脂）',
+    '不飽和脂肪酸を多く含む液体の油脂（脂肪油）に、ニッケルを触媒にして水素を付加させると、融点が上がって固体の硬化油になる。マーガリンの原料。C=C 1 つにつき H₂ 1 分子、I₂ なら 1 分子が付加する（ヨウ素価の考え方）。', { loose: true, time: 2 }),
+  R('vulcanization', 'reactor', 'ゴムの加硫', '5 rubber + 1 S -> 5 vulcanized', ['加硫'], '化学：高分子化合物（ゴム）',
+    '生ゴムに数 % の硫黄を加えて加熱すると、鎖状の分子どうしが硫黄で橋かけされ（架橋構造）、弾性・強度・耐久性が増す。この操作を加硫という。硫黄を 30〜40 % 加えるとエボナイトになる。', { loose: true, time: 2 }),
+  R('sbr', 'reactor', 'スチレン-ブタジエンゴムの合成', '1 C6H5CHCH2 + 1 CH2CHCHCH2 -> 1 SBR', ['共重合'], '化学：高分子化合物（ゴム）',
+    '2 種類以上の単量体を混ぜて付加重合させることを共重合という。スチレンと 1,3-ブタジエンの共重合体 SBR は、自動車のタイヤに使われる合成ゴム。', { loose: true, time: 2 }),
+  R('ion-exchange', 'reactor', '陽イオン交換', '1 resinH + 1 NaCl -> 1 resinNa + 1 HCl', ['なし'], '化学：高分子化合物（機能性高分子）',
+    'スルホ基 –SO₃H をもつ陽イオン交換樹脂に NaCl 水溶液を通すと、Na⁺ が樹脂の H⁺ と入れ替わり、流出液は塩酸になる（R–SO₃H + Na⁺ → R–SO₃Na + H⁺）。流出液を NaOH で滴定すれば、もとの陽イオンの物質量がわかる。使った樹脂は強酸を通すと元に戻る。', { loose: true }),
+
+  // ================= 運転条件を計算する反応 =================
+  R('precip-agcl', 'reactor', '塩化銀の沈殿', 'AgNO3 + NaCl -> AgCl + NaNO3', ['なし'], '化学：電離平衡（溶解度積）',
+    'Ag⁺ + Cl⁻ → AgCl。イオンの濃度の積 [Ag⁺][Cl⁻] が溶解度積 Ksp を超えたときに沈殿が生じる。',
+    { ask: { text: '0.010 mol/L の NaCl 水溶液に AgNO₃ を少しずつ加える。AgCl が沈殿し始めるときの [Ag⁺] を a×10⁻⁸ mol/L と表すと、a はいくらか。（AgCl の Ksp = 1.8×10⁻¹⁰ (mol/L)²、体積変化は無視）', answer: 1.8, unit: '×10⁻⁸ mol/L', how: '[Ag⁺] = Ksp ÷ [Cl⁻] = 1.8×10⁻¹⁰ ÷ 0.010 = 1.8×10⁻⁸ mol/L。' } }),
+  R('cylinder', 'reactor', '窒素のボンベ充填', '1 N2 -> 1 cylN2', ['なし'], '化学：気体の性質（状態方程式）',
+    '気体の量・体積・温度が決まれば、圧力は状態方程式 PV = nRT で決まる。',
+    { loose: true, ask: { text: '容積 8.3 L のボンベに窒素 2.0 mol を詰め、27 ℃ に保つ。ボンベ内の圧力を a×10⁵ Pa と表すと、a はいくらか。（R = 8.3×10³ Pa·L/(K·mol)）', answer: 6, unit: '×10⁵ Pa', how: 'P = nRT/V = 2.0 × 8.3×10³ × 300 ÷ 8.3 = 6.0×10⁵ Pa。' } }),
+  R('hi-decomp', 'reactor', 'ヨウ化水素の分解', '2HI -> H2 + I2', HEAT, '化学：反応速度',
+    '2HI → H₂ + I₂。分解の速度は v = k[HI]² と表され、濃度の 2 乗に比例する（二次反応）。反応式の係数と反応次数は一般には一致しないので、次数は実験で決める。',
+    { ask: { text: 'この分解の反応速度は v = k[HI]² と表される。温度を変えずに HI の濃度を 3 倍にすると、反応速度は何倍になるか。', answer: 9, unit: '倍', how: '濃度の 2 乗に比例するので 3² = 9 倍。' } }),
 ];
 
 export function recipeById(id: string | undefined): Recipe | undefined {

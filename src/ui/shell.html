@@ -22,6 +22,7 @@
     <button type="button" id="act-erase" aria-label="消す">✕</button>
   </div>
   <div id="toast" role="status" hidden></div>
+  <div id="stamp" hidden></div>
   <div id="dock">
     <p id="tip"></p>
     <nav id="tools" aria-label="道具"></nav>
@@ -30,12 +31,16 @@
   <div id="title" hidden>
     <canvas id="title-bg"></canvas>
     <div id="title-inner">
-      <p class="kicker">受験化学の工場</p>
-      <h1>Chemyth</h1>
-      <p class="lead">採って、分けて、反応させて、納める。空気と水から、高分子まで。</p>
+      <div id="cover">
+        <p class="kicker">受験化学の工場ノート</p>
+        <h1><span>Chemyth</span></h1>
+        <p class="lead">採って、分けて、反応させて、納める。</p>
+        <div class="label-box"><span>科目</span><span>化学基礎・化学</span><span>範囲</span><span>共通テスト 〜 二次試験</span><span>内容</span><span>全 12 章 ／ 計算・復習・リード文</span></div>
+      </div>
       <div id="slots"></div>
       <div id="title-panel" hidden></div>
       <div class="row foot">
+        <span class="seg" id="title-theme" role="group" aria-label="テーマ"></span>
         <button type="button" class="ghost" id="title-sound">音：あり</button>
         <span class="muted">セーブはこの端末のこのブラウザの中に保存される。端末ごとに別々で、自動では同期しない。</span>
       </div>

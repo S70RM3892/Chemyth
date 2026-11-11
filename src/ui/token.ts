@@ -1,6 +1,7 @@
 import { parseFormula } from '../chem/formula';
 import { element } from '../content/elements';
 import { sub } from '../content/substances';
+import { onThemeChange, palette } from './theme';
 
 /** 物質の絵柄。元素ごとの固有の形を、分子のように並べて描く */
 
@@ -19,8 +20,9 @@ export function drawElement(ctx: CanvasRenderingContext2D, sym: string, x: numbe
   ctx.scale(r, r);
   ctx.fillStyle = el.color;
   ctx.fill(pathOf(sym), el.evenodd ? 'evenodd' : 'nonzero');
-  ctx.lineWidth = 0.12;
-  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+  ctx.lineWidth = 0.13;
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = palette().edge;
   ctx.stroke(pathOf(sym));
   ctx.restore();
   if (count && count > 1) {
@@ -80,18 +82,19 @@ export function drawToken(ctx: CanvasRenderingContext2D, id: string, x: number, 
   ctx.save();
   ctx.translate(x, y);
   ctx.scale(r, r);
+  const P = palette();
   if (s.mask) {
     // 分析用の試料は、見た目では区別できない
     ctx.beginPath();
     ctx.arc(0, 0, 0.95, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(12,18,15,0.92)';
+    ctx.fillStyle = P.plate;
     ctx.fill();
     ctx.lineWidth = 0.12;
-    ctx.strokeStyle = s.color;
+    ctx.strokeStyle = P.ink;
     ctx.setLineDash([0.3, 0.2]);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = s.color;
+    ctx.fillStyle = P.red;
     ctx.font = '700 1.25px "IBM Plex Mono", ui-monospace, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -110,10 +113,11 @@ export function drawToken(ctx: CanvasRenderingContext2D, id: string, x: number, 
     ctx.bezierCurveTo(1.35, -0.1, 0.95, 1, 0, 1);
     ctx.bezierCurveTo(-0.95, 1, -1.35, -0.1, 0, -1.18);
   } else ctx.arc(0, 0, 1, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(12,18,15,0.92)';
+  ctx.fillStyle = P.plate;
   ctx.fill();
   ctx.lineWidth = 0.1;
-  ctx.strokeStyle = s.color;
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = P.ink;
   if (!s.formula && id !== 'e') ctx.setLineDash([0.22, 0.16]); // 混合物・高分子は破線
   ctx.stroke();
   ctx.setLineDash([]);
@@ -123,6 +127,7 @@ export function drawToken(ctx: CanvasRenderingContext2D, id: string, x: number, 
 }
 
 const sprites = new Map<string, HTMLCanvasElement>();
+onThemeChange(() => sprites.clear());
 const SPRITE = 112;
 /** ベルト上で使う、描き済みの絵柄 */
 export function sprite(id: string): HTMLCanvasElement {

@@ -24,6 +24,11 @@ export const TESTS: Test[] = [
   T('oxid', 'organic', '硫酸酸性の二クロム酸カリウム水溶液と温める', '橙赤色が緑色に変わる', '酸化される。第一級・第二級アルコール、アルデヒド。第三級アルコールとエーテル、ケトンは酸化されにくい。'),
   T('oxald', 'organic', '穏やかに酸化し、生成物の銀鏡反応を調べる', '生成物が銀鏡反応を示す', '第一級アルコール（酸化するとアルデヒドになる）。第二級アルコールはケトンになるので陰性。'),
   T('chiral', 'organic', '偏光を通す', '偏光面が回転する', '不斉炭素原子をもち、鏡像異性体が存在する。グリシン以外の α-アミノ酸も陽性。'),
+  T('ozone_hcho', 'organic', 'オゾン分解し、生成物を調べる（ホルムアルデヒドを探す）', 'ホルムアルデヒドが生じる', '二重結合の端が CH₂= になっている。オゾン分解では C=C が切れて、それぞれの炭素が C=O になる。'),
+  T('ozone_ketone', 'organic', 'オゾン分解し、生成物を調べる（ケトンを探す）', '生成物にケトンが含まれる', '二重結合の炭素に炭化水素基が 2 つついている（>C=）。H が 1 つでもついていればアルデヒドになる。'),
+  T('cistrans', 'organic', '立体異性体の有無を調べる', 'シス-トランス異性体が存在する', '二重結合の両方の炭素に、それぞれ異なる 2 つの原子・基がついている。1-ブテンや 2-メチルプロペンにはない。'),
+  T('hyd_silver', 'organic', '加水分解し、得られたカルボン酸の銀鏡反応を調べる', '得られた酸が銀鏡反応を示す', 'ギ酸のエステル。ギ酸はホルミル基をもつので還元性を示す。'),
+  T('hyd_iodoform', 'organic', '加水分解し、得られたアルコールのヨードホルム反応を調べる', '得られたアルコールがヨードホルム反応を示す', 'アルコール部分がエタノールか 2-プロパノールなど、CH₃CH(OH)– をもつもの。'),
   T('xantho', 'amino', '濃硝酸を加えて加熱し、冷やしてアンモニア水を加える', '黄色になり、さらに橙黄色に変わる', 'ベンゼン環をもつ（キサントプロテイン反応）。フェニルアラニン、チロシンなど。'),
   T('sulfur', 'amino', 'NaOH 水溶液と加熱し、酢酸鉛(II)水溶液を加える', '黒色沈殿 PbS が生じる', '硫黄を含む。システイン、メチオニン。'),
   T('anode', 'amino', 'pH 6 の緩衝液にひたしたろ紙で電気泳動する（陽極側を見る）', '陽極側へ移動する', '酸性アミノ酸。側鎖にカルボキシ基をもち、pH 6 では全体として負に帯電する。'),
@@ -56,6 +61,8 @@ export const SETS: SampleSet[] = [
   { id: 'B', name: '試料 B：分子式 C₃H₆O', about: 'アルデヒド、ケトン、不飽和アルコールの 3 種。', members: ['x-propanal', 'x-acetone', 'x-allyl'] },
   { id: 'C', name: '試料 C：分子式 C₇H₈O（芳香族）', about: 'ベンゼン環をもつ 3 種。', members: ['x-cresol', 'x-benzyl', 'x-anisole'] },
   { id: 'D', name: '試料 D：分子式 C₄H₈O₂', about: 'カルボン酸 1 種とエステル 3 種。', members: ['x-butyric', 'x-ethylacetate', 'x-methylpropionate', 'x-formate'] },
+  { id: 'J', name: '試料 J：分子式 C₄H₈', about: 'アルケン 3 種とシクロアルカン 1 種。', members: ['x-1-butene', 'x-2-butene', 'x-isobutene', 'x-cyclobutane'] },
+  { id: 'K', name: '試料 K：分子式 C₄H₈O₂ のエステル', about: 'エステル 4 種。加水分解して調べる。', members: ['x-formate', 'x-isopropylformate', 'x-ethylacetate', 'x-methylpropionate'] },
   { id: 'E', name: '試料 E：α-アミノ酸', about: '6 種の α-アミノ酸。', members: ['x-gly', 'x-ala', 'x-phe', 'x-cys', 'x-glu', 'x-lys'] },
   { id: 'F', name: '試料 F：アミノ酸とペプチド', about: 'アミノ酸、ジペプチド、トリペプチド。', members: ['x-ala2', 'x-dipeptide', 'x-tripeptide'] },
   { id: 'G', name: '試料 G：金属イオン（Ag⁺・Cu²⁺・Fe³⁺・Na⁺）', about: '4 種の金属イオンの水溶液。', members: ['x-Ag', 'x-Cu', 'x-Fe', 'x-Na'] },
@@ -68,4 +75,4 @@ export const setsOf = (substance: string) => SETS.filter((s) => s.members.includ
 
 /** 試薬棚から出せる実験室の試薬。ここから出したものを納品しても指令には数えない */
 export const REAGENTS = ['H2O2', 'MnO2', 'KClO3', 'NH4Cl', 'Ca(OH)2', 'CaCO3', 'NaCl', 'FeS', 'Zn', 'Cu', 'HCl', 'H2SO4', 'HNO3', 'NaOH',
-  'NaNO2', 'CH3COOH', 'C6H5NH2', 'C6H5ONa', 'HOOC(CH2)4COOH', 'H2N(CH2)6NH2'];
+  'NaNO2', 'CH3COOH', 'C6H5NH2', 'C6H5ONa', 'HOOC(CH2)4COOH', 'H2N(CH2)6NH2', 'CH2CHCHCH2', 'resinH', 'AgNO3', 'HI'];

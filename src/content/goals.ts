@@ -90,6 +90,12 @@ export const CHAPTERS: Chapter[] = [
     { s: 'x-cresol', n: 8, strict: 'C', hint: '試料 C から o-クレゾールを。' },
     { s: 'x-formate', n: 8, strict: 'D', hint: '試料 D は C₄H₈O₂ の 4 種。エステルなのに還元性を示すものがある。' },
     { s: 'x-butyric', n: 8, strict: 'D', hint: '試料 D からカルボン酸を。' },
+    { s: 'x-isobutene', n: 8, strict: 'J', hint: '試料 J は分子式 C₄H₈ の 4 種。オゾン分解の生成物から、二重結合のまわりの形を読め。' },
+    { s: 'x-2-butene', n: 8, strict: 'J', hint: '試料 J から、立体異性体をもつものを。' },
+    { s: 'x-cyclobutane', n: 8, strict: 'J', hint: '試料 J には、二重結合をもたない C₄H₈ が混ざっている。' },
+    { s: 'x-isopropylformate', n: 8, strict: 'K', hint: '試料 K は C₄H₈O₂ のエステル 4 種。加水分解して、できた酸とアルコールをそれぞれ調べろ。' },
+    { s: 'x-ethylacetate', n: 8, strict: 'K', hint: '試料 K から酢酸エチルを。' },
+    { s: 'x-methylpropionate', n: 8, strict: 'K', hint: '試料 K から、どの検査にもかからないものを。' },
   ] },
   { name: '第11章 アミノ酸・染料・縮合重合・緩衝液', goals: [
     { s: 'aa', n: 10, hint: '納品所の西の牧場でタンパク質を採り、酵素で 2 段階に分解しろ。', zone: 'ranch' },
@@ -103,6 +109,15 @@ export const CHAPTERS: Chapter[] = [
     { s: 'C6H5N2C6H4OH', n: 5, hint: 'アニリンをジアゾ化し、ナトリウムフェノキシドとカップリングさせろ。温度に注意。原料は試薬棚にもある。' },
     { s: 'buffer47', n: 10, hint: '酢酸（Ka = 2.0×10⁻⁵ mol/L）と酢酸ナトリウムを混ぜて pH 4.7 にしろ。混ぜる比を係数で指定する。' },
     { s: 'buffer57', n: 11, hint: '同じ 2 つで pH 5.7 の緩衝液を。比を計算しろ。' },
+  ] },
+  { name: '第12章 油脂・ゴム・イオン交換・条件の計算', goals: [
+    { s: 'hardfat', n: 5, hint: '北東のオリーブ畑の油脂に水素を付加させろ。', zone: 'grove' },
+    { s: 'vulcanized', n: 10, hint: '南西のゴム園の生ゴムに、硫黄で橋をかけろ。', zone: 'rubber' },
+    { s: 'SBR', n: 5, hint: 'スチレンと 1,3-ブタジエン（試薬棚）を一緒に重合させろ。' },
+    { s: 'resinNa', n: 5, hint: '試薬棚の陽イオン交換樹脂に食塩水を通せ。出てくる液は何か。' },
+    { s: 'AgCl', n: 5, hint: '硝酸銀（試薬棚）と塩化ナトリウム。設定のあとに、沈殿が始まる濃度を計算する。' },
+    { s: 'cylN2', n: 5, hint: '窒素をボンベに詰めろ。設定のあとに、圧力を計算する。' },
+    { s: 'I2', n: 5, hint: 'ヨウ化水素（試薬棚）を熱分解しろ。設定のあとに、速度の変化を計算する。' },
   ] },
 ];
 
