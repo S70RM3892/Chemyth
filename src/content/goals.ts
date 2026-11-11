@@ -17,7 +17,7 @@ export interface Chapter { name: string; goals: Goal[] }
 export const CHAPTERS: Chapter[] = [
   { name: '第1章 空気と水', goals: [
     { s: 'N2', n: 10, hint: '陸地ならどこでも空気が採れる。採取機を置いて、蒸留塔で分けろ。' },
-    { s: 'H2', n: 10, hint: '海水は西の海のほか、あちこちの入り江でも採れる。水を取り出して電気で分解しろ。要らない物質は廃棄口へ。', zone: 'bay' },
+    { s: 'H2', n: 10, hint: '海水は、あちこちにある海や入り江で採れる。水を取り出して電気で分解しろ。要らない物質は廃棄口へ。', zone: 'bay' },
     { s: 'NH3', n: 20, hint: '窒素と水素を反応器に入れろ。' },
   ] },
   { name: '第2章 酸とアルカリの工業', goals: [

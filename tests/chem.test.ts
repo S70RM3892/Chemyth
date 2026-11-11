@@ -4,7 +4,7 @@ import { fitAnchor, inDoors, moveOutput, outPort, poleOf, restore, slotCount, sl
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
-import { HUB_TILES, MAP_H, MAP_W, ZONES, hubTiles, zoneAt, zoneSpots, type Zone } from '../src/content/map';
+import { HUB_TILES, MAP_H, MAP_W, ZONES, hubTiles, isSea, resourceAt, zoneAt, zoneSpots, type Zone } from '../src/content/map';
 import { GOALS, CHAPTERS, chapterOf } from '../src/content/goals';
 import { QUESTIONS, isCorrect } from '../src/content/questions';
 import { MACHINES } from '../src/content/machines';
@@ -297,11 +297,13 @@ describe('工場の動作', () => {
     place(w, 'vent', 33, 30, 0);
     place(w, 'vent', 33, 31, 0);
     configure(at(w, 31, 30)!, rec('air-distillation'), ['N2', 'O2']);
-    place(w, 'extractor', 1, 20, 0);
-    place(w, 'separator', 2, 20, 0);
-    place(w, 'vent', 4, 20, 0);
-    place(w, 'vent', 4, 21, 0);
-    configure(at(w, 2, 20)!, rec('seawater-distillation'), ['H2O', 'NaCl']);
+    expect(resourceAt(7, 27)).toBe('seawater');  // 海
+    expect(resourceAt(53, 21)).toBe('seawater'); // 入り江
+    place(w, 'extractor', 53, 21, 0);
+    place(w, 'separator', 54, 21, 0);
+    place(w, 'vent', 56, 21, 0);
+    place(w, 'vent', 56, 22, 0);
+    configure(at(w, 54, 21)!, rec('seawater-distillation'), ['H2O', 'NaCl']);
     run(w, 12);
     expect(w.discovered).toEqual(expect.arrayContaining(['N2', 'O2', 'H2O', 'NaCl']));
   });
@@ -465,9 +467,15 @@ describe('工場の動作', () => {
     expect(far.length).toBeGreaterThan(20);
     const kinds = new Set(zoneSpots(100, 100, 900, 900).map((s) => s.zone));
     for (const z of Object.keys(ZONES)) expect(kinds.has(z as Zone), z).toBe(true);
-    const s0 = far.find((s) => s.zone !== 'sea')!;
+    const s0 = far[0];
     expect(zoneAt(Math.floor(s0.cx), Math.floor(s0.cy))).toBe(s0.zone);
-    expect(zoneAt(-400, 123)).toBe('sea');
+    // 西も陸地で、資源地が点在する。一面の海ではない
+    const west = zoneSpots(-500, -200, -100, 200);
+    expect(west.length).toBeGreaterThan(20);
+    let sea = 0, all = 0;
+    for (let x = -400; x < -300; x++) for (let y = 0; y < 100; y++) { all++; if (isSea(zoneAt(x, y))) sea++; }
+    expect(sea).toBeGreaterThan(0);
+    expect(sea / all).toBeLessThan(0.1);
   });
 
   it('達成数が増えると納品所が大きくなり、要求数も増える', () => {

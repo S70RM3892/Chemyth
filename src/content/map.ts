@@ -14,14 +14,14 @@ export interface ZoneInfo {
   exam: string;
   /** 地面の色 [外側, 内側] */
   tint: [string, string];
-  /** 中心と半径。海だけは海岸線で決まる */
+  /** 中心と半径 */
   at: [number, number, number];
 }
 
 /** 資源地。採取機を置くと resource が出る */
 export const ZONES: Record<Zone, ZoneInfo> = {
   sea: {
-    name: '海', resource: 'seawater', form: '混合物', tint: ['#1f5b63', '#0d3442'], at: [1.6, 27, 0],
+    name: '海', resource: 'seawater', form: '混合物', tint: ['#1f5b63', '#0d3442'], at: [7, 27, 4],
     about: '海水は、水に NaCl などの塩が溶けた混合物。そのままでは水としても食塩としても使えない。',
     exam: '「海水から純水を得る操作」は蒸留。NaCl の原料は海水（または岩塩）。純物質と混合物の区別、分離法の名前が共通テストで頻出。',
   },
@@ -133,7 +133,7 @@ const blob = (x: number, y: number, cx: number, cy: number, r: number) => {
   const dx = x + 0.5 - cx, dy = y + 0.5 - cy, th = Math.atan2(dy, dx), ph = cx * 0.7 + cy * 0.3;
   return Math.hypot(dx, dy) < r * (1 + 0.16 * Math.sin(3 * th + ph) + 0.09 * Math.sin(5 * th + ph * 2));
 };
-const BLOBS = (Object.keys(ZONES) as Zone[]).filter((z) => z !== 'sea');
+const BLOBS = Object.keys(ZONES) as Zone[];
 /** 遠くの区画に現れる資源地の候補。海水はどの工程でも要るので、入り江は多めに出す */
 const POOL: Zone[] = [...BLOBS, 'bay', 'bay'];
 /** 最初の区画にある、2 つ目以降の入り江 */
@@ -142,11 +142,8 @@ const INLETS: ZoneSpot[] = [
   { zone: 'bay', cx: 79, cy: 36, r: 2.6 },
   { zone: 'bay', cx: 41, cy: 3, r: 2.4 },
 ];
-/** 海水が採れるところ（西の海と入り江） */
+/** 海水が採れるところ（海と入り江） */
 export const isSea = (z: Zone | null) => z === 'sea' || z === 'bay';
-
-/** 海岸線。西はどこまでも海 */
-const coast = (y: number) => 6 + 1.6 * Math.sin(y * 0.3) + 0.8 * Math.sin(y * 0.9 + 1);
 
 // ---- 地図に果てはない。最初の区画（MAP_W × MAP_H）の外には、同じ種類の資源地が不規則に現れ続ける ----
 const CELL = 22;
@@ -164,7 +161,7 @@ function spotOf(gx: number, gy: number): ZoneSpot | null {
   s = null;
   const x0 = gx * CELL, y0 = gy * CELL;
   const inCore = x0 < MAP_W + 4 && x0 + CELL > -4 && y0 < MAP_H + 4 && y0 + CELL > -4;
-  if (!inCore && x0 > 12 && hash2(gx, gy, 1) < 0.72) {
+  if (!inCore && hash2(gx, gy, 1) < 0.72) {
     s = {
       zone: POOL[Math.floor(hash2(gx, gy, 2) * POOL.length)],
       cx: x0 + 5 + hash2(gx, gy, 3) * (CELL - 10), cy: y0 + 5 + hash2(gx, gy, 4) * (CELL - 10), r: 2.2 + hash2(gx, gy, 5) * 1.3,
@@ -175,7 +172,6 @@ function spotOf(gx: number, gy: number): ZoneSpot | null {
 }
 
 export function zoneAt(x: number, y: number): Zone | null {
-  if (x + 0.5 < coast(y)) return 'sea';
   if (x >= 0 && y >= 0 && x < MAP_W && y < MAP_H) {
     for (const z of BLOBS) { const [cx, cy, r] = ZONES[z].at; if (blob(x, y, cx, cy, r)) return z; }
     for (const s of INLETS) if (blob(x, y, s.cx, s.cy, s.r)) return s.zone;
@@ -190,8 +186,7 @@ export function zoneSpots(x0: number, y0: number, x1: number, y1: number): ZoneS
   const out: ZoneSpot[] = [];
   for (const z of Object.keys(ZONES) as Zone[]) {
     const [cx, cy, r] = ZONES[z].at;
-    if (z === 'sea') { const yy = Math.round((y0 + y1) / 2 / 40) * 40 + 20; out.push({ zone: z, cx: 1.6, cy: yy, r: 0 }); }
-    else if (cx >= x0 - 4 && cx <= x1 + 4 && cy >= y0 - 4 && cy <= y1 + 4) out.push({ zone: z, cx, cy, r });
+    if (cx >= x0 - 4 && cx <= x1 + 4 && cy >= y0 - 4 && cy <= y1 + 4) out.push({ zone: z, cx, cy, r });
   }
   for (const s of INLETS) if (s.cx >= x0 - 4 && s.cx <= x1 + 4 && s.cy >= y0 - 4 && s.cy <= y1 + 4) out.push(s);
   for (let gy = Math.floor(y0 / CELL); gy <= Math.floor(y1 / CELL); gy++) for (let gx = Math.floor(x0 / CELL); gx <= Math.floor(x1 / CELL); gx++) {
