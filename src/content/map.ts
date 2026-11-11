@@ -1,64 +1,113 @@
-export const MAP_W = 42;
-export const MAP_H = 26;
+export const MAP_W = 84;
+export const MAP_H = 56;
 
-export type Zone = 'sea' | 'air' | 'sulfur';
+export type Zone = 'sea' | 'sulfur' | 'limestone' | 'iron' | 'coal' | 'bauxite' | 'copper' | 'zinc' | 'lead' | 'oil' | 'gas' | 'farm' | 'grove';
 
 export interface ZoneInfo {
   name: string;
   resource: string;
-  labelAt: [number, number];
   /** 天然での存在のしかた。入試で問われるので、採れる形は現実に合わせる */
   form: '単体' | '化合物' | '混合物';
   about: string;
   /** 入試での問われ方 */
   exam: string;
+  /** 地面の色 [外側, 内側] */
+  tint: [string, string];
+  /** 中心と半径。海だけは海岸線で決まる */
+  at: [number, number, number];
 }
 
 /** 資源地。採取機を置くと resource が出る */
 export const ZONES: Record<Zone, ZoneInfo> = {
   sea: {
-    name: '海', resource: 'seawater', labelAt: [0.5, 13.4], form: '混合物',
+    name: '海', resource: 'seawater', form: '混合物', tint: ['#1f5b63', '#0d3442'], at: [1.6, 27, 0],
     about: '海水は、水に NaCl などの塩が溶けた混合物。そのままでは水としても食塩としても使えない。',
     exam: '「海水から純水を得る操作」は蒸留。NaCl の原料は海水（または岩塩）。純物質と混合物の区別、分離法の名前が共通テストで頻出。',
   },
-  air: {
-    name: '大気採取地', resource: 'air', labelAt: [29.4, 6.2], form: '混合物',
-    about: '空気は N₂ と O₂ がおよそ 4 : 1（体積比）で混ざった混合物で、少量の Ar、CO₂ などを含む。N₂、O₂、Ar は単体のまま存在している。',
-    exam: 'N₂ と O₂ の工業的製法は「液体空気の分留」。化合物から作るのではなく、単体の混合物を分けるだけ、という点が問われる。',
-  },
   sulfur: {
-    name: '硫黄鉱床', resource: 'S', labelAt: [30.6, 20.2], form: '単体',
-    about: '硫黄は火山地帯で単体のまま産出する、数少ない非金属。黄色の固体で、斜方硫黄・単斜硫黄・ゴム状硫黄の同素体がある。現在の工業では、石油を精製するときの脱硫で回収したものが主に使われる。',
-    exam: '同素体をもつ元素は S・C・O・P。硫黄は接触法による硫酸製造の出発物質。「単体で産出する」こと自体が問われる。',
+    name: '硫黄鉱床', resource: 'S', form: '単体', tint: ['#5b5320', '#c2ad3c'], at: [60, 41, 3],
+    about: '硫黄は火山地帯で単体のまま産出する、数少ない非金属。黄色の固体で、斜方硫黄・単斜硫黄・ゴム状硫黄の同素体がある。現在の工業では、石油の脱硫で回収したものが主に使われる。',
+    exam: '同素体をもつ元素は S・C・O・P。硫黄は接触法による硫酸製造の出発物質。',
+  },
+  limestone: {
+    name: '石灰岩地帯', resource: 'CaCO3', form: '化合物', tint: ['#4b4f52', '#a9adb0'], at: [31, 12, 3.2],
+    about: '石灰石の主成分は炭酸カルシウム CaCO₃。大理石や貝殻も同じ。強熱すると CaO と CO₂ に分かれる。',
+    exam: '石灰石 → 生石灰 → 消石灰の変化、鍾乳洞（CaCO₃ + CO₂ + H₂O ⇄ Ca(HCO₃)₂）、アンモニアソーダ法の CO₂ 源、製鉄でのスラグ形成。',
+  },
+  iron: {
+    name: '鉄鉱山', resource: 'Fe2O3', form: '化合物', tint: ['#4d2a20', '#a04a2c'], at: [62, 13, 3],
+    about: '鉄は酸化物の鉱石として産出する。赤鉄鉱の主成分は Fe₂O₃、磁鉄鉱は Fe₃O₄。',
+    exam: '高炉で CO によって還元する。銑鉄と鋼の違い、コークス・石灰石の役割が問われる。',
+  },
+  coal: {
+    name: '炭田', resource: 'coal', form: '混合物', tint: ['#22252b', '#3b404a'], at: [73, 25, 3],
+    about: '石炭は炭素を主成分とする複雑な混合物。乾留するとコークス、コールタール、石炭ガスに分かれる。',
+    exam: 'コークスは製鉄の還元剤（実際に働くのは CO）。乾留という操作名。',
+  },
+  bauxite: {
+    name: 'ボーキサイト鉱床', resource: 'bauxite', form: '混合物', tint: ['#51332a', '#b0705a'], at: [70, 45, 3],
+    about: 'ボーキサイトは Al₂O₃·nH₂O を主成分とし、Fe₂O₃ などの不純物を含む赤褐色の鉱石。',
+    exam: 'Al₂O₃ が両性酸化物であることを利用して精製し、氷晶石を使って溶融塩電解する。Al は水溶液の電気分解では得られない。',
+  },
+  copper: {
+    name: '銅鉱山', resource: 'CuFeS2', form: '化合物', tint: ['#3c3a1c', '#b79a3a'], at: [50, 8, 2.8],
+    about: '銅は主に硫化物の鉱石として産出する。黄銅鉱の主成分は CuFeS₂。',
+    exam: '粗銅を電解精錬して純銅にする。陽極泥に入る金属、溶けたまま残る金属の区別が頻出。',
+  },
+  zinc: {
+    name: '亜鉛鉱山', resource: 'ZnS', form: '化合物', tint: ['#2f3a40', '#7d949e'], at: [23, 44, 2.6],
+    about: '亜鉛は閃亜鉛鉱（主成分 ZnS）として産出する。',
+    exam: '硫化物は焙焼して酸化物にしてから炭素で還元する。亜鉛は両性金属で、ダニエル電池や乾電池の負極。',
+  },
+  lead: {
+    name: '鉛鉱山', resource: 'PbS', form: '化合物', tint: ['#2b2f38', '#6a7386'], at: [37, 49, 2.6],
+    about: '鉛は方鉛鉱（主成分 PbS）として産出する。',
+    exam: '鉛蓄電池の両極の反応と質量変化は京大でも頻出。PbSO₄・PbCl₂・PbCrO₄ の沈殿の色。',
+  },
+  oil: {
+    name: '油田', resource: 'crude', form: '混合物', tint: ['#1e1b16', '#4a3d22'], at: [17, 27, 3],
+    about: '原油はさまざまな炭化水素の混合物。分留してナフサなどに分け、熱分解してエチレンやプロペン、ベンゼンなどを得る。',
+    exam: '分留で得られる成分の順、ナフサの熱分解、石油化学の出発原料としてのエチレン。',
+  },
+  gas: {
+    name: 'ガス田', resource: 'CH4', form: '化合物', tint: ['#1f3340', '#3f7f96'], at: [15, 10, 2.6],
+    about: '天然ガスの主成分はメタン CH₄。',
+    exam: 'メタンの水蒸気改質による水素の製造、合成ガスからのメタノール合成、置換反応。',
+  },
+  farm: {
+    name: '農地', resource: 'starch', form: '化合物', tint: ['#33421c', '#8fae42'], at: [53, 50, 3],
+    about: '穀物やいもに含まれるデンプンは、多数の α-グルコースが縮合した天然高分子。アミロースとアミロペクチンからなる。',
+    exam: 'ヨウ素デンプン反応、酵素による段階的な加水分解、アルコール発酵の量的関係。',
+  },
+  grove: {
+    name: 'オリーブ畑', resource: 'fat', form: '化合物', tint: ['#2f3b22', '#6f8a3c'], at: [76, 9, 2.6],
+    about: '油脂は、グリセリン 1 分子と高級脂肪酸 3 分子からなるエステル。',
+    exam: 'けん化価・ヨウ素価の計算、セッケンの性質（弱塩基性、硬水で沈殿）、硬化油。',
   },
 };
 
-const blob = (x: number, y: number, cx: number, cy: number, r: number, ph: number) => {
-  const dx = x + 0.5 - cx, dy = y + 0.5 - cy, th = Math.atan2(dy, dx);
+/** 資源地でない陸地。大気はどこでも採れる */
+export const LAND = {
+  name: '大気', resource: 'air', form: '混合物' as const,
+  about: '空気は N₂ と O₂ がおよそ 4 : 1（体積比）で混ざった混合物で、少量の Ar、CO₂ などを含む。N₂、O₂、Ar は単体のまま存在している。陸地ならどこでも採取できる。',
+  exam: 'N₂ と O₂ の工業的製法は「液体空気の分留」。化合物から作るのではなく、単体の混合物を分けるだけ、という点が問われる。',
+};
+
+const blob = (x: number, y: number, cx: number, cy: number, r: number) => {
+  const dx = x + 0.5 - cx, dy = y + 0.5 - cy, th = Math.atan2(dy, dx), ph = cx * 0.7 + cy * 0.3;
   return Math.hypot(dx, dy) < r * (1 + 0.16 * Math.sin(3 * th + ph) + 0.09 * Math.sin(5 * th + ph * 2));
 };
+const BLOBS = (Object.keys(ZONES) as Zone[]).filter((z) => z !== 'sea');
 
 export function zoneAt(x: number, y: number): Zone | null {
   if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return null;
-  if (x + 0.5 < 4.2 + 1.3 * Math.sin(y * 0.55) + 0.6 * Math.sin(y * 1.7 + 1)) return 'sea';
-  if (blob(x, y, 31, 6, 3.5, 0.6)) return 'air';
-  if (blob(x, y, 32, 20, 2.7, 2.1)) return 'sulfur';
+  if (x + 0.5 < 6 + 1.6 * Math.sin(y * 0.3) + 0.8 * Math.sin(y * 0.9 + 1)) return 'sea';
+  for (const z of BLOBS) { const [cx, cy, r] = ZONES[z].at; if (blob(x, y, cx, cy, r)) return z; }
   return null;
 }
 
+/** そのマスで採取機が出すもの */
+export const resourceAt = (x: number, y: number): string => { const z = zoneAt(x, y); return z ? ZONES[z].resource : LAND.resource; };
+
 /** 納品所が占めるマス */
-export const HUB_TILES: [number, number][] = [[19, 12], [20, 12], [19, 13], [20, 13]];
-
-export interface Goal {
-  s: string;
-  n: number;
-  hint: string;
-}
-
-export const GOALS: Goal[] = [
-  { s: 'N2', n: 10, hint: '大気採取地の空気から取り出せ。' },
-  { s: 'H2', n: 10, hint: '海水から水を取り出し、電気で分解しろ。要らない物質は廃棄口へ。' },
-  { s: 'NH3', n: 20, hint: '窒素と水素を反応器に入れろ。比が合わないと余って詰まる。' },
-  { s: 'HNO3', n: 10, hint: 'アンモニアを酸化して硝酸にしろ。3段階ある。捨てていた酸素と水に使い道ができた。' },
-  { s: 'H2SO4', n: 10, hint: '南東の硫黄鉱床から始めろ。これも3段階。' },
-];
+export const HUB_TILES: [number, number][] = [[41, 27], [42, 27], [41, 28], [42, 28]];

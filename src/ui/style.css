@@ -136,3 +136,67 @@ button:disabled { opacity: 0.4; cursor: default; }
 .log td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); }
 .log .n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ---- 追加：タイトル、強化、図鑑、絵柄 ---- */
+.in-title #goal, .in-title #topbtns, .in-title #dock, .in-title #act, .in-title #cv { visibility: hidden; }
+.ico { flex: 0 0 auto; display: block; }
+.goal-main { display: flex; align-items: center; gap: 10px; }
+#goal-ico { width: 44px; height: 44px; flex: 0 0 auto; }
+#goal-name { min-width: 0; }
+#pts { font-family: var(--font-mono); color: var(--lamp); margin-left: 4px; font-variant-numeric: tabular-nums; }
+#topbtns { flex-wrap: wrap; justify-content: flex-end; max-width: calc(100% - 360px); }
+@media (max-width: 900px) { #topbtns { max-width: none; top: auto; bottom: 156px; } #toast { bottom: 214px; } }
+#tools { justify-content: flex-start; }
+.tool { width: 66px; }
+
+.chip { padding: 5px 16px 5px 8px; }
+.chip.plain { padding: 6px 18px; }
+.chip::before { display: none; }
+.chip:disabled { opacity: 1; cursor: default; }
+.chips.small .chip { min-height: 42px; font-size: 14px; padding: 4px 14px; }
+.tag.wide { min-width: 9.5em; }
+.slot.named { font-family: var(--font-ui); font-weight: 700; font-size: 16px; }
+.key.el { display: flex; align-items: center; justify-content: center; gap: 5px; padding: 0 4px; }
+.named summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 4px; }
+.named[open] summary { margin-bottom: 6px; }
+
+.tracks { display: grid; gap: 10px; }
+.track-row { display: flex; justify-content: space-between; align-items: center; gap: 14px; background: var(--panel-2); border-radius: 22px; padding: 14px 18px; flex-wrap: wrap; }
+.stack.tight { gap: 2px; }
+.pips { display: inline-flex; gap: 5px; margin-top: 4px; }
+.pips i { width: 22px; height: 8px; border-radius: 4px; background: var(--bg); }
+.pips i.on { background: var(--lamp); }
+.points { font-family: var(--font-mono); color: var(--lamp); font-size: 20px; }
+.qtext { font-size: 17px; line-height: 1.75; background: var(--panel-2); border-radius: 18px; padding: 14px 18px; }
+.numslot { flex: 1 1 160px; min-height: 54px; display: flex; align-items: center; font-size: 24px; }
+.numslot.empty { font-size: 14px; }
+.keys.numpad { grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 300px; }
+.keys.numpad .key { min-height: 52px; font-size: 20px; }
+.keys.numpad #num-del { grid-column: span 3; }
+
+.tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.card { display: flex; align-items: center; gap: 12px; background: var(--panel-2); border-radius: 18px; padding: 10px 14px; min-width: 0; }
+.card .stack { min-width: 0; }
+.card .muted { font-size: 12px; line-height: 1.45; }
+.rxlist { display: grid; gap: 8px; }
+.rx { background: var(--panel-2); border-radius: 18px; padding: 10px 16px; }
+.rx summary { cursor: pointer; display: grid; gap: 2px; }
+.rx summary .formula { font-size: 14px; overflow-x: auto; white-space: nowrap; }
+.rx[open] { display: grid; gap: 8px; }
+.menu { display: grid; gap: 8px; }
+.menu .ghost { text-align: left; }
+
+#title { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 20%, #1a2a22 0%, var(--bg) 70%); display: grid; place-items: center; overflow-y: auto; padding: 24px var(--gr) 24px var(--gl); }
+#title-bg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+#title-inner { position: relative; width: min(620px, 100%); display: grid; gap: 14px; }
+#title h1 { margin: 0; font-weight: 900; font-size: clamp(54px, 12vw, 92px); line-height: 1; color: var(--lamp); letter-spacing: 0.01em; }
+#title .lead { margin: 0 0 6px; font-size: 16px; color: var(--fg); }
+#title p { margin: 0; }
+#slots { display: grid; gap: 10px; }
+.slotcard { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; background: var(--panel); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border: 1px solid var(--line); border-radius: 24px; padding: 16px 20px; }
+.slotcard.empty { border-style: dashed; }
+#title-panel { display: grid; gap: 10px; background: var(--panel-solid); border: 1px solid var(--line); border-radius: 24px; padding: 16px 20px; }
+#title-panel textarea { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 14px; padding: 10px; font: 12px/1.4 var(--font-mono); resize: vertical; user-select: text; -webkit-user-select: text; }
+.foot { align-items: center; }
+.foot .muted { flex: 1 1 240px; }

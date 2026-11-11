@@ -12,7 +12,7 @@ export interface InputHandlers {
   mode(tx: number, ty: number): 'pan' | 'stroke';
 }
 
-export const Z_MIN = 22, Z_MAX = 110;
+export const Z_MIN = 9, Z_MAX = 110;
 
 /** 1本指で操作、2本指で拡大縮小と移動。指を離すと地図は少し滑る。マウスとホイールにも対応 */
 export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers) {

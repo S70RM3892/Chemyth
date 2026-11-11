@@ -1,16 +1,17 @@
-<div id="app">
+<div id="app" class="in-title">
   <canvas id="cv" aria-label="工場の地図"></canvas>
   <section id="goal" aria-live="polite">
     <div class="goal-top"><span id="goal-step"></span><span id="goal-count"></span></div>
-    <strong id="goal-name"></strong>
+    <div class="goal-main"><canvas id="goal-ico" width="88" height="88"></canvas><strong id="goal-name"></strong></div>
     <div class="track"><div id="goal-bar"></div></div>
     <p id="goal-hint"></p>
   </section>
   <div id="topbtns">
     <button type="button" id="b-undo">↶ 元に戻す</button>
     <button type="button" id="b-fit">全体</button>
-    <button type="button" id="b-log">記録</button>
-    <button type="button" id="b-help">遊び方</button>
+    <button type="button" id="b-up">強化 <span id="pts">0</span></button>
+    <button type="button" id="b-book">図鑑</button>
+    <button type="button" id="b-menu">メニュー</button>
   </div>
   <div id="act" hidden>
     <button type="button" id="act-open">設定</button>
@@ -23,4 +24,18 @@
     <nav id="tools" aria-label="道具"></nav>
   </div>
   <div id="modal" hidden><div id="sheet" role="dialog" aria-modal="true"></div></div>
+  <div id="title" hidden>
+    <canvas id="title-bg"></canvas>
+    <div id="title-inner">
+      <p class="kicker">受験化学の工場</p>
+      <h1>Chemyth</h1>
+      <p class="lead">採って、分けて、反応させて、納める。空気と水から、高分子まで。</p>
+      <div id="slots"></div>
+      <div id="title-panel" hidden></div>
+      <div class="row foot">
+        <button type="button" class="ghost" id="title-sound">音：あり</button>
+        <span class="muted">セーブはこの端末のこのブラウザの中に保存される。端末ごとに別々で、自動では同期しない。</span>
+      </div>
+    </div>
+  </div>
 </div>

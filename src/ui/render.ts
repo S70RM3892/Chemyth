@@ -1,7 +1,9 @@
-import { GOALS, HUB_TILES, MAP_H, MAP_W, ZONES, zoneAt, type Zone } from '../content/map';
+import { HUB_TILES, MAP_H, MAP_W, ZONES, zoneAt, type Zone } from '../content/map';
+import { GOALS } from '../content/goals';
 import { MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { BELT_SPEED, DX, DY, inflow, isMachine, portDir, type Dir, type Ent, type World } from '../engine/world';
+import { beltSpeed, DX, DY, inflow, isMachine, portDir, type Dir, type Ent, type World } from '../engine/world';
+import { sprite } from './token';
 
 export interface Camera { x: number; y: number; z: number }
 export interface View { tool: string; selected: Ent | null }
@@ -24,7 +26,7 @@ const hash = (x: number, y: number) => {
 };
 
 // ---- 地形は一度だけ描いて使い回す。マス目ではなく、にじんだ塊を重ねて形を作る ----
-const TS = 28;
+const TS = 20;
 let terrain: HTMLCanvasElement | null = null;
 function buildTerrain(): HTMLCanvasElement {
   const pad = 3;
@@ -46,27 +48,26 @@ function buildTerrain(): HTMLCanvasElement {
   };
   // 陸
   for (let y = -1; y <= MAP_H; y++) for (let x = -1; x <= MAP_W; x++) soft(x + 0.5, y + 0.5, 2.2, C.land, 0.7);
-  for (let i = 0; i < 160; i++) soft(hash(i, 1) * MAP_W, hash(i, 2) * MAP_H, 2 + hash(i, 3) * 3, C.moss[i % 4], 0.35);
-  // 資源地：外側の帯から順に重ねる
-  const bands: Record<Zone, [string, number, number][]> = {
-    sea: [[C.sand, 2.1, 0.8], [C.shallow, 1.8, 0.8], [C.deep, 2.0, 0.8]],
-    air: [[C.mist, 2.0, 0.7], [C.mistHi, 1.7, 0.35]],
-    sulfur: [[C.ochre, 2.0, 0.75], [C.crust, 1.5, 0.4]],
-  };
+  for (let i = 0; i < 520; i++) soft(hash(i, 1) * MAP_W, hash(i, 2) * MAP_H, 2 + hash(i, 3) * 3.5, C.moss[i % 4], 0.35);
+  // 資源地：外側の帯から順に重ねる。海は地図の左端の外まで続いている
+  const zoneOf = (x: number, y: number) => (x < 0 ? 'sea' as Zone : zoneAt(x, Math.min(MAP_H - 1, Math.max(0, y))));
   for (let b = 0; b < 3; b++) {
-    // 海は地図の左端の外まで続いている
-    const zoneOf = (x: number, y: number) => (x < 0 ? 'sea' as Zone : zoneAt(x, Math.min(MAP_H - 1, Math.max(0, y))));
     for (let y = -2; y < MAP_H + 2; y++) for (let x = -3; x < MAP_W; x++) {
       const zn = zoneOf(x, y);
-      if (!zn || !bands[zn][b]) continue;
+      if (!zn) continue;
       const inner = zoneOf(x - 1, y) === zn && zoneOf(x + 1, y) === zn && zoneOf(x, y - 1) === zn && zoneOf(x, y + 1) === zn;
-      if (b === bands[zn].length - 1 && !inner) continue;
-      const [color, r, a] = bands[zn][b];
-      soft(x + 0.5 + (hash(x, y) - 0.5) * 0.4, y + 0.5 + (hash(y, x) - 0.5) * 0.4, r, color, a);
+      const jx = x + 0.5 + (hash(x, y) - 0.5) * 0.4, jy = y + 0.5 + (hash(y, x) - 0.5) * 0.4;
+      const [outer, core] = ZONES[zn].tint;
+      if (zn === 'sea') {
+        if (b === 0) soft(jx, jy, 2.1, C.sand, 0.8);
+        else if (b === 1) soft(jx, jy, 1.8, outer, 0.8);
+        else if (inner) soft(jx, jy, 2.0, core, 0.8);
+      } else if (b === 0) soft(jx, jy, 2.0, outer, 0.8);
+      else if (b === 1 && inner) soft(jx, jy, 1.5, core, 0.4);
     }
   }
   // 草と小石
-  for (let i = 0; i < 900; i++) {
+  for (let i = 0; i < 3200; i++) {
     const x = hash(i, 7) * MAP_W, y = hash(i, 8) * MAP_H;
     if (zoneAt(Math.floor(x), Math.floor(y))) continue;
     g.fillStyle = i % 3 ? 'rgba(120,160,120,0.16)' : 'rgba(200,200,170,0.10)';
@@ -87,6 +88,8 @@ function spawn(w: World) {
     const color = sub(f.s).color;
     if (f.type === 'deliver') {
       particles.push({ x: f.x + 0.5, y: f.y + 0.2, vx: 0, vy: -0.9, age: 0, life: 0.9, color, text: '+1', r: 0 });
+    } else if (f.type === 'spill') {
+      particles.push({ x: f.x + 0.5, y: f.y + 0.5, vx: (Math.random() - 0.5) * 0.8, vy: 0.5, age: 0, life: 0.5, color: 'rgba(236,123,108,0.9)', r: 0.06 });
     } else {
       for (let i = 0; i < 6; i++) {
         const a = Math.random() * Math.PI * 2;
@@ -137,21 +140,15 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       ctx.moveTo(wx, wy);
       ctx.quadraticCurveTo(wx + z * 0.22, wy - z * 0.12, wx + z * 0.45, wy);
       ctx.stroke();
-    } else if (zn === 'air') {
-      const ph = (t * 0.3 + h * 3) % 1;
-      ctx.strokeStyle = `rgba(${C.wind},${0.2 * Math.sin(ph * Math.PI)})`;
-      ctx.lineWidth = Math.max(1, z * 0.035);
-      const wy = py + z * (0.2 + 0.6 * h), wx = px + z * ph;
+    } else if (z >= 16) {
+      // 鉱床はときどき光る
+      const ph = (t * 0.22 + h * 7) % 1;
+      ctx.fillStyle = ZONES[zn].tint[1];
+      ctx.globalAlpha = 0.55 * Math.sin(ph * Math.PI) ** 4;
       ctx.beginPath();
-      ctx.moveTo(wx, wy);
-      ctx.quadraticCurveTo(wx + z * 0.3, wy - z * 0.12, wx + z * 0.6, wy + z * 0.04);
-      ctx.stroke();
-    } else {
-      const ph = (t * 0.25 + h * 5) % 1;
-      ctx.fillStyle = `rgba(${C.fume},${0.2 * Math.sin(ph * Math.PI)})`;
-      ctx.beginPath();
-      ctx.arc(px + z * (0.2 + 0.6 * h), py + z * (0.8 - ph * 0.7), z * (0.05 + ph * 0.09), 0, Math.PI * 2);
+      ctx.arc(px + z * (0.15 + 0.7 * h), py + z * (0.15 + 0.7 * hash(y, x)), Math.max(1.2, z * 0.06), 0, Math.PI * 2);
       ctx.fill();
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -159,9 +156,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   const building = view.tool !== 'pan';
   if (building && z >= 26) {
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      const zn = zoneAt(x, y);
-      if (view.tool === 'extractor' ? !zn : false) continue;
-      const strong = view.tool === 'extractor';
+      const strong = view.tool === 'extractor' && !!zoneAt(x, y);
       ctx.fillStyle = strong ? `rgba(244,192,99,${0.5 + 0.25 * Math.sin(t * 3 + x + y)})` : 'rgba(230,240,230,0.10)';
       ctx.beginPath();
       ctx.arc(sx(x + 0.5), sy(y + 0.5), strong ? z * 0.09 : Math.max(1, z * 0.03), 0, Math.PI * 2);
@@ -181,7 +176,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   const [hx, hy] = HUB_TILES[0];
   glow(hx + 1, hy + 1, 4.4, '255,196,110', 0.17 + 0.03 * Math.sin(t * 2));
   for (const e of w.ents.values()) {
-    if (!inView(e) || e.kind === 'belt' || e.kind === 'hub') continue;
+    if (!inView(e) || e.kind === 'belt' || e.kind === 'bridge' || e.kind === 'hub') continue;
     if (e.busy) glow(e.x + 0.5, e.y + 0.5, 1.6, '255,214,160', 0.15);
     else if (e.kind === 'vent') glow(e.x + 0.5, e.y + 0.5, 1.1, '255,140,70', 0.1 + 0.04 * Math.sin(t * 9 + e.x));
   }
@@ -192,39 +187,44 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   ctx.textBaseline = 'alphabetic';
   ctx.shadowColor = 'rgba(0,0,0,0.7)';
   ctx.shadowBlur = 6;
+  ctx.textAlign = 'center';
   for (const zn of Object.values(ZONES)) {
-    const [lx, ly] = zn.labelAt;
-    ctx.font = `700 ${Math.max(12, z * 0.36)}px ${FONT_UI}`;
-    ctx.fillStyle = 'rgba(243,239,228,0.88)';
+    const [lx, ly] = zn.at;
+    if (sx(lx) < -200 || sx(lx) > cw + 200 || sy(ly) < -100 || sy(ly) > ch + 100) continue;
+    ctx.font = `700 ${Math.max(11, z * 0.36)}px ${FONT_UI}`;
+    ctx.fillStyle = 'rgba(243,239,228,0.9)';
     ctx.fillText(zn.name, sx(lx), sy(ly));
-    ctx.font = `400 ${Math.max(10, z * 0.24)}px ${FONT_UI}`;
-    ctx.fillStyle = 'rgba(243,239,228,0.6)';
-    ctx.fillText(`${sub(zn.resource).name}・${zn.form}`, sx(lx), sy(ly) + Math.max(13, z * 0.32));
+    if (z >= 18) {
+      ctx.font = `500 ${Math.max(10, z * 0.24)}px ${FONT_UI}`;
+      ctx.fillStyle = 'rgba(243,239,228,0.62)';
+      ctx.fillText(`${sub(zn.resource).name}・${zn.form}`, sx(lx), sy(ly) + Math.max(13, z * 0.32));
+    }
   }
   ctx.shadowBlur = 0;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // ---- 画面の外にある資源地への道しるべ ----
-  for (const zn of Object.values(ZONES)) {
-    const tx = sx(zn.labelAt[0] + 1.5), ty = sy(zn.labelAt[1]);
-    const mx = 70, top = 150, bottom = ch - 170;
-    if (tx >= 0 && tx <= cw && ty >= 0 && ty <= ch) continue;
-    const px = Math.min(cw - mx, Math.max(mx, tx)), py = Math.min(bottom, Math.max(top, ty));
-    const ang = Math.atan2(ty - py, tx - px);
-    ctx.font = `700 13px ${FONT_UI}`;
-    const wd = ctx.measureText(zn.name).width + 26;
-    ctx.fillStyle = 'rgba(20,29,24,0.88)';
-    rr(ctx, px - wd / 2, py - 15, wd, 30, 15);
-    ctx.fill();
-    ctx.fillStyle = C.ink;
-    ctx.fillText(zn.name, px, py + 1);
-    ctx.fillStyle = C.lamp;
-    ctx.save();
-    ctx.translate(px + Math.cos(ang) * (wd / 2 + 10), py + Math.sin(ang) * 26);
-    ctx.rotate(ang);
-    ctx.beginPath(); ctx.moveTo(7, 0); ctx.lineTo(-5, -6); ctx.lineTo(-5, 6); ctx.closePath(); ctx.fill();
-    ctx.restore();
+  // ---- いまの指令で使う資源地が画面の外にあれば、縁に道しるべを出す ----
+  const gz = GOALS[w.goal]?.zone;
+  if (gz) {
+    const zn = ZONES[gz], tx = sx(zn.at[0]), ty = sy(zn.at[1]);
+    if (tx < 0 || tx > cw || ty < 150 || ty > ch - 170) {
+      const px = Math.min(cw - 80, Math.max(80, tx)), py = Math.min(ch - 190, Math.max(170, ty));
+      const ang = Math.atan2(ty - py, tx - px);
+      ctx.font = `700 13px ${FONT_UI}`;
+      const wd = ctx.measureText(zn.name).width + 26;
+      ctx.fillStyle = 'rgba(20,29,24,0.9)';
+      rr(ctx, px - wd / 2, py - 15, wd, 30, 15);
+      ctx.fill();
+      ctx.fillStyle = C.ink;
+      ctx.fillText(zn.name, px, py + 1);
+      ctx.fillStyle = C.lamp;
+      ctx.save();
+      ctx.translate(px + Math.cos(ang) * (wd / 2 + 10), py + Math.sin(ang) * 26);
+      ctx.rotate(ang);
+      ctx.beginPath(); ctx.moveTo(7, 0); ctx.lineTo(-5, -6); ctx.lineTo(-5, 6); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
   }
 
   // ---- ベルト：ひと続きの管として描く ----
@@ -247,18 +247,39 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   ctx.lineCap = 'butt';
   ctx.strokeStyle = C.flow; ctx.lineWidth = Math.max(1.5, z * 0.07);
   ctx.setLineDash([z * 0.1, z * 0.4]);
-  ctx.lineDashOffset = -t * BELT_SPEED * z * 0.5;
+  ctx.lineDashOffset = -t * beltSpeed(w) * z * 0.5;
   for (const b of belts) { trace(b); ctx.stroke(); }
   ctx.setLineDash([]);
+  // 立体交差は縦横 2 本の管
+  for (const e of w.ents.values()) {
+    if (e.kind !== 'bridge' || !inView(e)) continue;
+    const cx = sx(e.x + 0.5), cy = sy(e.y + 0.5);
+    for (const [wd, col] of [[0.74, C.bank], [0.6, C.track]] as const) {
+      ctx.strokeStyle = col; ctx.lineWidth = z * wd; ctx.lineCap = 'butt';
+      ctx.beginPath(); ctx.moveTo(cx, cy - z / 2); ctx.lineTo(cx, cy + z / 2); ctx.stroke();
+    }
+    ctx.strokeStyle = '#0c1310'; ctx.lineWidth = z * 0.86;
+    ctx.beginPath(); ctx.moveTo(cx - z / 2, cy); ctx.lineTo(cx + z / 2, cy); ctx.stroke();
+    ctx.strokeStyle = '#33443b'; ctx.lineWidth = z * 0.62;
+    ctx.beginPath(); ctx.moveTo(cx - z / 2, cy); ctx.lineTo(cx + z / 2, cy); ctx.stroke();
+  }
   for (const b of belts) {
     if (!b.e.item) continue;
     const [ox, oy] = onCurve(b.c, b.e.item.p);
     token(ctx, sx(b.e.x + 0.5 + ox), sy(b.e.y + 0.5 + oy), z, b.e.item.s);
   }
+  for (const e of w.ents.values()) {
+    if (e.kind !== 'bridge' || !e.items || !inView(e)) continue;
+    e.items.forEach((it, a) => {
+      if (!it) return;
+      const d = it.d ?? a;
+      token(ctx, sx(e.x + 0.5 + DX[d] * (it.p - 0.5)), sy(e.y + 0.5 + DY[d] * (it.p - 0.5)), z, it.s);
+    });
+  }
 
   // ---- 装置 ----
   for (const e of w.ents.values()) {
-    if (e.kind === 'belt' || e.kind === 'hub' || !inView(e)) continue;
+    if (e.kind === 'belt' || e.kind === 'bridge' || e.kind === 'hub' || !inView(e)) continue;
     if (!born.has(e)) born.set(e, t);
     const age = t - born.get(e)!;
     const pop = age < 0.28 ? 0.6 + 0.4 * (1 - Math.pow(1 - age / 0.28, 3)) + 0.12 * Math.sin((age / 0.28) * Math.PI) : 1;
@@ -307,32 +328,17 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
 }
 
 function token(ctx: CanvasRenderingContext2D, x: number, y: number, z: number, s: string) {
-  const su = sub(s), r = z * 0.25;
-  ctx.fillStyle = su.color;
-  ctx.beginPath();
-  if (su.state === 'solid') {
-    for (let i = 0; i < 6; i++) ctx.lineTo(x + r * Math.cos((i * Math.PI) / 3), y + r * Math.sin((i * Math.PI) / 3));
-    ctx.closePath();
-  } else if (su.state === 'liquid') {
-    ctx.moveTo(x, y - r * 1.25);
-    ctx.bezierCurveTo(x + r * 1.5, y, x + r * 0.9, y + r, x, y + r);
-    ctx.bezierCurveTo(x - r * 0.9, y + r, x - r * 1.5, y, x, y - r * 1.25);
-  } else {
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-  }
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ctx.beginPath();
-  ctx.arc(x - r * 0.3, y - r * 0.3, r * 0.22, 0, Math.PI * 2);
-  ctx.fill();
-  if (z >= 34) {
+  const d = z * 0.78;
+  ctx.drawImage(sprite(s), x - d / 2, y - d / 2 - d * 0.035, d, d);
+  if (z >= 52) {
     const tx = label(s);
-    ctx.fillStyle = '#0c1410';
-    ctx.font = `600 ${z * (tx.length > 4 ? 0.12 : tx.length > 3 ? 0.15 : 0.19)}px ${tx === su.name ? FONT_UI : FONT_MONO}`;
-    ctx.fillText(tx, x, y + z * 0.03);
+    ctx.font = `600 ${z * 0.13}px ${sub(s).formula ? FONT_MONO : FONT_UI}`;
+    const wd = ctx.measureText(tx).width + z * 0.1;
+    ctx.fillStyle = 'rgba(10,16,13,0.82)';
+    rr(ctx, x - wd / 2, y + z * 0.26, wd, z * 0.18, z * 0.09);
+    ctx.fill();
+    ctx.fillStyle = C.ink;
+    ctx.fillText(tx, x, y + z * 0.355);
   }
 }
 
@@ -416,6 +422,37 @@ function machine(ctx: CanvasRenderingContext2D, cx: number, cy: number, u: numbe
       disc(cx, cy, u * 0.21); ctx.fill();
       break;
     }
+    case 'battery': {
+      ctx.fillStyle = info.color;
+      rr(ctx, cx - u * 0.27, cy - u * 0.2, u * 0.54, u * 0.48, u * 0.1);
+      ctx.fill();
+      ctx.fillStyle = C.steel;
+      rr(ctx, cx - u * 0.2, cy - u * 0.31, u * 0.12, u * 0.12, u * 0.03); ctx.fill();
+      rr(ctx, cx + u * 0.08, cy - u * 0.31, u * 0.12, u * 0.12, u * 0.03); ctx.fill();
+      ctx.fillStyle = C.lampInk;
+      ctx.font = `700 ${u * 0.2}px ${FONT_MONO}`;
+      ctx.fillText('−', cx - u * 0.14, cy + u * 0.05);
+      ctx.fillText('+', cx + u * 0.14, cy + u * 0.05);
+      if (busy) {
+        ctx.fillStyle = `rgba(255,242,122,${0.5 + 0.5 * Math.sin(t * 14)})`;
+        disc(cx, cy - u * 0.25, u * 0.05); ctx.fill();
+      }
+      break;
+    }
+    case 'splitter': {
+      ctx.fillStyle = info.color;
+      disc(cx, cy, u * 0.3); ctx.fill();
+      if (e.item) ctx.drawImage(sprite(e.item.s), cx - u * 0.3, cy - u * 0.3, u * 0.6, u * 0.6);
+      break;
+    }
+    case 'depot': {
+      ctx.fillStyle = info.color;
+      rr(ctx, cx - u * 0.27, cy - u * 0.27, u * 0.54, u * 0.54, u * 0.16);
+      ctx.fill();
+      if (e.sub) ctx.drawImage(sprite(e.sub), cx - u * 0.25, cy - u * 0.25, u * 0.5, u * 0.5);
+      else { ctx.fillStyle = C.lampInk; ctx.font = `700 ${u * 0.3}px ${FONT_UI}`; ctx.fillText('?', cx, cy + u * 0.02); }
+      break;
+    }
     case 'vent': {
       ctx.fillStyle = info.color;
       disc(cx, cy + u * 0.06, u * 0.22); ctx.fill();
@@ -466,7 +503,8 @@ function machine(ctx: CanvasRenderingContext2D, cx: number, cy: number, u: numbe
       ctx.fillText(text, cx + DX[d] * u * 0.2 + (DY[d] ? u * 0.25 : 0), cy + DY[d] * u * 0.27 + (DX[d] ? u * 0.27 : 0));
     }
   };
-  if (e.kind === 'extractor') port(e.dir, C.ink);
+  if (e.kind === 'extractor' || e.kind === 'depot') port(e.dir, C.ink);
+  else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), C.steel);
   else if (e.outOrder) e.outOrder.forEach((s, i) => port(portDir(e.dir, i), sub(s).color, label(s)));
   else if (unset) port(e.dir, C.dim);
 
@@ -512,7 +550,7 @@ function hub(ctx: CanvasRenderingContext2D, px: number, py: number, z: number, w
   const goal = GOALS[w.goal];
   const tx = goal ? label(goal.s) : '完了';
   ctx.fillStyle = `rgba(255,214,130,${0.85 + 0.15 * Math.sin(t * 3)})`;
-  ctx.font = `600 ${z * (tx.length > 4 ? 0.34 : 0.46)}px ${FONT_MONO}`;
+  ctx.font = `600 ${z * (tx.length > 9 ? 0.15 : tx.length > 6 ? 0.22 : tx.length > 4 ? 0.3 : 0.46)}px ${FONT_MONO}`;
   ctx.fillText(tx, px + s / 2, py + z * 0.9);
   if (goal) {
     ctx.font = `500 ${z * 0.22}px ${FONT_MONO}`;
