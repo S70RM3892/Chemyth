@@ -493,11 +493,11 @@ function boot(data: HotData) {
   const showLibrary = () => {
     const l = library();
     showSheet(h('header', {}, h('h2', {}, '設計図'), closeBtn()),
-      h('p', { class: 'muted' }, '「範囲」で囲んでコピーし、「保存」したもの。この端末に残り、どのノートからも使える。'),
+      h('p', { class: 'muted' }, '「範囲」で囲んでコピーし、「保存」したもの。この端末に残り、どのノートからも使える。名前はタップして書き換えられる。'),
       l.length ? h('div', { class: 'menu' }, ...l.map((bp, i) => {
         const n = (f: (b: Stamp) => boolean) => bp.stamps.filter(f).length;
         return h('div', { class: 'row bp' },
-          h('span', { class: 'stack' }, h('b', {}, bp.name), h('span', { class: 'muted' }, `装置 ${n((b) => BIG.includes(b.kind))}・ベルト類 ${n((b) => b.kind === 'belt' || b.kind === 'bridge' || b.kind === 'tunnel')}・ほか ${n((b) => !BIG.includes(b.kind) && b.kind !== 'belt' && b.kind !== 'bridge' && b.kind !== 'tunnel')}`)),
+          h('span', { class: 'stack' }, (() => { const inp = h('input', { class: 'bp-name', type: 'text', id: `bp-name-${i}`, value: bp.name, maxLength: 30, ariaLabel: '設計図の名前' }); inp.onchange = () => { bp.name = inp.value.trim().slice(0, 30) || bp.name; saveLibrary(l); }; return inp; })(), h('span', { class: 'muted' }, `装置 ${n((b) => BIG.includes(b.kind))}・ベルト類 ${n((b) => b.kind === 'belt' || b.kind === 'bridge' || b.kind === 'tunnel')}・ほか ${n((b) => !BIG.includes(b.kind) && b.kind !== 'belt' && b.kind !== 'bridge' && b.kind !== 'tunnel')}`)),
           h('button', { class: 'primary', type: 'button', id: `bp-use-${i}`, onclick: () => { blueprint = bp.stamps.map((b) => ({ ...b })); ghost = null; areaA = areaB = null; closeModal(); pick('area', true); } }, '使う'),
           h('button', { class: 'ghost warn', type: 'button', id: `bp-del-${i}`, onclick: () => { l.splice(i, 1); saveLibrary(l); showLibrary(); } }, '消す'));
       })) : h('p', {}, 'まだ保存した設計図はない。'));

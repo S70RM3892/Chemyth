@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
-import { STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
+import { STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, railLength, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
@@ -784,6 +784,18 @@ describe('工場の動作', () => {
     expect(got).toBeGreaterThan(TRAIN_CAP * 2);   // 何往復かして届いている
     expect(a.n!).toBeGreaterThan(1);
     expect(a.buf!.length).toBeLessThanOrEqual(STATION_CAP);
+    // 速さの目安：線路 100 マスでも、ベルト 1 本（毎分 120 個）の半分以上は運べる
+    {
+      const f = newWorld();
+      place(f, 'station', 0, 100, 0); place(f, 'station', 60, 140, 0);
+      const src = at(f, 0, 100)!, dst = at(f, 60, 140)!;
+      dst.role = 'out';
+      expect(railLength(src, dst)).toBe(100);
+      let moved = 0;
+      for (let i = 0; i < 60 * 60; i++) { src.buf = Array(STATION_CAP).fill('N2'); moved += dst.buf!.length; dst.buf = []; step(f, 1 / 60); }
+      expect(moved).toBeGreaterThan(60);
+      expect(moved).toBeLessThan(140);
+    }
     // 降ろす駅は受け取らない（ベルトで押し込めない）
     place(w, 'belt', 59, 10, 0);
     at(w, 59, 10)!.item = { s: 'H2', p: 1, m: 0 };

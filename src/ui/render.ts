@@ -2,7 +2,7 @@ import { ZONES, hubRect, isSea, zoneAt, zoneSpots, type Zone } from '../content/
 import { ELEMENTS } from '../content/elements';
 import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { beltSpeed, currentGoal, DX, DY, fedTier, goalCount, inDoors, inflow, isMachine, machineState, outPort, stationTarget, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { beltSpeed, currentGoal, DX, DY, fedTier, goalCount, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationTarget, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 
@@ -579,45 +579,42 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   const hr = hubRect(w.hubSize);
   hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
 
-  // ---- 貨物線：積む駅から降ろす駅へ、設備の上を越える高架の線路と列車 ----
+  // ---- 貨物線：積む駅から降ろす駅へ、設備の上を越える高架の線路と列車。
+  //      線路は横に進んでから縦に曲がる。積む駅ごとに少しずらすので、同じ行き先でも重ならない ----
   for (const e of w.ents.values()) {
     if (e.kind !== 'station' || e.role !== 'in') continue;
     const dest = (e.tr?.to ? w.ents.get(e.tr.to) : undefined) ?? stationTarget(w, e);
     if (!dest || dest.kind !== 'station') continue;
-    const ax = sx(e.x + 1), ay = sy(e.y + 1), bx = sx(dest.x + 1), by = sy(dest.y + 1);
-    if (Math.max(ax, bx) < -50 || Math.min(ax, bx) > cw + 50 || Math.max(ay, by) < -50 || Math.min(ay, by) > ch + 50) continue;
-    const col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length], len = Math.hypot(bx - ax, by - ay) || 1, ang = Math.atan2(by - ay, bx - ax);
-    const lift2 = z * 0.3;
-    ctx.lineCap = 'butt';
-    // 地面の影 → 枕木 → 路線色の桁
-    ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2;
-    ctx.beginPath(); ctx.moveTo(ax + lift2 * 0.5, ay + lift2); ctx.lineTo(bx + lift2 * 0.5, by + lift2); ctx.stroke();
-    ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = z * 0.26;
-    ctx.setLineDash([z * 0.07, z * 0.2]);
-    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = z * 0.13;
-    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
-    ctx.strokeStyle = col; ctx.lineWidth = z * 0.07;
-    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
-    // 列車
+    const off = ((((e.x * 7 + e.y * 13) % 5) + 5) % 5 - 2) * 0.24;
+    const pts: [number, number][] = [[e.x + 1, e.y + 1 + off], [dest.x + 1 + off, e.y + 1 + off], [dest.x + 1 + off, dest.y + 1]];
+    const xs = pts.map((q) => sx(q[0])), ys = pts.map((q) => sy(q[1]));
+    if (Math.max(...xs) < -50 || Math.min(...xs) > cw + 50 || Math.max(...ys) < -50 || Math.min(...ys) > ch + 50) continue;
+    const col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length], lift2 = z * 0.3;
+    const path = (ox: number, oy: number) => { ctx.beginPath(); ctx.moveTo(xs[0] + ox, ys[0] + oy); ctx.lineTo(xs[1] + ox, ys[1] + oy); ctx.lineTo(xs[2] + ox, ys[2] + oy); };
+    ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
+    // 地面の影 → 枕木 → 桁 → 路線色
+    ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2; path(lift2 * 0.5, lift2); ctx.stroke();
+    ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = z * 0.26; ctx.setLineDash([z * 0.07, z * 0.2]); path(0, 0); ctx.stroke(); ctx.setLineDash([]);
+    ctx.lineWidth = z * 0.13; path(0, 0); ctx.stroke();
+    ctx.strokeStyle = col; ctx.lineWidth = z * 0.07; path(0, 0); ctx.stroke();
+    // 列車：道のりに沿って進む
     const tr = e.tr;
     if (tr && z >= 10) {
-      const k = Math.max(0, Math.min(1, tr.p)), tx = ax + (bx - ax) * k, ty = ay + (by - ay) * k;
+      const l1 = Math.abs(pts[1][0] - pts[0][0]), l2 = Math.abs(pts[2][1] - pts[1][1]), d = Math.max(0, Math.min(1, tr.p)) * (l1 + l2);
+      const on1 = d <= l1, f = on1 ? (l1 ? d / l1 : 0) : (l2 ? (d - l1) / l2 : 1), a = on1 ? 0 : 1;
+      const tx = xs[a] + (xs[a + 1] - xs[a]) * f, ty = ys[a] + (ys[a + 1] - ys[a]) * f;
+      const ang = Math.atan2(ys[a + 1] - ys[a], xs[a + 1] - xs[a]) + (tr.back ? Math.PI : 0);
       ctx.save();
-      ctx.translate(tx, ty); ctx.rotate(tr.back ? ang + Math.PI : ang);
+      ctx.translate(tx, ty); ctx.rotate(ang);
       const L = z * 0.95, Wd = z * 0.46;
       ctx.fillStyle = punk ? 'rgba(0,0,0,0.4)' : P.shadow; rr(ctx, -L / 2 + z * 0.06, -Wd / 2 + z * 0.14, L, Wd, z * 0.08); ctx.fill();
       rr(ctx, -L / 2, -Wd / 2, L, Wd, z * 0.08); ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = lw(0.05); ctx.stroke();
       rr(ctx, -L / 2 + z * 0.08, -Wd / 2 + z * 0.07, L * 0.62, Wd - z * 0.14, z * 0.04); ctx.fillStyle = tr.cargo.length ? '#f3f1e8' : 'rgba(0,0,0,0.35)'; ctx.fill(); ctx.stroke();
-      // 先頭の運転台
       ctx.fillStyle = punk ? '#14181d' : P.ink; ctx.fillRect(L / 2 - z * 0.2, -Wd / 2 + z * 0.06, z * 0.14, Wd - z * 0.12);
       ctx.restore();
-      if (tr.cargo.length && z >= 22) { const s0 = tr.cargo[0]; ctx.drawImage(sprite(s0.startsWith('!') ? s0.slice(1) : s0), tx - z * 0.17 - Math.cos(tr.back ? ang + Math.PI : ang) * z * 0.1, ty - z * 0.17 - Math.sin(tr.back ? ang + Math.PI : ang) * z * 0.1, z * 0.34, z * 0.34); }
+      if (tr.cargo.length && z >= 22) { const s0 = tr.cargo[0]; ctx.drawImage(sprite(s0.startsWith('!') ? s0.slice(1) : s0), tx - z * 0.17 - Math.cos(ang) * z * 0.1, ty - z * 0.17 - Math.sin(ang) * z * 0.1, z * 0.34, z * 0.34); }
     }
-    void len;
   }
-
 
   // ---- 稼働率の札：装置の上に、直近の稼働率と止まっている理由を出す ----
   if (view.stats && z >= 13) {
@@ -926,7 +923,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
   if ((e.pw || 0) > 0) powerMark(ctx, P, cx, cy, u, t);
 
   // 赤ペンの印：設定が要る「？」、詰まっている「！」
-  const jam = (e.stuck || 0) > 2.5 || !!e.bad;
+  const jam = (e.stuck || 0) > 2.5 || !!e.bad || (e.kind === 'station' && e.role === 'out' && (e.buf?.length ?? 0) >= STATION_CAP);
   const needs = unset || (e.kind === 'analyzer' && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
   if (needs || jam) {
     if (needs) {
@@ -955,7 +952,7 @@ function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: 
   const info = MACHINES[e.kind as keyof typeof MACHINES], light = P.name === 'light';
   const unset = isMachine(e.kind) && !e.recipe;
   const needs = unset || (e.kind === 'analyzer' && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
-  const jam = (e.stuck || 0) > 2.5 || !!e.bad, busy = !!e.busy;
+  const jam = (e.stuck || 0) > 2.5 || !!e.bad || (e.kind === 'station' && e.role === 'out' && (e.buf?.length ?? 0) >= STATION_CAP), busy = !!e.busy;
   const line = Math.max(1.5, u * 0.05), a = u * 0.46, c = u * 0.14, INK = '#0b0d10';
   ctx.lineJoin = 'miter';
   ctx.lineCap = 'butt';
@@ -1299,7 +1296,8 @@ function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, 
 
   // 元素の環：飲み込んだ元素は色がつき、まだのものは影だけ
   const els = ELEMENTS, ringR = s / 2 - z * (0.42 + (lv ? 0.1 : 0)), er = Math.max(2.5, Math.min(z * 0.17, (ringR * 8) / els.length / 2.6));
-  if (z >= 16) els.forEach((el, i) => {
+  // 2×2 のうちは場所がないので、元素の環は出さない（納品所をタップすれば一覧が見える）
+  if (z >= 16 && lv >= 1) els.forEach((el, i) => {
     const a = (i / els.length) * Math.PI * 2 - Math.PI / 2 + (lv >= 3 ? t * 0.05 : 0);
     const k = Math.SQRT2, ex = cxh + ringR * Math.max(-1, Math.min(1, Math.cos(a) * k)), ey = cyh + ringR * Math.max(-1, Math.min(1, Math.sin(a) * k));
     const tier = fedTier(w, el.sym);
@@ -1312,7 +1310,7 @@ function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, 
   });
 
   // 中央の口：回る歯の環と、赤く脈打つ炉心
-  const R = Math.min(s * 0.3, s / 2 - z * 0.72 - (lv ? z * 0.1 : 0)) + (lv === 0 ? z * 0.1 : 0);
+  const R = lv === 0 ? z * 0.6 : Math.min(s * 0.3, s / 2 - z * 0.82);
   const ring = (r: number, teeth: number, rot: number, depth: number, fill: string) => {
     ctx.beginPath();
     for (let i = 0; i < teeth * 2; i++) { const a = rot + (i / (teeth * 2)) * Math.PI * 2, rr2 = i % 2 ? r : r + depth; ctx.lineTo(cxh + Math.cos(a) * rr2, cyh + Math.sin(a) * rr2); }

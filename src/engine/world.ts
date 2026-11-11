@@ -18,7 +18,7 @@ export const BIG: Kind[] = ['separator', 'reactor', 'electrolyzer', 'battery', '
 /** 地下ベルトが届く距離（入口から出口までのマス数） */
 export const TUNNEL_RANGE = 7;
 /** 貨物駅にためておける数と、列車 1 編成に積める数 */
-export const STATION_CAP = 24, TRAIN_CAP = 12;
+export const STATION_CAP = 60, TRAIN_CAP = 24;
 /** 路線の数 */
 export const LINES = 8;
 
@@ -166,7 +166,9 @@ export const beltSpeed = (w: World) => 2 * (1 + 0.35 * w.up.belt);
 export const extractInterval = (w: World) => 1 / (1 + 0.5 * w.up.extract);
 export const machineRate = (w: World) => 1 + 0.4 * w.up.machine;
 /** 列車の速さ（マス/秒）。ベルトの強化で一緒に速くなる */
-export const trainSpeed = (w: World) => 9 * (1 + 0.35 * w.up.belt);
+export const trainSpeed = (w: World) => 14 * (1 + 0.35 * w.up.belt);
+/** 線路の長さ：横に進んでから縦に進む、直角の道のり（マス） */
+export const railLength = (a: Ent, b: Ent) => Math.max(1, Math.abs(b.x - a.x) + Math.abs(b.y - a.y));
 
 export const key = (x: number, y: number) => `${x},${y}`;
 export const isMachine = (k: Kind): k is MachineKind => k === 'separator' || k === 'electrolyzer' || k === 'reactor' || k === 'battery' || k === 'collector';
@@ -814,7 +816,7 @@ export function step(w: World, dt: number) {
         const dest = tr.to ? w.ents.get(tr.to) : undefined;
         const ok = !!dest && dest.kind === 'station' && dest.role === 'out' && dest.ch === e.ch;
         if (!ok) tr.back = true; // 行き先がなくなった：引き返す
-        const v = (trainSpeed(w) * dt) / Math.max(1, ok ? Math.hypot(dest!.x - e.x, dest!.y - e.y) : 12);
+        const v = (trainSpeed(w) * dt) / (ok ? railLength(e, dest!) : 12);
         if (!tr.back) {
           tr.p = Math.min(1, tr.p + v);
           if (tr.p >= 1) {

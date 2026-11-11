@@ -9,7 +9,7 @@ import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
 import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
-import { LINES, SRS_STEPS, STATION_CAP, UPGRADE_COST, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { LINES, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railLength, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { chip, equation, openConfig, type SheetActions } from './config';
 import { h } from './dom';
 import { sfx } from './sound';
@@ -327,8 +327,8 @@ export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
       return b;
     })),
     h('p', { class: 'status' }, e.role === 'in'
-      ? (to ? `行き先：${Math.round(Math.hypot(to.x - e.x, to.y - e.y))} マス先の降ろす駅。片道 約 ${(Math.hypot(to.x - e.x, to.y - e.y) / trainSpeed(c.w)).toFixed(1)} 秒。列車は ${e.tr && (e.tr.p > 0 || e.tr.back) ? (e.tr.back ? '戻っている' : `${e.tr.cargo.length} 個を運んでいる`) : '駅で積んでいる'}。` : `${e.ch} 番線の降ろす駅がまだない。行き先に貨物駅を置き、「降ろす駅」にして同じ番号にしろ。`)
-      : `${e.ch} 番線の積む駅：${feeders} か所。届いたものは、正面の 2 つの口から出る。`),
+      ? (to ? `行き先：線路 ${railLength(e, to)} マス先の降ろす駅。片道 約 ${(railLength(e, to) / trainSpeed(c.w)).toFixed(1)} 秒、1 編成 ${TRAIN_CAP} 個で、1 分あたり およそ ${Math.round((TRAIN_CAP * 60) / ((2 * railLength(e, to)) / trainSpeed(c.w) + 1))} 個まで運べる。列車は ${e.tr && (e.tr.p > 0 || e.tr.back) ? (e.tr.back ? '戻っている' : `${e.tr.cargo.length} 個を運んでいる`) : '駅で積んでいる'}。` : `${e.ch} 番線の降ろす駅がまだない。行き先に貨物駅を置き、「降ろす駅」にして同じ番号にしろ。`)
+      : `${e.ch} 番線の積む駅：${feeders} か所。届いたものは、正面の 2 つの口から出る。${(e.buf?.length ?? 0) >= STATION_CAP ? '満杯で、列車が降ろせずに待っている。出口にベルトをつなげ。' : ''}`),
     h('p', { class: 'muted' }, `駅にあるもの：${buf.length} / ${STATION_CAP} 個`),
     kinds.length ? h('div', { class: 'chips' }, ...kinds.map((s) => { const b = chip(s); b.disabled = true; b.append(h('span', { class: 'muted' }, `×${buf.filter((x) => x === s).length}`)); return b; })) : null,
     extra);
