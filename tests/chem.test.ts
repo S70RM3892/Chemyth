@@ -1368,3 +1368,66 @@ describe('線路の網', () => {
     expect(addRail(m, [0, 100000], [1, 100000])).toBe(false);
   });
 });
+
+describe('反応の見せ方', () => {
+  it('物質の見た目：色を言うのは決めてある物質だけ。物質の一覧にない id を持たない', async () => {
+    const { LOOKS, appearance, hexOf } = await import('../src/content/looks');
+    for (const id of Object.keys(LOOKS)) { expect(SUBSTANCES.some((s) => s.id === id), id).toBe(true); expect(LOOKS[id].hex).toMatch(/^#[0-9a-f]{6}$/); }
+    // 有色の気体は 4 つだけ
+    expect(Object.keys(LOOKS).filter((id) => sub(id).state === 'gas').sort()).toEqual(['Cl2', 'F2', 'NO2', 'O3']);
+    expect(appearance('NO2')).toBe('赤褐色の気体');
+    expect(appearance('Cl2')).toBe('黄緑色の気体');
+    expect(appearance('CuSO4')).toBe('水溶液は青色');
+    expect(appearance('N2')).toBe('気体');          // 色は言わない
+    expect(appearance('NaNO3')).toBe('固体');
+    expect(hexOf('N2')).toMatch(/^#/);
+  });
+
+  it('反応ごとの見た目：色の変化・気体・沈殿・加熱を、反応から決める', async () => {
+    const { reactionLook, equationOf } = await import('../src/content/looks');
+    const no2 = reactionLook(rec('ostwald-2'));
+    expect([no2.gasPhase, no2.before !== no2.after, no2.notes.map((n) => n.text)]).toEqual([true, true, ['赤褐色の気体']]);
+    const agcl = reactionLook(rec('precip-agcl'));
+    expect([agcl.gasPhase, agcl.dry, agcl.solids.length, agcl.notes.map((n) => n.text)]).toEqual([false, false, 1, ['白色の沈殿']]);
+    const furnace = reactionLook(rec('blast-furnace'));
+    expect([furnace.dry, furnace.heat, furnace.solids.length]).toEqual([true, true, 0]);
+    const kmno4 = reactionLook(rec('kmno4-h2o2'));
+    expect(kmno4.notes.map((n) => `${n.made ? '後' : '前'}:${n.text}`)).toEqual(['前:水溶液は赤紫色', '後:水溶液はほぼ無色（淡桃色）']);
+    const daniell = reactionLook(rec('daniell'));
+    expect(daniell.notes.find((n) => n.id === 'Cu')!.text).toBe('赤色の固体が析出する');
+    expect(reactionLook(rec('haber-bosch')).tag).toBe('Fe₃O₄');
+    expect(equationOf(rec('haber-bosch'))).toBe('N₂ + 3H₂ ⇄ 2NH₃');
+    expect(equationOf(rec('daniell'))).toContain('2e⁻');
+    // すべての反応で、落ちずに決まる
+    for (const r of RECIPES) { const l = reactionLook(r); expect(l.before).toMatch(/^#[0-9a-f]{6}$/); expect(l.after).toMatch(/^#[0-9a-f]{6}$/); }
+  });
+
+  it('原子の組み替え：両辺で原子の数が合い、どの原子も 1 回だけ飛ぶ', async () => {
+    const { planScene, MAX_ATOMS } = await import('../src/content/sceneplan');
+    const { atomsOf } = await import('../src/content/tokenlayout');
+    // N₂ + 3H₂ → 2NH₃：原子 8 個（N 2 個、H 6 個）
+    const hb = planScene(rec('haber-bosch'), 560, 150);
+    expect([hb.left.length, hb.right.length, hb.flights!.length]).toEqual([4, 2, 8]);
+    expect(hb.flights!.filter((f) => f.sym === 'N').length).toBe(2);
+    expect(hb.flights!.every((f) => f.x1 > f.x0)).toBe(true);        // 左から右へ
+    // 粒は枠の中に収まり、重ならない
+    for (const side of [hb.left, hb.right]) for (const u of side) { expect(u.x - u.r).toBeGreaterThanOrEqual(0); expect(u.x + u.r).toBeLessThanOrEqual(560); expect(u.y - u.r).toBeGreaterThanOrEqual(0); expect(u.y + u.r).toBeLessThanOrEqual(150); }
+    for (const [i, a] of hb.left.entries()) for (const b of hb.left.slice(i + 1)) expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(a.r + b.r - 0.01);
+    // 原子が多い物質は、個数ぶんに開く（C₆H₁₂O₆ は 24 個）
+    expect(atomsOf('C6H12O6')!.length).toBe(24);
+    expect(atomsOf('air')).toBeNull();
+    // 混合物・高分子がからむ反応は、原子を飛ばさない
+    expect(planScene(rec('air-distillation'), 560, 150).flights).toBeNull();
+    // 全反応：飛ばすなら、元素ごとの数が両辺で一致し、上限を超えない。飛ばさないなら理由がある
+    let fly = 0;
+    for (const r of RECIPES) {
+      const p = planScene(r, 560, 150);
+      if (!p.flights) { expect(p.why.length, r.id).toBeGreaterThan(0); continue; }
+      fly++;
+      expect(p.flights.length, r.id).toBeLessThanOrEqual(MAX_ATOMS);
+      const count = (us: { id: string }[]) => { const m: Record<string, number> = {}; for (const u of us) if (u.id !== 'e') for (const a of atomsOf(u.id)!) m[a.sym] = (m[a.sym] || 0) + 1; return m; };
+      expect(count(p.left), r.id).toEqual(count(p.right));
+    }
+    expect(fly).toBeGreaterThan(RECIPES.length * 0.6);
+  });
+});

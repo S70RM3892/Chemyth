@@ -5,6 +5,7 @@ import { CONDITIONS, SHIFTS, electronsOf, productsOf, recipeById, type MachineKi
 import { label, sameAtoms, sub, subByFormula, SUBSTANCES } from '../content/substances';
 import { BIG_ORDER, DX, DY, clearRecipe, configure, currentGoal, inDoors, reactionsPerMin, judge, learn, moveOutput, sizeOf, slotCount, slotPort, SLOT_NAMES, type Ent, type Kind, type World } from '../engine/world';
 import { h } from './dom';
+import { reactionScene } from './scene';
 import { sfx } from './sound';
 import { elementIcon, tokenIcon } from './token';
 
@@ -170,6 +171,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
     if (r) {
       sheet.append(
         h('p', { class: 'eq' }, equation(r) + (isBat ? `　（e⁻ ${electronsOf(r)} mol）` : '')),
+        reactionScene(r),
         h('div', { class: 'split' },
           h('div', { class: 'stack' },
             h('p', {}, h('b', {}, r.name)),

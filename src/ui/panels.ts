@@ -11,6 +11,7 @@ import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
 import { RESEARCH, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, SIGNALS, signalOn, doResearch, has, researchBlock, tierNeed, LINES, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { researchById } from '../content/research';
+import { appearance, lookOf } from '../content/looks';
 import { chip, equation, openConfig, type SheetActions } from './config';
 import { h } from './dom';
 import { sfx } from './sound';
@@ -132,6 +133,9 @@ function askQuestion(c: PanelCtx, key: UpgradeKey | `r:${string}`, q = pickQuest
 
 // ---------------- 図鑑 ----------------
 
+/** 物質の実際の色の見本 */
+const swatch = (hex: string) => { const i = h('i', {}); i.style.background = hex; return i; };
+
 export function showBook(c: PanelCtx, tab: 'el' | 'sub' | 'rx' = 'el') {
   const { w } = c;
   const tabs = h('div', { class: 'tabs' }, ...([['el', '元素の形'], ['sub', '物質'], ['rx', '反応']] as const).map(([id, name]) =>
@@ -144,7 +148,7 @@ export function showBook(c: PanelCtx, tab: 'el' | 'sub' | 'rx' = 'el') {
     const seen = w.discovered.filter((s) => s !== 'e');
     const st = { gas: '気体', liquid: '液体', solid: '固体' } as const;
     body = h('div', { class: 'grid' }, ...seen.map((id) => { const s = sub(id); return h('div', { class: 'card' }, tokenIcon(id, 38),
-      h('div', { class: 'stack tight' }, h('b', { class: s.formula ? 'formula' : '' }, label(id)), h('span', { class: 'muted' }, `${s.name}・${s.formula ? st[s.state] : '混合物など'}`))); }));
+      h('div', { class: 'stack tight' }, h('b', { class: s.formula ? 'formula' : '' }, label(id)), h('span', { class: 'muted' }, `${s.name}・${s.formula ? st[s.state] : '混合物など'}`), lookOf(id) ? h('span', { class: 'look' }, swatch(lookOf(id)!.hex), appearance(id)) : null)); }));
   } else {
     const done = RECIPES.filter((r) => w.learned.includes(r.id));
     body = done.length ? h('div', { class: 'rxlist' }, ...done.map((r) => h('details', { class: 'rx' },

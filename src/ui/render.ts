@@ -2,10 +2,12 @@ import { ZONES, hubRect, isSea, resourceAt, zoneAt, zoneSpots, type Zone } from 
 import { ELEMENTS } from '../content/elements';
 import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { FLOOR_DY, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { FLOOR_DY, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 import { districtsOf, type District } from '../engine/districts';
+import { equationOf, hexOf, reactionLookById } from '../content/looks';
+import { recipeById } from '../content/recipes';
 
 export interface Camera { x: number; y: number; z: number }
 export interface View { /** 見ている階（0 が 1 階） */ floor?: number; tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string; /** 出口（out）と入口の場所。d は物が流れる向き */ ports?: { x: number; y: number; d: number; out: boolean }[] }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null }
@@ -673,7 +675,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     if (e.busy && z >= 20 && particles.length < 260 && Math.random() < dt * (e.kind === 'electrolyzer' || e.kind === 'battery' ? 5 : 3)) {
       const r1 = Math.random(), r2 = Math.random();
       if (e.kind === 'electrolyzer' || e.kind === 'battery') particles.push({ x: e.x + sz / 2 + (r1 - 0.5) * 0.9, y: e.y + sz / 2 + (r2 - 0.5) * 0.5, vx: (r2 - 0.5) * 1.6, vy: -0.6 - r1 * 0.9, age: 0, life: 0.28 + r1 * 0.2, color: 'spark', r: 0.05 });
-      else particles.push({ x: e.x + sz * 0.3 + r1 * sz * 0.4, y: e.y + 0.25, vx: 0.1 + r2 * 0.14, vy: -0.42 - r1 * 0.25, age: 0, life: 1.3 + r2 * 0.7, color: 'smoke', r: 0.1 + r1 * 0.07 });
+      else particles.push({ x: e.x + sz * 0.3 + r1 * sz * 0.4, y: e.y + 0.25, vx: 0.1 + r2 * 0.14, vy: -0.42 - r1 * 0.25, age: 0, life: 1.3 + r2 * 0.7, color: 'smoke', r: 0.1 + r1 * 0.07, tint: smokeTint(e.recipe) });
     }
   }
 
@@ -882,6 +884,35 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.setLineDash([z * 0.3, z * 0.2]); ctx.lineDashOffset = -t * z * 0.6;
     ctx.strokeRect(sx(ax0), sy(ay0), (ax1 - ax0 + 1) * z, (ay1 - ay0 + 1) * z);
     ctx.setLineDash([]);
+  }
+
+  // ---- 反応式の札：選んだ装置の下に、その装置の反応式と条件を出す。うんと近づけば、見えている装置すべてに出す ----
+  {
+    const plate = (e: Ent) => {
+      const r = recipeById(e.recipe);
+      if (!r) return;
+      const sz = sizeOf(e), eq = equationOf(r), cond = r.accept[0] && r.accept[0] !== 'なし' ? r.accept[0] : '';
+      const fs = Math.max(11, Math.min(15, z * 0.3));
+      ctx.font = `700 ${fs}px ${FONT_MONO}`;
+      let w1 = ctx.measureText(eq).width;
+      const max = Math.min(cw - 16, 420), k = w1 > max ? max / w1 : 1;
+      if (k < 1) { ctx.font = `700 ${fs * k}px ${FONT_MONO}`; w1 = max; }
+      ctx.font = `600 ${fs * 0.8}px ${FONT_UI}`;
+      const w2 = cond ? Math.min(max, ctx.measureText(cond).width) : 0;
+      const wd = Math.max(w1, w2) + 18, hh = fs * (cond ? 2.7 : 1.7);
+      const px = Math.max(4, Math.min(cw - wd - 4, sx(e.x + sz / 2) - wd / 2)), py = sy(e.y + sz) + z * 0.16;
+      ctx.fillStyle = punk ? '#0b0d10' : P.plate;
+      rr(ctx, px, py, wd, hh, punk ? 0 : 5); ctx.fill();
+      ctx.strokeStyle = punk ? P.hi : P.ink; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = punk ? '#eef0ea' : P.ink;
+      ctx.font = `700 ${fs * k}px ${FONT_MONO}`;
+      ctx.fillText(eq, px + wd / 2, py + fs * 0.9);
+      if (cond) { ctx.font = `600 ${fs * 0.8}px ${FONT_UI}`; ctx.fillStyle = punk ? P.hi : P.red; ctx.fillText(cond, px + wd / 2, py + fs * 2.0, max); }
+      ctx.textBaseline = 'alphabetic';
+    };
+    if (z >= 70) { for (const e of w.ents.values()) if (e.recipe && e !== view.selected && inView(e)) plate(e); }
+    if (view.selected?.recipe && inView(view.selected)) plate(view.selected);
   }
 
   // ---- 選んだものは蛍光ペンで囲む ----
@@ -1325,6 +1356,8 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
   const disc = (x: number, y: number, r: number) => { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); };
   const inked = (fill: string) => { ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = P.ink; ctx.lineWidth = line; ctx.stroke(); };
   const busy = !!e.busy;
+  // 反応を設定した装置は、その反応の様子を描く（中身の色、気体、沈殿、加熱、電極での変化）
+  if (e.recipe && reactionGlyph(ctx, P, e, cx, cy, u, t, line)) return;
   switch (e.kind) {
     case 'extractor': {
       disc(cx, cy, u * 0.27); inked(info.color);
@@ -1487,6 +1520,168 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
     }
   }
 }
+
+/** 装置の煙の色：色のついた気体が生じる反応なら、その色（NO₂ なら赤褐色、Cl₂ なら黄緑色） */
+function smokeTint(recipe: string | undefined): string | undefined {
+  const L = reactionLookById(recipe);
+  if (!L) return undefined;
+  const c = L.gasPhase ? L.after : L.gases.find((g) => g !== '#e4ecf1');
+  return c && c !== '#e4ecf1' ? c : undefined;
+}
+/** 色の明るさ（0〜1）。濃い色の上には白、淡い色の上には墨で描くために使う */
+const lum = (hex: string) => (0.299 * parseInt(hex.slice(1, 3), 16) + 0.587 * parseInt(hex.slice(3, 5), 16) + 0.114 * parseInt(hex.slice(5, 7), 16)) / 255;
+/** 位相をずらした 0〜1 の繰り返し（泡や粒の動きに使う） */
+const cyc = (t: number, k: number, speed = 1) => (((t * speed + k * 0.37) % 1) + 1) % 1;
+
+/** 反応を設定した装置の中身。その反応で実際に見えるもの（色の変化・気体・沈殿・炎・電極）を描く。描いたら true */
+function reactionGlyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy: number, u: number, t: number, line: number): boolean {
+  const L = reactionLookById(e.recipe), r = recipeById(e.recipe);
+  if (!L || !r) return false;
+  const busy = !!e.busy, prog = busy ? Math.min(1, e.prog || 0) : 0, ph = e.x * 0.7 + e.y * 1.3;
+  const disc = (x: number, y: number, rad: number) => { ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); };
+  const ink = P.ink, body = mix(L.before, L.after, prog);
+  const bubbles = (x0: number, x1: number, yb: number, yt: number, col: string, n: number, size: number) => {
+    for (let i = 0; i < n; i++) {
+      const k = cyc(t, i + ph, 0.9 + (i % 3) * 0.25), bx = x0 + (x1 - x0) * ((i * 0.618 + ph) % 1) + Math.sin(t * 4 + i * 2) * size * 0.6;
+      disc(bx, yb + (yt - yb) * k, size * (0.7 + 0.5 * k));
+      ctx.fillStyle = col; ctx.globalAlpha = 0.9 * (1 - k * 0.5); ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.6, line * 0.35); ctx.stroke();
+    }
+  };
+  const flame = (x: number, y: number, s: number) => {
+    const f = busy ? 1 + 0.25 * Math.sin(t * 13 + x) : 0.45;
+    ctx.beginPath(); ctx.moveTo(x - s * 0.5, y); ctx.quadraticCurveTo(x - s * 0.55, y - s * 0.7 * f, x, y - s * 1.5 * f); ctx.quadraticCurveTo(x + s * 0.55, y - s * 0.7 * f, x + s * 0.5, y); ctx.closePath();
+    ctx.fillStyle = busy ? '#f08a24' : mix('#f08a24', P.plate, 0.6); ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.8, line * 0.5); ctx.stroke();
+    if (busy) { ctx.beginPath(); ctx.moveTo(x - s * 0.22, y); ctx.quadraticCurveTo(x, y - s * 0.9 * f, x + s * 0.22, y); ctx.closePath(); ctx.fillStyle = '#ffe07a'; ctx.fill(); }
+  };
+  const tag = (text: string, y: number) => {
+    if (!text || u < 84) return;
+    ctx.font = `700 ${Math.max(8, u * 0.075)}px ${FONT_UI}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const wd = ctx.measureText(text).width + u * 0.06, hh = Math.max(11, u * 0.1);
+    rr(ctx, cx - wd / 2, y - hh / 2, wd, hh, hh * 0.3); ctx.fillStyle = P.plate; ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.8, line * 0.45); ctx.stroke();
+    ctx.fillStyle = ink; ctx.fillText(text, cx, y + 0.5);
+    ctx.textBaseline = 'alphabetic';
+  };
+
+  switch (e.kind) {
+    case 'reactor': {
+      const R = u * 0.27, vy = cy - u * 0.03;
+      if (L.heat) for (const dx of [-0.5, 0, 0.5]) flame(cx + dx * R * 0.8, vy + R + u * 0.075, u * 0.055);
+      disc(cx, vy, R); ctx.fillStyle = P.plate; ctx.fill();
+      ctx.save();
+      disc(cx, vy, R - line * 0.3); ctx.clip();
+      if (L.gasPhase) {
+        // 気体どうしの反応：容器いっぱいの気体の色が変わっていく
+        ctx.fillStyle = body; ctx.fillRect(cx - R, vy - R, R * 2, R * 2);
+        for (let i = 0; i < 7; i++) {
+          const a = t * (busy ? 1.6 : 0.3) + i * 0.9 + ph, rr2 = R * (0.25 + 0.5 * ((i * 0.37) % 1));
+          disc(cx + Math.cos(a) * rr2, vy + Math.sin(a * 1.3) * rr2, R * 0.11);
+          ctx.fillStyle = mix(body, lum(body) > 0.6 ? '#7d8a96' : '#ffffff', 0.28); ctx.fill();
+        }
+      } else if (L.dry) {
+        // 固体を熱する反応：粒の山。熱しているときは下から赤く光る
+        ctx.fillStyle = mix(P.plate, '#000000', 0.06); ctx.fillRect(cx - R, vy - R, R * 2, R * 2);
+        ctx.fillStyle = body;
+        ctx.beginPath(); ctx.moveTo(cx - R, vy + R); ctx.lineTo(cx - R, vy + R * 0.25); ctx.quadraticCurveTo(cx - R * 0.3, vy - R * 0.2, cx + R * 0.1, vy + R * 0.1); ctx.quadraticCurveTo(cx + R * 0.6, vy + R * 0.35, cx + R, vy + R * 0.2); ctx.lineTo(cx + R, vy + R); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.8, line * 0.5); ctx.stroke();
+        if (busy && L.heat) { const g = ctx.createLinearGradient(0, vy + R, 0, vy); g.addColorStop(0, 'rgba(255,120,30,0.75)'); g.addColorStop(1, 'rgba(255,120,30,0)'); ctx.fillStyle = g; ctx.fillRect(cx - R, vy, R * 2, R); }
+        if (L.gases.length) bubbles(cx - R * 0.5, cx + R * 0.5, vy + R * 0.1, vy - R * 0.95, L.gases[L.gases.length - 1], busy ? 4 : 0, R * 0.09);
+      } else {
+        // 水溶液の反応：液の色が変わり、気体は泡になって上がり、溶けない固体は底にたまる
+        const top = vy - R * 0.28 + Math.sin(t * 2.2 + ph) * R * 0.03;
+        ctx.fillStyle = body; ctx.fillRect(cx - R, top, R * 2, R * 2);
+        ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.8, line * 0.45);
+        ctx.beginPath(); ctx.moveTo(cx - R, top); ctx.quadraticCurveTo(cx - R * 0.5, top - R * 0.07, cx, top); ctx.quadraticCurveTo(cx + R * 0.5, top + R * 0.07, cx + R, top); ctx.stroke();
+        if (L.solids.length) {
+          const col = L.solids[0], h0 = R * (0.12 + 0.2 * (busy ? prog : 0.6));
+          ctx.fillStyle = col; ctx.fillRect(cx - R, vy + R - h0, R * 2, h0);
+          ctx.strokeStyle = ink; ctx.beginPath(); ctx.moveTo(cx - R, vy + R - h0); ctx.lineTo(cx + R, vy + R - h0); ctx.stroke();
+          if (busy) for (let i = 0; i < 6; i++) { const k = cyc(t, i + ph, 0.7); ctx.fillStyle = col; ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.5, line * 0.3); ctx.beginPath(); ctx.rect(cx - R * 0.7 + ((i * 0.31 + ph) % 1) * R * 1.4, top + (vy + R - h0 - top) * k, R * 0.1, R * 0.1); ctx.fill(); ctx.stroke(); }
+        }
+        if (busy) for (const g of L.gases) bubbles(cx - R * 0.6, cx + R * 0.6, vy + R * 0.8, top, g, 3, R * 0.08);
+        if (busy) { ctx.save(); ctx.translate(cx, vy + R * 0.35); ctx.rotate(t * 5); ctx.strokeStyle = ink; ctx.lineWidth = line * 0.7; ctx.beginPath(); ctx.moveTo(-R * 0.3, 0); ctx.lineTo(R * 0.3, 0); ctx.stroke(); ctx.restore(); }
+      }
+      if (L.light) { ctx.fillStyle = 'rgba(255,225,77,0.35)'; ctx.fillRect(cx - R, vy - R, R * 2, R * 2); }
+      if (L.cold) { ctx.fillStyle = 'rgba(150,200,240,0.3)'; ctx.fillRect(cx - R, vy - R, R * 2, R * 2); }
+      ctx.restore();
+      disc(cx, vy, R); ctx.strokeStyle = ink; ctx.lineWidth = line; ctx.stroke();
+      // 反応の進み具合：容器のまわりの輪
+      if (busy) { ctx.beginPath(); ctx.arc(cx, vy, R + line * 1.3, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * prog); ctx.strokeStyle = P.hi; ctx.lineWidth = line * 1.5; ctx.lineCap = 'butt'; ctx.stroke(); ctx.lineCap = 'round'; }
+      tag(L.light ? '光' : L.tag, vy + R + u * (L.heat ? 0.2 : 0.12));
+      return true;
+    }
+    case 'separator': {
+      // 塔の中に、取り出す物質が軽い順に上から並ぶ（気体 → 液体 → 固体）
+      const info = MACHINES.separator, x0 = cx - u * 0.13, y0 = cy - u * 0.34, wd = u * 0.26, hh = u * 0.62;
+      const outs = [...(e.outOrder ?? [])].filter((s) => s !== 'e').sort((a, b) => 'gls'.indexOf(sub(a).state[0]) - 'gls'.indexOf(sub(b).state[0]));
+      rr(ctx, x0, y0, wd, hh, u * 0.1); ctx.fillStyle = info.color; ctx.fill();
+      ctx.save(); rr(ctx, x0, y0, wd, hh, u * 0.1); ctx.clip();
+      outs.forEach((s2, i) => { ctx.fillStyle = hexOf(s2); ctx.fillRect(x0, y0 + (hh * i) / outs.length, wd, hh / outs.length + 1); });
+      // 上がっていく蒸気の帯
+      if (busy) { const k = cyc(t, ph, 0.5); ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.fillRect(x0, y0 + hh * (1 - k) - hh * 0.06, wd, hh * 0.06); }
+      ctx.restore();
+      ctx.strokeStyle = ink; ctx.lineWidth = line * 0.6;
+      for (let i = 1; i < Math.max(4, outs.length * 2); i++) { const ty = y0 + (hh * i) / Math.max(4, outs.length * 2); ctx.beginPath(); ctx.moveTo(x0, ty); ctx.lineTo(x0 + wd, ty); ctx.stroke(); }
+      rr(ctx, x0, y0, wd, hh, u * 0.1); ctx.lineWidth = line; ctx.stroke();
+      if (L.heat) flame(cx, y0 + hh + u * 0.075, u * 0.05);
+      tag(L.tag, y0 + hh + u * (L.heat ? 0.15 : 0.085));
+      return true;
+    }
+    case 'electrolyzer': {
+      // 電解槽：液の色、陰極（−）と陽極（＋）。気体は泡、金属は電極に析出する
+      const x0 = cx - u * 0.3, y0 = cy - u * 0.1, wd = u * 0.6, hh = u * 0.4, ex = [cx - u * 0.15, cx + u * 0.15];
+      rr(ctx, x0, y0, wd, hh, u * 0.06); ctx.fillStyle = P.plate; ctx.fill();
+      ctx.save(); rr(ctx, x0, y0, wd, hh, u * 0.06); ctx.clip();
+      ctx.fillStyle = L.dry ? mix('#f08a24', body, 0.55) : body; ctx.fillRect(x0, y0 + hh * 0.18, wd, hh);
+      const outs = r.outputs.map(([s2], i) => ({ s: s2, pole: poleOf(r, i) }));
+      outs.forEach((o) => {
+        if (o.pole === 'x' || o.s === 'e') return;
+        const x = ex[o.pole === 'c' ? 0 : 1], st = sub(o.s).state;
+        if (st === 'gas') { if (busy) bubbles(x - u * 0.07, x + u * 0.07, y0 + hh * 0.95, y0 + hh * 0.2, hexOf(o.s), 3, u * 0.022); }
+        else if (st === 'solid') { ctx.fillStyle = hexOf(o.s); ctx.fillRect(x - u * 0.06, y0 + hh * (0.95 - 0.5 * (busy ? 0.4 + 0.6 * prog : 0.6)), u * 0.12, hh); }
+      });
+      ctx.restore();
+      if (/交換膜|素焼き/.test(r.accept[0] ?? '')) { ctx.strokeStyle = ink; ctx.lineWidth = line * 0.5; ctx.setLineDash([u * 0.025, u * 0.025]); ctx.beginPath(); ctx.moveTo(cx, y0 + hh * 0.12); ctx.lineTo(cx, y0 + hh); ctx.stroke(); ctx.setLineDash([]); }
+      rr(ctx, x0, y0, wd, hh, u * 0.06); ctx.strokeStyle = ink; ctx.lineWidth = line; ctx.stroke();
+      ctx.lineWidth = u * 0.055; ctx.lineCap = 'butt';
+      for (const x of ex) { ctx.beginPath(); ctx.moveTo(x, y0 - u * 0.14); ctx.lineTo(x, y0 + hh * 0.82); ctx.stroke(); }
+      ctx.lineCap = 'round';
+      // 電源：陰極と陽極をつなぐ線
+      ctx.lineWidth = line * 0.7; ctx.beginPath(); ctx.moveTo(ex[0], y0 - u * 0.14); ctx.lineTo(ex[0], y0 - u * 0.2); ctx.lineTo(ex[1], y0 - u * 0.2); ctx.lineTo(ex[1], y0 - u * 0.14); ctx.stroke();
+      if (busy) for (let i = 0; i < 3; i++) { const k = cyc(t, i, 0.8); disc(ex[1] + (ex[0] - ex[1]) * k, y0 - u * 0.2, u * 0.018); ctx.fillStyle = P.hi; ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.6, line * 0.3); ctx.stroke(); }
+      ctx.fillStyle = ink; ctx.font = `700 ${u * 0.13}px ${FONT_MONO}`; ctx.textAlign = 'center';
+      ctx.fillText('−', ex[0] - u * 0.1, y0 - u * 0.1); ctx.fillText('+', ex[1] + u * 0.1, y0 - u * 0.1);
+      return true;
+    }
+    case 'battery': {
+      // 電池：負極（−）から正極（＋）へ、導線を電子が流れる。電極は活物質の色
+      const x0 = cx - u * 0.3, y0 = cy - u * 0.06, wd = u * 0.6, hh = u * 0.36, ex = [cx - u * 0.16, cx + u * 0.16];
+      rr(ctx, x0, y0, wd, hh, u * 0.06); ctx.fillStyle = P.plate; ctx.fill();
+      ctx.save(); rr(ctx, x0, y0, wd, hh, u * 0.06); ctx.clip();
+      ctx.fillStyle = body; ctx.fillRect(x0, y0 + hh * 0.2, wd, hh);
+      ctx.restore();
+      if (/素焼き|｜/.test(r.accept[0] ?? '')) { ctx.strokeStyle = ink; ctx.lineWidth = line * 0.5; ctx.setLineDash([u * 0.025, u * 0.025]); ctx.beginPath(); ctx.moveTo(cx, y0 + hh * 0.12); ctx.lineTo(cx, y0 + hh); ctx.stroke(); ctx.setLineDash([]); }
+      rr(ctx, x0, y0, wd, hh, u * 0.06); ctx.strokeStyle = ink; ctx.lineWidth = line; ctx.stroke();
+      [r.neg, r.pos].forEach((s2, i) => {
+        rr(ctx, ex[i] - u * 0.04, y0 - u * 0.12, u * 0.08, hh * 0.86 + u * 0.12, u * 0.015);
+        ctx.fillStyle = s2 && hasSubLook(s2) ? hexOf(s2) : '#8d949c'; ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = line * 0.6; ctx.stroke();
+      });
+      // 導線と豆電球。電子は負極から正極へ
+      const wy = y0 - u * 0.24;
+      ctx.strokeStyle = ink; ctx.lineWidth = line * 0.7; ctx.beginPath(); ctx.moveTo(ex[0], y0 - u * 0.12); ctx.lineTo(ex[0], wy); ctx.lineTo(ex[1], wy); ctx.lineTo(ex[1], y0 - u * 0.12); ctx.stroke();
+      disc(cx, wy, u * 0.05); ctx.fillStyle = busy ? P.hi : P.plate; ctx.fill(); ctx.stroke();
+      if (busy) for (let i = 0; i < 3; i++) { const k = cyc(t, i, 0.9); disc(ex[0] + (ex[1] - ex[0]) * k, wy, u * 0.018); ctx.fillStyle = '#ffffff'; ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.6, line * 0.3); ctx.stroke(); }
+      ctx.fillStyle = ink; ctx.font = `700 ${u * 0.12}px ${FONT_MONO}`; ctx.textAlign = 'center';
+      ctx.fillText('−', ex[0] - u * 0.1, y0 - u * 0.02); ctx.fillText('+', ex[1] + u * 0.1, y0 - u * 0.02);
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+/** 電池の電極に使う色があるか（気体の活物質は、電極そのものの色ではないので灰色にする） */
+const hasSubLook = (id: string) => { try { return sub(id).state === 'solid'; } catch { return false; } };
 
 /** 納品所：全元素を欲しがる機械。大きくなるほど、歯・煙突・棘・回る環が増えていかつくなる。
  *  外周に並ぶ元素の印は、その元素を飲み込むと灯る */
