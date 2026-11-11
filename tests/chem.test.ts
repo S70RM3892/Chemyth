@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
-import { STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, stationTargets, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
+import { STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, goalRate, reactionsPerMin, stationTargets, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
@@ -81,7 +81,7 @@ describe('内容データ', () => {
   it('章と指令の対応', () => {
     expect(GOALS.length).toBe(CHAPTERS.reduce((a, c) => a + c.goals.length, 0));
     expect(chapterOf(0)?.name).toContain('第1章');
-    expect(chapterOf(GOALS.length - 1)?.name).toContain('第20章');
+    expect(chapterOf(GOALS.length - 1)?.name).toContain('第21章');
     expect(CHAPTERS[13].name).toContain('総合演習');
     expect(CHAPTERS[13].goals.length).toBeGreaterThan(60);
     expect(chapterOf(GOALS.length)).toBeNull();
@@ -572,7 +572,7 @@ describe('工場の動作', () => {
     const e = at(w, hx - 5, hy)!;
     configure(e, rec('haber-bosch'), ['NH3']);
     expect(flowStats(w).util).toBe(0);
-    // 原料が切れない状態で 30 秒。1 回に 2 個できるので、出口のベルトが空くのを待つ時間が少しある
+    // 原料が切れない状態で 30 秒。1 回に 2 個できるが、残りが 1 回ぶん未満になれば次の反応へ進むので、出口待ちはほとんど無い
     for (let i = 0; i < 8 * 60; i++) { e.inBuf = { N2: 4, H2: 12 }; step(w, 1 / 60); }
     // 指令（NH₃ を 10 個）の途中：指令ぶんの速さと、終わるまでの見込みが出る
     expect(goalCount(w)).toBeGreaterThan(0);
@@ -581,7 +581,7 @@ describe('工場の動作', () => {
     for (let i = 0; i < 22 * 60; i++) { e.inBuf = { N2: 4, H2: 12 }; step(w, 1 / 60); }
     expect(e.u!).toBeGreaterThan(0.5);
     expect(e.ts![0]).toBeGreaterThan(18);
-    expect(e.ts![2]).toBeGreaterThan(1);
+    expect(e.ts![2]).toBeLessThan(2);
     expect(e.n!).toBeGreaterThan(10);
     expect(machineState(e)).toBe(0);
     expect(w.made.NH3).toBe(e.n! * 2);
@@ -970,6 +970,90 @@ describe('工場の動作', () => {
         sec++;
       }
       expect(w.progress[ch], `${g.s} ほか：${sec} 秒で ${JSON.stringify(w.multi)}`).toBe(gi + 1);
+    });
+  });
+
+  it('量産の指令：求められた速さを保ち続けたときだけ達成になる', () => {
+    const ch = CHAPTERS.findIndex((c) => c.name.includes('量産'));
+    const build = (extractors: number) => {
+      const w = newWorld();
+      setChapter(w, ch);
+      const g = currentGoal(w)!;
+      expect(g.s).toBe('N2');
+      expect(requiredOf(w, g)).toBe(g.n);                 // 納品所が大きくなっても、秒数は変わらない
+      expect(resourceAt(40, 18)).toBe('air');
+      place(w, 'extractor', 40, 18, 0);
+      if (extractors > 1) place(w, 'extractor', 41, 20, 3); // 2 台目は下の面から
+      place(w, 'separator', 41, 18, 0);
+      configure(at(w, 41, 18)!, rec('air-distillation'), ['N2', 'O2']);
+      place(w, 'vent', 42, 20, 0);
+      place(w, 'station', 43, 18, 0);
+      place(w, 'station', hx - 2, hy, 0);
+      at(w, hx - 2, hy)!.role = 'out';
+      return w;
+    };
+    // 採取機 1 台では毎分 48 個までしか出ない：いつまで待っても達成にならない
+    const slow = build(1);
+    let peak = 0;
+    for (let i = 0; i < 150; i++) { run(slow, 1); peak = Math.max(peak, goalRate(slow)); }
+    expect(peak).toBeGreaterThan(30);
+    expect(peak).toBeLessThan(80);
+    expect(slow.progress[ch]).toBe(0);
+    expect(slow.hold).toBe(0);
+    // 採取機 2 台なら毎分 96 個：20 秒保てて達成
+    const fast = build(2);
+    let sec = 0, top = 0;
+    while (fast.progress[ch] === 0 && sec < 300) { run(fast, 1); sec++; top = Math.max(top, goalRate(fast)); }
+    expect(fast.progress[ch], `${sec} 秒、最高 毎分 ${top} 個`).toBe(1);
+    expect(top).toBeGreaterThanOrEqual(80);
+    expect(fast.hold).toBe(0);
+    expect(fast.rateWin.length).toBe(0);
+    // 装置の能力：ハーバー・ボッシュ法は 1 台で毎分 30 回。NH₃ なら毎分 60 個
+    const w = newWorld();
+    place(w, 'reactor', 10, 10, 0);
+    const per = reactionsPerMin(w, at(w, 10, 10)!, rec('haber-bosch'));
+    expect(per).toBeCloseTo(60 / rec('haber-bosch').time, 5);
+    expect(per * 2).toBeCloseTo(60, 5);                    // 1 回 2 秒なので毎分 30 回、NH₃ は毎分 60 個
+    at(w, 10, 10)!.pw = 5;                                 // 電力は電解槽だけの話だが、係数の扱いを確かめる
+    expect(reactionsPerMin(w, at(w, 10, 10)!, rec('haber-bosch'))).toBeCloseTo(60, 5);
+  });
+
+  it('量産の全指令：最終段の装置を、能力から計算した台数だけ並べれば、求められた速さに届く', () => {
+    const ch = CHAPTERS.findIndex((c) => c.name.includes('量産'));
+    CHAPTERS[ch].goals.forEach((g, gi) => {
+      const w = newWorld();
+      setChapter(w, ch);
+      w.progress[ch] = gi;
+      place(w, 'station', hx - 2, hy, 0);
+      at(w, hx - 2, hy)!.role = 'out';
+      const r = RECIPES.find((x) => x.machine !== 'collector' && x.machine !== 'battery' && productsOf(x).some(([o]) => o === g.s))!;
+      const coef = productsOf(r).find(([o]) => o === g.s)![1];
+      const feed: ReturnType<typeof at>[] = [];
+      let k = 0;
+      // 1 台の能力（毎分の反応回数 × 係数）で割って、必要な台数を決める
+      for (let i = 0; i < 6; i++) {
+        const x = 100 + i * 14, y = 100;
+        if (i > 0 && k * reactionsPerMin(w, feed[0]!, r) * coef >= g.rate! * 1.15) break;
+        expect(place(w, r.machine, x, y, 0)).toBeNull();
+        const e = at(w, x, y)!, order = productsOf(r).map(([o]) => o);
+        configure(e, r, order, r.machine === 'electrolyzer' ? order.map((_, q) => (poleOf(r, q) === 'a' ? 'a' : 'c')) : undefined);
+        order.forEach((o, q) => {
+          const p = outPort(e, q);
+          if (o !== g.s) return;
+          const sx2 = p.tx + (p.d === 2 ? -1 : 0), sy2 = p.ty + (p.d === 3 ? -1 : 0);
+          expect(place(w, 'station', sx2, sy2, 0)).toBeNull();
+          at(w, sx2, sy2)!.cars = 3;   // 納品所まで 130 マスあるので、1 編成では運びきれない。増発する
+        });
+        order.forEach((o, q) => { const p = outPort(e, q); if (o !== g.s) place(w, 'vent', p.tx, p.ty, 0); });
+        feed.push(e); k++;
+      }
+      expect(k, `${g.s}：台数`).toBeLessThanOrEqual(4);
+      let sec = 0, top = 0;
+      while (w.progress[ch] === gi && sec < 400) {
+        for (let t2 = 0; t2 < 60; t2++) { for (const e of feed) for (const [s2, n] of r.inputs) e!.inBuf![s2] = n * 2; step(w, 1 / 60); }
+        sec++; top = Math.max(top, goalRate(w));
+      }
+      expect(w.progress[ch], `${g.s}：${k} 台、${sec} 秒、最高 毎分 ${top} 個（目標 ${g.rate}）`).toBe(gi + 1);
     });
   });
 

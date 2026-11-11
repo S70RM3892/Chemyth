@@ -2,7 +2,7 @@ import { ZONES, hubRect, isSea, zoneAt, zoneSpots, type Zone } from '../content/
 import { ELEMENTS } from '../content/elements';
 import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { beltSpeed, currentGoal, DX, DY, fedTier, goalCount, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, railOf, stationTargets, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, railOf, stationTargets, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 
@@ -237,13 +237,23 @@ function buildChunkPunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
   return cv;
 }
 
-function chunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
-  const k = `${P.key}:${cx},${cy}`;
+/** 地面の 1 区画の絵。lod：0 はそのまま、1 は半分、2 は 4 分の 1 の大きさに縮めたもの。
+ *  引いた視野で大きい絵を毎フレーム縮めて描くと重いので、あらかじめ縮めた絵を使う */
+function chunk(P: Palette, cx: number, cy: number, lod = 0): HTMLCanvasElement {
+  const k = `${P.key}:${cx},${cy}:${lod}`;
   let c = chunks.get(k);
   if (c) { chunks.delete(k); chunks.set(k, c); return c; } // 最近使ったものを後ろへ
-  c = buildChunk(P, cx, cy);
+  if (lod === 0) c = buildChunk(P, cx, cy);
+  else {
+    const full = chunk(P, cx, cy, 0), size = full.width >> lod;
+    c = document.createElement('canvas');
+    c.width = c.height = size;
+    const g = c.getContext('2d')!;
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(full, 0, 0, size, size);
+  }
   chunks.set(k, c);
-  if (chunks.size > 220) chunks.delete(chunks.keys().next().value as string);
+  if (chunks.size > 520) chunks.delete(chunks.keys().next().value as string);
   return c;
 }
 
@@ -297,8 +307,10 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   ctx.fillRect(0, 0, cw, ch);
   ctx.imageSmoothingEnabled = true;
   const wx0 = cam.x - cw / 2 / z, wy0 = cam.y - ch / 2 / z, wx1 = cam.x + cw / 2 / z, wy1 = cam.y + ch / 2 / z;
+  // 画面の 1 マスが何ピクセルかで、地面の絵の細かさを選ぶ
+  const tilePx = z * (ctx.getTransform().a || 1), lod = tilePx >= 20 ? 0 : tilePx >= 10 ? 1 : 2;
   for (let cy = Math.floor(wy0 / CH); cy <= Math.floor(wy1 / CH); cy++) for (let cx = Math.floor(wx0 / CH); cx <= Math.floor(wx1 / CH); cx++) {
-    ctx.drawImage(chunk(P, cx, cy), Math.floor(sx(cx * CH)), Math.floor(sy(cy * CH)), Math.ceil(CH * z) + 1, Math.ceil(CH * z) + 1);
+    ctx.drawImage(chunk(P, cx, cy, lod), Math.floor(sx(cx * CH)), Math.floor(sy(cy * CH)), Math.ceil(CH * z) + 1, Math.ceil(CH * z) + 1);
   }
 
   const x0 = Math.floor(wx0), x1 = Math.ceil(wx1), y0 = Math.floor(wy0), y1 = Math.ceil(wy1);
@@ -390,7 +402,8 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     if (e.kind !== 'belt' || !inView(e)) continue;
     belts.push({ e, c: beltCurve(e, inflow(w, e.x, e.y, e.dir) ?? e.dir) });
   }
-  const trace = (b: (typeof belts)[number]) => {
+  type Belt = (typeof belts)[number];
+  const trace = (b: Belt) => {
     const cx = sx(b.e.x + 0.5), cy = sy(b.e.y + 0.5);
     ctx.beginPath();
     ctx.moveTo(cx + b.c.ax * z, cy + b.c.ay * z);
@@ -399,75 +412,93 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   // 固体は幅広のコンベヤ、液体は管、気体は細い管
   const WIDTH = { solid: 0.6, liquid: 0.46, gas: 0.34, none: 0.52 };
   const DASH = { solid: [0.04, 0.21], liquid: [0.18, 0.32], gas: [0.03, 0.22], none: [0.1, 0.4] };
-  const st = (b: (typeof belts)[number]) => b.e.st ?? 'none';
+  const st = (b: Belt) => b.e.st ?? 'none';
   const edge = lw(0.045) * 2;
+  // 速さのために：同じ見た目のベルトは 1 本の道にまとめ、1 回の線引きで描く。
+  // 大きな工場を引いて見たとき、1 本ずつ描くと 1 フレームに数万回の線引きになる
+  type BK = 'solid' | 'liquid' | 'gas' | 'none';
+  const KINDS: BK[] = ['solid', 'liquid', 'gas', 'none'];
+  const byKind: Record<BK, Belt[]> = { solid: [], liquid: [], gas: [], none: [] };
+  for (const b of belts) byKind[st(b)].push(b);
+  const strokeAll = (list: Belt[]) => {
+    if (!list.length) return;
+    ctx.beginPath();
+    for (const b of list) {
+      const cx = sx(b.e.x + 0.5), cy = sy(b.e.y + 0.5);
+      ctx.moveTo(cx + b.c.ax * z, cy + b.c.ay * z);
+      ctx.quadraticCurveTo(cx, cy, cx + b.c.bx * z, cy + b.c.by * z);
+    }
+    ctx.stroke();
+  };
+  /** 状態ごとに線の設定をしてから、その状態のベルトをまとめて描く */
+  const pass = (style: (k: BK) => void) => { for (const k of KINDS) if (byKind[k].length) { style(k); strokeAll(byKind[k]); } };
+  // 引いた視野では、細部（厚み・流れ線・影）を省く
+  const far = z < 15, veryFar = z < 11;
   // 厚み：ベルトと配管を地面から浮かせる。まず地面に落ちる影、次に手前の側面を描き、そのあと上面を描く
   const lift = z * 0.1;
   ctx.lineCap = 'round';
-  ctx.save();
-  ctx.translate(lift * 0.7, lift * 1.7);
-  ctx.strokeStyle = punk ? `rgba(0,0,0,${light ? 0.2 : 0.42})` : P.shadow;
-  for (const b of belts) { ctx.lineWidth = z * WIDTH[st(b)] + edge; trace(b); ctx.stroke(); }
-  ctx.restore();
-  ctx.save();
-  ctx.translate(0, lift);
-  ctx.strokeStyle = punk ? '#0b0d10' : P.ink;
-  for (const b of belts) { ctx.lineWidth = z * WIDTH[st(b)] + edge; trace(b); ctx.stroke(); }
-  for (const b of belts) { ctx.strokeStyle = mix(P.line[st(b)], punk ? '#0b0d10' : P.ink, punk ? 0.6 : 0.42); ctx.lineWidth = z * WIDTH[st(b)]; trace(b); ctx.stroke(); }
-  ctx.restore();
+  if (!far) {
+    ctx.save();
+    ctx.translate(lift * 0.7, lift * 1.7);
+    ctx.strokeStyle = punk ? `rgba(0,0,0,${light ? 0.2 : 0.42})` : P.shadow;
+    pass((k) => { ctx.lineWidth = z * WIDTH[k] + edge; });
+    ctx.restore();
+    ctx.save();
+    ctx.translate(0, lift);
+    ctx.strokeStyle = punk ? '#0b0d10' : P.ink;
+    pass((k) => { ctx.lineWidth = z * WIDTH[k] + edge; });
+    pass((k) => { ctx.strokeStyle = mix(P.line[k], punk ? '#0b0d10' : P.ink, punk ? 0.6 : 0.42); ctx.lineWidth = z * WIDTH[k]; });
+    ctx.restore();
+  }
   if (punk) {
     // 工業：固体はゴムのベルトに鋼の側板、液体と気体は継ぎ手のある配管
     const PW = { solid: 0.62, liquid: 0.44, gas: 0.3, none: 0.5 };
     const casing = '#0b0d10', rail = light ? '#8d969e' : '#4d545c', rubber = light ? '#33383e' : '#16191d';
-    const pipe = (b: (typeof belts)[number]) => st(b) === 'liquid' || st(b) === 'gas';
+    const isPipe = (k: BK) => k === 'liquid' || k === 'gas';
     ctx.lineCap = 'round';
     ctx.strokeStyle = casing;
-    for (const b of belts) { ctx.lineWidth = z * PW[st(b)] + lw(0.055) * 2; trace(b); ctx.stroke(); }
-    for (const b of belts) { ctx.strokeStyle = pipe(b) ? P.line[st(b)] : rail; ctx.lineWidth = z * PW[st(b)]; trace(b); ctx.stroke(); }
-    for (const b of belts) {
-      // 配管は円筒に見えるよう中央にハイライト、ベルトは中央がゴム
-      ctx.strokeStyle = pipe(b) ? `rgba(255,255,255,${light ? 0.55 : 0.2})` : rubber;
-      ctx.lineWidth = z * PW[st(b)] * (pipe(b) ? 0.26 : 0.7);
-      trace(b); ctx.stroke();
+    pass((k) => { ctx.lineWidth = z * PW[k] + lw(0.055) * 2; });
+    pass((k) => { ctx.strokeStyle = isPipe(k) ? P.line[k] : rail; ctx.lineWidth = z * PW[k]; });
+    // 配管は円筒に見えるよう中央にハイライト、ベルトは中央がゴム
+    pass((k) => { ctx.strokeStyle = isPipe(k) ? `rgba(255,255,255,${light ? 0.55 : 0.2})` : rubber; ctx.lineWidth = z * PW[k] * (isPipe(k) ? 0.26 : 0.7); });
+    if (!veryFar) {
+      ctx.lineCap = 'butt';
+      ctx.lineDashOffset = -t * beltSpeed(w) * z * 0.5;
+      if (!light) ctx.globalCompositeOperation = 'lighter';
+      pass((k) => {
+        if (k === 'liquid') { ctx.strokeStyle = light ? 'rgba(255,255,255,0.9)' : 'rgba(90,220,255,0.85)'; ctx.lineWidth = lw(0.07); ctx.setLineDash([z * 0.2, z * 0.3]); }
+        else if (k === 'gas') { ctx.strokeStyle = light ? 'rgba(20,24,29,0.6)' : `rgba(${P.glow},0.8)`; ctx.lineWidth = lw(0.05); ctx.setLineDash([z * 0.04, z * 0.21]); }
+        else { ctx.strokeStyle = light ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)'; ctx.lineWidth = z * PW[k] * 0.7; ctx.setLineDash([z * 0.04, z * 0.21]); }
+      });
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.setLineDash([]);
     }
-    ctx.lineCap = 'butt';
-    ctx.lineDashOffset = -t * beltSpeed(w) * z * 0.5;
-    if (!light) ctx.globalCompositeOperation = 'lighter';
-    for (const b of belts) {
-      const k = st(b);
-      if (k === 'liquid') { ctx.strokeStyle = light ? 'rgba(255,255,255,0.9)' : 'rgba(90,220,255,0.85)'; ctx.lineWidth = lw(0.07); ctx.setLineDash([z * 0.2, z * 0.3]); }
-      else if (k === 'gas') { ctx.strokeStyle = light ? 'rgba(20,24,29,0.6)' : `rgba(${P.glow},0.8)`; ctx.lineWidth = lw(0.05); ctx.setLineDash([z * 0.04, z * 0.21]); }
-      else { ctx.strokeStyle = light ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)'; ctx.lineWidth = z * PW[k] * 0.7; ctx.setLineDash([z * 0.04, z * 0.21]); }
-      trace(b); ctx.stroke();
-    }
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.setLineDash([]);
     // 配管の継ぎ手
-    ctx.strokeStyle = casing;
-    ctx.lineWidth = lw(0.08);
-    for (const b of belts) {
-      if (!pipe(b)) continue;
-      const jx = sx(b.e.x + 0.5 + b.c.ax), jy = sy(b.e.y + 0.5 + b.c.ay), hw = z * (PW[st(b)] / 2 + 0.07);
-      const px = b.c.ax ? 0 : 1, py = b.c.ax ? 1 : 0;
-      ctx.beginPath(); ctx.moveTo(jx - px * hw, jy - py * hw); ctx.lineTo(jx + px * hw, jy + py * hw); ctx.stroke();
+    if (!far) {
+      ctx.strokeStyle = casing;
+      ctx.lineWidth = lw(0.08);
+      ctx.beginPath();
+      for (const k of ['liquid', 'gas'] as BK[]) for (const b of byKind[k]) {
+        const jx = sx(b.e.x + 0.5 + b.c.ax), jy = sy(b.e.y + 0.5 + b.c.ay), hw = z * (PW[k] / 2 + 0.07);
+        const px = b.c.ax ? 0 : 1, py = b.c.ax ? 1 : 0;
+        ctx.moveTo(jx - px * hw, jy - py * hw); ctx.lineTo(jx + px * hw, jy + py * hw);
+      }
+      ctx.stroke();
     }
   } else {
-  ctx.lineCap = 'round';
-  ctx.strokeStyle = P.ink;
-  for (const b of belts) { ctx.lineWidth = z * WIDTH[st(b)] + edge; trace(b); ctx.stroke(); }
-  for (const b of belts) { ctx.strokeStyle = P.line[st(b)]; ctx.lineWidth = z * WIDTH[st(b)]; trace(b); ctx.stroke(); }
-  ctx.lineCap = 'butt';
-  ctx.strokeStyle = punk && !light ? P.hi : P.ink;
-  ctx.globalAlpha = punk ? (light ? 0.7 : 0.9) : light ? 0.5 : 0.45;
-  ctx.lineDashOffset = -t * beltSpeed(w) * z * 0.5;
-  for (const b of belts) {
-    const s = st(b);
-    ctx.lineWidth = s === 'solid' ? z * WIDTH.solid * 0.72 : lw(0.05);
-    ctx.setLineDash([z * DASH[s][0], z * DASH[s][1]]);
-    trace(b); ctx.stroke();
-  }
-  ctx.setLineDash([]);
-  ctx.globalAlpha = 1;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = P.ink;
+    pass((k) => { ctx.lineWidth = z * WIDTH[k] + edge; });
+    pass((k) => { ctx.strokeStyle = P.line[k]; ctx.lineWidth = z * WIDTH[k]; });
+    if (!veryFar) {
+      ctx.lineCap = 'butt';
+      ctx.strokeStyle = P.ink;
+      ctx.globalAlpha = light ? 0.5 : 0.45;
+      ctx.lineDashOffset = -t * beltSpeed(w) * z * 0.5;
+      pass((k) => { ctx.lineWidth = k === 'solid' ? z * WIDTH.solid * 0.72 : lw(0.05); ctx.setLineDash([z * DASH[k][0], z * DASH[k][1]]); });
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
   }
 
   // ベルトの段階：強化するほど、中央の流れ線が色を変えて速く流れる
@@ -477,9 +508,9 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.strokeStyle = ['', '#3f8fd0', '#2fa06a', '#d9a520', '#e0662c', '#c23fb0'][tier];
     ctx.lineWidth = lw(0.075);
     ctx.setLineDash([z * 0.16, z * 0.34]); ctx.lineDashOffset = -t * beltSpeed(w) * z;
-    for (const b of belts) { trace(b); ctx.stroke(); }
+    strokeAll(belts);
     ctx.setLineDash([]);
-    if (tier >= 3) { ctx.lineWidth = lw(0.025); ctx.globalAlpha = 0.55; for (const b of belts) { trace(b); ctx.stroke(); } ctx.globalAlpha = 1; }
+    if (tier >= 3 && !far) { ctx.lineWidth = lw(0.025); ctx.globalAlpha = 0.55; strokeAll(belts); ctx.globalAlpha = 1; }
   }
 
   // 地下ベルト：入口は後ろ半分、出口は前半分だけ地上に見える。あいだは点線
@@ -534,7 +565,11 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   for (const b of belts) {
     if (!b.e.item) continue;
     const [ox, oy] = onCurve(b.c, b.e.item.p);
-    token(ctx, P, sx(b.e.x + 0.5 + ox), sy(b.e.y + 0.5 + oy), z, b.e.item.s);
+    if (veryFar) {
+      // ごく引いた視野：物質は、その色の小さな点で示す
+      ctx.fillStyle = b.e.item.s === 'e' ? P.hi : sub(b.e.item.s).color;
+      ctx.fillRect(sx(b.e.x + 0.5 + ox) - z * 0.2, sy(b.e.y + 0.5 + oy) - z * 0.2, z * 0.4, z * 0.4);
+    } else token(ctx, P, sx(b.e.x + 0.5 + ox), sy(b.e.y + 0.5 + oy), z, b.e.item.s, far);
   }
   for (const e of w.ents.values()) {
     if (e.kind !== 'bridge' || !e.items || !inView(e)) continue;
@@ -552,6 +587,16 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     const age = t - born.get(e)!;
     const pop = age < 0.24 ? 0.7 + 0.3 * (1 - Math.pow(1 - age / 0.24, 3)) + 0.1 * Math.sin((age / 0.24) * Math.PI) : 1;
     const sz = sizeOf(e);
+    if (far) {
+      // 引いた視野：機種の色の札と、状態を示す点だけ
+      const info = MACHINES[e.kind as keyof typeof MACHINES], px0 = sx(e.x) + z * 0.08, py0 = sy(e.y) + z * 0.08, ps = sz * z - z * 0.16;
+      ctx.fillStyle = info.color; ctx.fillRect(px0, py0, ps, ps);
+      ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = Math.max(1, z * 0.07); ctx.strokeRect(px0, py0, ps, ps);
+      const needs = (isMachine(e.kind) && !e.recipe) || (e.kind === 'analyzer' && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
+      const jam = (e.stuck || 0) > 2.5 || !!e.bad;
+      if (needs || jam || e.busy) { ctx.fillStyle = needs || jam ? P.red : '#58e06a'; ctx.fillRect(px0 + ps * 0.3, py0 + ps * 0.3, ps * 0.4, ps * 0.4); }
+      continue;
+    }
     machine(ctx, P, sx(e.x + sz / 2), sy(e.y + sz / 2), z * pop * sz, z, e, t);
     // 稼働中の装置は、蒸気や火花を出す
     if (e.busy && z >= 20 && particles.length < 260 && Math.random() < dt * (e.kind === 'electrolyzer' || e.kind === 'battery' ? 5 : 3)) {
@@ -826,8 +871,9 @@ function ambient(ctx: CanvasRenderingContext2D, P: Palette, cw: number, ch: numb
   }
 }
 
-function token(ctx: CanvasRenderingContext2D, P: Palette, x: number, y: number, z: number, s: string) {
+function token(ctx: CanvasRenderingContext2D, P: Palette, x: number, y: number, z: number, s: string, flat = false) {
   const d = z * 0.78;
+  if (flat) { ctx.drawImage(sprite(s), x - d / 2, y - d / 2, d, d); return; }
   // 物質はベルトの上に乗っている：下に影を落とし、少し持ち上げて描く
   ctx.fillStyle = P.skin === 'punk' ? 'rgba(0,0,0,0.38)' : 'rgba(20,30,50,0.2)';
   ctx.beginPath(); ctx.ellipse(x + d * 0.05, y + d * 0.36, d * 0.3, d * 0.1, 0, 0, Math.PI * 2); ctx.fill();
@@ -1373,7 +1419,7 @@ function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, 
   ctx.strokeText(tx, cxh, cyh - u * 0.06); ctx.fillText(tx, cxh, cyh - u * 0.06);
   if (goal) {
     ctx.font = `600 ${u * 0.2}px ${FONT_MONO}`;
-    const ct = `${goalCount(w)} / ${requiredOf(w, goal)}`;
+    const ct = goal.rate ? `毎分 ${Math.round(goalRate(w))} / ${goal.rate}` : `${goalCount(w)} / ${requiredOf(w, goal)}`;
     ctx.strokeText(ct, cxh, cyh + u * 0.3); ctx.fillText(ct, cxh, cyh + u * 0.3);
   }
 }

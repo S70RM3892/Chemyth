@@ -3,7 +3,7 @@ import { ELEMENTS } from '../content/elements';
 import { MACHINES } from '../content/machines';
 import { CONDITIONS, SHIFTS, electronsOf, productsOf, recipeById, type MachineKind, type Recipe } from '../content/recipes';
 import { label, sameAtoms, sub, subByFormula, SUBSTANCES } from '../content/substances';
-import { BIG_ORDER, DX, DY, clearRecipe, configure, inDoors, judge, learn, moveOutput, sizeOf, slotCount, slotPort, SLOT_NAMES, type Ent, type Kind, type World } from '../engine/world';
+import { BIG_ORDER, DX, DY, clearRecipe, configure, currentGoal, inDoors, reactionsPerMin, judge, learn, moveOutput, sizeOf, slotCount, slotPort, SLOT_NAMES, type Ent, type Kind, type World } from '../engine/world';
 import { h } from './dom';
 import { sfx } from './sound';
 import { elementIcon, tokenIcon } from './token';
@@ -26,6 +26,18 @@ export function statusOf(e: Ent, r: Recipe): string {
   if (jam) return `止まっている：${label(jam)} の出口がふさがっている。ベルトか廃棄口をつなげ。`;
   const lack = r.inputs.filter(([s, n]) => (e.inBuf?.[s] || 0) < n).map(([s]) => label(s));
   return `原料待ち：${lack.join('、')} が足りない。手持ち：${have}`;
+}
+
+/** 装置 1 台の処理能力：原料が切れず、出口も詰まらないときに、毎分どれだけ使ってどれだけ作るか */
+export function capacityText(w: World, e: Ent, r: Recipe): string {
+  const perMin = reactionsPerMin(w, e, r);
+  const n = (k: number) => { const v = perMin * k; return v >= 10 ? String(Math.round(v)) : v.toFixed(1); };
+  const outs = productsOf(r).map(([s, k]) => `${label(s)} ${n(k)}`).join('、');
+  const ins = r.inputs.map(([s, k]) => `${label(s)} ${n(k)}`).join('、');
+  const g = currentGoal(w);
+  const mine = g?.rate ? productsOf(r).find(([s]) => s === g.s) : undefined;
+  const need = mine && g?.rate ? `　いまの指令（毎分 ${g.rate} 個）には、この装置が ${Math.ceil(g.rate / (perMin * mine[1]))} 台分の能力が要る。` : '';
+  return `能力（1 台・毎分）：作る量 ${outs}。使う量 ${ins}。原料がこれより少ないと、そのぶん遅くなる。${need}`;
 }
 
 /** 装置の稼働の記録を 1 行で */
@@ -162,6 +174,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
           h('div', { class: 'stack' },
             h('p', {}, h('b', {}, r.name)),
             h('p', { class: 'status', id: 'cfg-status' }, statusOf(e, r)),
+            h('p', { class: 'status', id: 'cfg-cap' }, capacityText(w, e, r)),
             h('p', { class: 'muted', id: 'cfg-util' }, utilText(e)),
             h('p', { class: 'note' }, r.note),
             h('p', { class: 'muted' }, `${cond.label}：${r.accept.join(' または ')}` + (isBat ? `　負極 ${label(r.neg!)}　正極 ${label(r.pos!)}` : '') + (r.shift ? `　平衡上有利：${r.shift}` : '')),

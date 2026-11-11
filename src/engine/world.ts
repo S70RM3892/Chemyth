@@ -156,6 +156,9 @@ export interface World {
   spilled: Record<string, number>;
   /** 納品所が飲み込んだ原子の数（元素ごとの累計）。納品した物質の化学式から数える */
   fed: Record<string, number>;
+  /** 量産の指令：指令の物質を納めた時刻（playMs）と、求められた速さを保てている秒数。保存しない */
+  rateWin: number[];
+  hold: number;
   /** 複数の物質を同時に求める指令で、物質ごとに納めた数 */
   multi: Record<string, number>;
   /** そのまま捨てた有毒な気体の数（物質ごとの累計） */
@@ -173,6 +176,8 @@ export interface World {
 export const beltSpeed = (w: World) => 2 * (1 + 0.35 * w.up.belt);
 export const extractInterval = (w: World) => 1 / (1 + 0.5 * w.up.extract);
 export const machineRate = (w: World) => 1 + 0.4 * w.up.machine;
+/** 装置 1 台が、原料が切れず出口も詰まらないときに、毎分こなせる反応の回数 */
+export const reactionsPerMin = (w: World, e: Ent, r: Recipe) => (60 * machineRate(w) * ((e.pw || 0) > 0 ? 2 : 1)) / r.time;
 /** 列車の速さ（マス/秒）。ベルトの強化で一緒に速くなる */
 export const trainSpeed = (w: World) => 14 * (1 + 0.35 * w.up.belt);
 /** 線路の長さ：横に進んでから縦に進む、直角の道のり（マス） */
@@ -206,7 +211,11 @@ export const currentGoal = (w: World): Goal | undefined => CHAPTERS[w.chapter]?.
 /** 納品所の段階（0〜3） */
 export const hubLevel = (w: World) => Math.max(0, HUB_SIZES.indexOf(w.hubSize));
 /** いま要求される個数。仕分けの指令は増やさない */
-export const requiredOf = (w: World, g: Goal) => (g.strict ? g.n : Math.ceil(g.n * HUB_DEMAND[hubLevel(w)]));
+export const requiredOf = (w: World, g: Goal) => (g.strict || g.rate ? g.n : Math.ceil(g.n * HUB_DEMAND[hubLevel(w)]));
+/** 量産の指令で、納品の速さを数える時間の幅（秒） */
+export const RATE_WINDOW = 20;
+/** 量産の指令：直近 RATE_WINDOW 秒の納品から求めた、いまの速さ（個/分） */
+export const goalRate = (w: World) => (w.rateWin.filter((t) => t >= w.playMs - RATE_WINDOW * 1000).length * 60) / RATE_WINDOW;
 /** 達成数に見合う大きさまで納品所を広げる。広がった場所にあったものは取り除く。広がったら true */
 export function growHub(w: World): boolean {
   const done = w.progress.reduce((a, n) => a + n, 0);
@@ -226,6 +235,7 @@ export const goalCount = (w: World) => w.counts[w.chapter] || 0;
 export const doneCount = (w: World) => w.progress.reduce((a, n) => a + n, 0);
 export function setChapter(w: World, i: number) {
   w.chapter = Math.max(0, Math.min(CHAPTERS.length - 1, i));
+  w.rateWin = []; w.hold = 0;
   w.seen = Math.max(w.seen, w.chapter);
 }
 /** 道具が使えるか */
@@ -236,7 +246,7 @@ export function newWorld(): World {
   const w: World = {
     ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
-    up: { extract: 0, belt: 0, machine: 0 }, solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, buckets: [], playMs: 0, tick: 0, events: [], fx: [],
+    up: { extract: 0, belt: 0, machine: 0 }, solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, buckets: [], playMs: 0, tick: 0, events: [], fx: [],
   };
   for (const [x, y] of hubTiles(2)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
   return w;
@@ -414,7 +424,13 @@ function bucket(w: World): Bucket {
 const bump = (rec: Record<string, number>, s: string, n = 1) => { rec[s] = (rec[s] || 0) + n; };
 
 /** 装置がいま止まっている理由。0 動いている、1 原料待ち、2 出口が詰まっている */
-export const machineState = (e: Ent): 0 | 1 | 2 => (e.busy ? 0 : e.outBuf?.some((n) => n > 0) ? 2 : 1);
+export const machineState = (e: Ent): 0 | 1 | 2 => (e.busy ? 0 : outputBlocked(e) ? 2 : 1);
+
+/** 出口に 1 回ぶん以上たまっている生成物があるか。あるうちは、次の反応を始められない */
+export function outputBlocked(e: Ent, r = recipeById(e.recipe)): boolean {
+  if (!r || !e.outBuf || !e.outOrder) return false;
+  return e.outOrder.some((s, i) => e.outBuf![i] >= (r.outputs.find(([id]) => id === s)?.[1] ?? 1));
+}
 
 export interface FlowStats {
   /** 直近 1 分・5 分の、1 分あたりの納品数（搬出口から出し直したものは除く） */
@@ -594,6 +610,14 @@ function deliver(w: World, s: string, x: number, y: number, rc?: boolean) {
   feed(w, s);
   const g = currentGoal(w), ch = w.chapter;
   if (!g) return;
+  if (g.rate) {
+    // 量産：数ではなく速さで決まる。納めた時刻だけ記録し、判定は step で行う
+    if (g.s !== s) return;
+    w.rateWin.push(w.playMs);
+    w.points++;
+    bucket(w).goal++;
+    return;
+  }
   if (g.also) {
     // 複数の物質を同時に求める指令：どれも必要な数に達したら達成。いちばん遅れているものが進み具合になる
     const all = [g.s, ...g.also], need = requiredOf(w, g);
@@ -641,6 +665,7 @@ function feed(w: World, s: string) {
 }
 
 function finishGoal(w: World, g: Goal, ch: number) {
+  w.rateWin = []; w.hold = 0;
   {
     // 操業評価：仕分けの指令は速さを競うものではないので付けない
     if (!g.strict) {
@@ -730,6 +755,14 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): 
 export function step(w: World, dt: number) {
   w.tick++;
   w.playMs += dt * 1000;
+  // 量産の指令：求められた速さを保てている間だけ時間が進み、下回ると倍の速さで戻る
+  const rg = currentGoal(w);
+  if (rg?.rate) {
+    while (w.rateWin.length && w.rateWin[0] < w.playMs - RATE_WINDOW * 1000) w.rateWin.shift();
+    w.hold = goalRate(w) >= rg.rate ? w.hold + dt : Math.max(0, w.hold - dt * 2);
+    w.counts[w.chapter] = Math.floor(w.hold);
+    if (w.hold >= rg.n) finishGoal(w, rg, w.chapter);
+  }
   if (currentGoal(w)) { const gk = `${w.chapter}:${w.progress[w.chapter]}`; w.goalMs[gk] = (w.goalMs[gk] || 0) + dt * 1000; }
   const speed = beltSpeed(w), every = extractInterval(w), rate = machineRate(w), kU = 1 - Math.exp(-dt / UTIL_TAU);
   for (const e of w.ents.values()) {
@@ -862,8 +895,10 @@ export function step(w: World, dt: number) {
         if (!r || !e.inBuf || !e.outBuf || !e.outOrder) break;
         if (e.bad && w.tick - (e.badT || 0) > 45) e.bad = undefined;
         if (!e.busy) {
-          // 出口が全部はけるまで次の反応は始まらない（副生成物を放置すると詰まる）
-          if (e.outBuf.every((n) => n === 0) && r.inputs.every(([s, n]) => (e.inBuf![s] || 0) >= n)) {
+          // 出口に 1 回ぶん以上たまっている生成物があるうちは、次の反応を始めない（副生成物を放置すると詰まる）。
+          // 1 回に何個もできる生成物は、出し切る前でも残りが 1 回ぶん未満になれば次へ進む。そうしないと、
+          // ベルトへ 1 個ずつ出している間ずっと止まり、装置の能力の半分しか出ない
+          if (!outputBlocked(e, r) && r.inputs.every(([s, n]) => (e.inBuf![s] || 0) >= n)) {
             for (const [s, n] of r.inputs) e.inBuf[s] -= n;
             e.busy = true;
             e.prog = 0;
@@ -889,7 +924,7 @@ export function step(w: World, dt: number) {
           const p = outPort(e, i);
           if (push(w, p.tx, p.ty, p.d, s)) e.outBuf![i]--;
         });
-        e.stuck = !e.busy && e.outBuf.some((n) => n > 0) ? (e.stuck || 0) + dt : 0;
+        e.stuck = !e.busy && outputBlocked(e, r) ? (e.stuck || 0) + dt : 0;
         const st = machineState(e);
         (e.ts ??= [0, 0, 0])[st] += dt;
         e.u = (e.u || 0) + ((st === 0 ? 1 : 0) - (e.u || 0)) * kU;

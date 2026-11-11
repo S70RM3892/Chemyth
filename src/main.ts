@@ -3,7 +3,7 @@ import { HUB_CENTER, LAND, ZONES, hubRect, resourceAt, zoneAt } from './content/
 import { ELEMENTS } from './content/elements';
 import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
-import { BIG, FEED_TIERS, at, autoDir, configure, currentGoal, fedTier, flowStats, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { BIG, FEED_TIERS, at, autoDir, beltSpeed, configure, currentGoal, extractInterval, fedTier, flowStats, goalRate, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
 import { recipeById } from './content/recipes';
 import { about, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
@@ -43,6 +43,9 @@ const TOOLS: { id: Tool; glyph: string; name: string; tip: string; color?: strin
   { id: 'area', glyph: '▭', name: '範囲', need: {}, color: '#4a5a78', tip: '指でなぞって四角く囲む。囲んだ設備をまとめてコピーして別の場所に貼りつけたり、まとめて消したりできる。ラインを丸ごと増設するのに使う。' },
   { id: 'erase', glyph: '✕', name: '消す', need: {}, color: '#b0453f', tip: 'タップするか、なぞると消える。間違えたら右上の「元に戻す」。' },
 ];
+
+/** 計測用：アドレスに ?perf をつけると、1 フレームの計算と描画にかかった時間（ミリ秒）を window.__perf にためる */
+const PERF: { draw: number[]; step: number[] } | null = typeof location !== 'undefined' && location.search.includes('perf') ? ((window as unknown as { __perf: { draw: number[]; step: number[] } }).__perf = { draw: [], step: [] }) : null;
 
 interface HotData { slot?: number; save?: string }
 interface Hot { data?: HotData; snapshot?(f: () => unknown): void; ready?(f: (d: HotData) => void): void }
@@ -211,7 +214,7 @@ function boot(data: HotData) {
           const n = world.fed[el.sym] || 0, tier = fedTier(world, el.sym);
           return h('span', { class: 'fed-el' + (tier ? ' on' : '') }, elementIcon(el.sym, 20), h('b', {}, el.sym), h('span', { class: 'muted' }, n >= 10000 ? `${Math.round(n / 1000)}k` : String(n)), h('span', { class: 'fed-t' }, '●'.repeat(tier) + '○'.repeat(FEED_TIERS.length - tier)));
         })),
-        h('p', { class: 'muted' }, g ? `いまの指令：${sub(g.s).name} を ${requiredOf(world, g)} 個（${goalCount(world)} 個 納品済み）` : 'この章の指令は終えた。'),
+        h('p', { class: 'muted' }, g?.rate ? `いまの指令：${sub(g.s).name} を毎分 ${g.rate} 個の速さで ${g.n} 秒間納め続ける。いまの速さは毎分 ${Math.round(goalRate(world))} 個。` : g ? `いまの指令：${sub(g.s).name} を ${requiredOf(world, g)} 個（${goalCount(world)} 個 納品済み）` : 'この章の指令は終えた。'),
         h('p', { class: 'muted' }, `いまの大きさは ${world.hubSize}×${world.hubSize} マス。指令を達成していくと大きくなり、受け取れる口が増える。そのぶん 1 つの指令で求められる数も増える。`),
         h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', onclick: () => showChapters(panel()) }, '指令の一覧を開く')));
       return;
@@ -224,6 +227,8 @@ function boot(data: HotData) {
     if (kind === 'station') { showStation(panel(), e, extra()); return; }
     showSheet(h('header', {}, h('h2', {}, MACHINES[kind].name), closeBtn()),
       kind === 'extractor' ? h('p', { class: 'eq' }, `ここで採れるもの：${sub(resourceAt(e.x, e.y)).name}`) : null,
+      kind === 'extractor' ? h('p', { class: 'status' }, `能力：1 台で毎分 ${Math.round(60 / extractInterval(world))} 個。「強化」で増える。足りなければ台数を増やして合流させろ。`) : null,
+      kind === 'belt' || kind === 'bridge' || kind === 'tunnel' ? h('p', { class: 'status' }, `能力：1 本で毎分 ${Math.round(beltSpeed(world) * 60)} 個まで運べる。それ以上流すと詰まるので、2 本に分けろ。`) : null,
       h('div', { class: 'split' }, about(kind), sideOf(e)));
   };
 
@@ -556,6 +561,7 @@ function boot(data: HotData) {
 
   // ---- 指令の表示 ----
   const goalIco = $<HTMLCanvasElement>('goal-ico');
+  let rateTick = -99;
   const hud = () => {
     const g = currentGoal(world), ch2 = CHAPTERS[world.chapter];
     $('pts').textContent = String(world.points);
@@ -570,16 +576,19 @@ function boot(data: HotData) {
       goalIco.hidden = !g;
       $('goal-step').textContent = `${ch2.name}　${Math.min(world.progress[world.chapter] + 1, ch2.goals.length)} / ${ch2.goals.length}`;
       const s2 = g ? sub(g.s) : null;
-      $('goal-name').textContent = g?.also ? `${[g.s, ...g.also].map((x) => label(x)).join('・')} を各 ${requiredOf(world, g)} 個`
+      $('goal-name').textContent = g?.rate ? `${label(g.s)} を 毎分 ${g.rate} 個で ${g.n} 秒`
+        : g?.also ? `${[g.s, ...g.also].map((x) => label(x)).join('・')} を各 ${requiredOf(world, g)} 個`
         : g && s2 ? `${s2.name}${s2.formula && !s2.mask ? ' ' + label(g.s) : g.s === 'e' ? ' e⁻' : ''} を ${requiredOf(world, g)} 個` : doneCount(world) >= TOTAL_GOALS ? 'すべての指令を終えた' : 'この章は完了。ここを押して別の章へ';
       $('goal-hint').textContent = g ? g.hint : '記録を開いて、間違えた反応を紙に書き出して確認しろ。';
     }
-    $('goal-count').textContent = g ? `${goalCount(world)} / ${requiredOf(world, g)}` : '';
+    $('goal-count').textContent = g?.rate ? `毎分 ${Math.round(goalRate(world))} / ${g.rate}` : g ? `${goalCount(world)} / ${requiredOf(world, g)}` : '';
     // 納品の速さと、終わるまでの見込み。1 秒に 2 回だけ計算する
-    if (g && world.tick % 30 === 0) {
+    // （早送りでは 1 コマに何 tick も進むので、割り切れる tick を待つと表示が止まる。前回からの経過で見る）
+    if (g && Math.abs(world.tick - rateTick) >= 30) {
+      rateTick = world.tick;
       const f = flowStats(world);
-      const each = g.also ? [g.s, ...g.also].map((x) => `${label(x)} ${world.multi[x] || 0}`).join('　') + '　' : '';
-      $('goal-rate').textContent = each || f.goalPerMin > 0 ? each + (f.goalPerMin <= 0 ? '' : `${f.goalPerMin.toFixed(1)} 個/分${f.etaSec !== null && f.etaSec > 0 ? `　あと約 ${f.etaSec >= 90 ? `${Math.round(f.etaSec / 60)} 分` : `${Math.max(5, Math.round(f.etaSec / 5) * 5)} 秒`}` : ''}`) : '';
+      const each = g.rate ? `速さを保てた時間 ${goalCount(world)} / ${g.n} 秒（下回ると戻る）　` : g.also ? [g.s, ...g.also].map((x) => `${label(x)} ${world.multi[x] || 0}`).join('　') + '　' : '';
+      $('goal-rate').textContent = g.rate ? each.trim() : each || f.goalPerMin > 0 ? each + (f.goalPerMin <= 0 ? '' : `${f.goalPerMin.toFixed(1)} 個/分${f.etaSec !== null && f.etaSec > 0 ? `　あと約 ${f.etaSec >= 90 ? `${Math.round(f.etaSec / 60)} 分` : `${Math.max(5, Math.round(f.etaSec / 5) * 5)} 秒`}` : ''}`) : '';
     } else if (!g) $('goal-rate').textContent = '';
     $('goal-bar').style.width = g ? `${Math.min(100, (goalCount(world) / requiredOf(world, g)) * 100)}%` : '100%';
   };
@@ -615,7 +624,9 @@ function boot(data: HotData) {
       if (modal.hidden) {
         acc += dt * speed;
         let guard = 0;
+        const s0 = PERF ? performance.now() : 0;
         while (acc >= STEP && guard++ < 24) { step(world, STEP); acc -= STEP; }
+        if (PERF) PERF.step.push(performance.now() - s0);
         if (acc > STEP * 4) acc = 0;
       }
       for (const ev of world.events.splice(0)) {
@@ -653,7 +664,9 @@ function boot(data: HotData) {
       } else input.tick(dt);
       if (selected && at(world, selected.x, selected.y) !== selected) selected = null;
       if (lastSeen !== world.seen) { lastSeen = world.seen; refreshTools(true); }
+      const d0 = PERF ? performance.now() : 0;
       draw(ctx, cw, ch, world, cam, now / 1000, dt, { tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : null, rail: tool === 'rail' ? railDraft?.pts ?? null : null });
+      if (PERF) { PERF.draw.push(performance.now() - d0); if (PERF.draw.length > 600) { PERF.draw.shift(); PERF.step.shift(); } }
       hud();
     }
     placeAct();
