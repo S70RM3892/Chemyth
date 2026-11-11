@@ -1,12 +1,12 @@
 import { ZONES, hubRect, isSea, zoneAt, zoneSpots, type Zone } from '../content/map';
 import { MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { beltSpeed, currentGoal, DX, DY, goalCount, inDoors, inflow, isMachine, outPort, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { beltSpeed, currentGoal, DX, DY, goalCount, inDoors, inflow, isMachine, machineState, outPort, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { mix, onThemeChange, palette, type Palette } from './theme';
 import { sprite } from './token';
 
 export interface Camera { x: number; y: number; z: number }
-export interface View { tool: string; selected: Ent | null }
+export interface View { tool: string; selected: Ent | null; stats?: boolean }
 
 // 方眼ノートに描いた工場の図面。輪郭線と斜線で描き、ぼかしや発光は使わない
 let FONT_HAND = '"Klee One", sans-serif';
@@ -508,6 +508,31 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   }
   const hr = hubRect(w.hubSize);
   hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
+
+  // ---- 稼働率の札：装置の上に、直近の稼働率と止まっている理由を出す ----
+  if (view.stats && z >= 13) {
+    const GOOD = '#2f8f55', WARN = '#c9821a';
+    ctx.textAlign = 'center';
+    for (const e of w.ents.values()) {
+      const cfg = isMachine(e.kind) && !!e.recipe;
+      if (!(cfg || e.kind === 'extractor') || !inView(e)) continue;
+      const u = e.u ?? 0, sz = sizeOf(e), st = cfg ? machineState(e) : u >= 0.5 ? 0 : 2;
+      // 色だけに頼らない：稼働は ●、原料待ちは ▲、詰まりは ✕
+      const color = u >= 0.7 ? GOOD : u >= 0.35 ? WARN : P.red, mark = st === 0 ? '●' : st === 1 ? '▲' : '✕';
+      const fs = Math.max(10, Math.min(15, z * 0.3)), tx = `${mark} ${Math.round(u * 100)}%`;
+      ctx.font = `700 ${fs}px ${FONT_MONO}`;
+      const wd = ctx.measureText(tx).width + fs * 0.9, hh = fs * 1.5;
+      const bx = sx(e.x + sz / 2) - wd / 2, by = sy(e.y) - hh - z * 0.06;
+      ctx.fillStyle = punk ? '#0b0d10' : P.plate;
+      rr(ctx, bx, by, wd, hh, punk ? 0 : 4); ctx.fill();
+      ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+      // 稼働率の横棒
+      ctx.fillStyle = color;
+      ctx.fillRect(bx + 2, by + hh - 4, (wd - 4) * u, 2.5);
+      ctx.fillStyle = punk ? '#eef0ea' : P.ink;
+      ctx.fillText(tx, bx + wd / 2, by + hh / 2 - 1);
+    }
+  }
 
   // ---- 選んだものは蛍光ペンで囲む ----
   if (view.selected && view.selected.kind !== 'hub') {

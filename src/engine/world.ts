@@ -52,7 +52,18 @@ export interface Ent {
   busy?: boolean;
   prog?: number;
   timer?: number;
+  /** 稼働の記録。ts：[動いていた秒, 原料を待っていた秒, 出口が詰まっていた秒]、n：反応（産出）した回数、u：直近の稼働率（0〜1） */
+  ts?: [number, number, number];
+  n?: number;
+  u?: number;
 }
+
+/** 直近の稼働率をならす時間（秒） */
+const UTIL_TAU = 20;
+/** 流れの記録の 1 区切り（秒）と、残す数 */
+export const BUCKET_SEC = 10;
+const BUCKET_KEEP = 30;
+export interface Bucket { t: number; deliver: number; goal: number; vent: number; spill: number; made: number }
 
 export type MistakePart = 'reactants' | 'products' | 'electrodes' | 'coefficients' | 'electrons' | 'condition' | 'equilibrium' | 'revealed' | 'calc' | 'isomer' | 'quiz' | 'passage';
 export interface Mistake {
@@ -102,6 +113,12 @@ export interface World {
   tick: number;
   /** UI に知らせる出来事。保存しない */
   events: string[];
+  /** 装置が作った数、廃棄口で捨てた数、あふれて捨てた数（物質ごとの累計） */
+  made: Record<string, number>;
+  vented: Record<string, number>;
+  spilled: Record<string, number>;
+  /** 直近の流れ。10 秒ごとの区切りで 5 分ぶん。保存しない */
+  buckets: Bucket[];
   /** 画面効果のきっかけ。保存しない */
   fx: { x: number; y: number; type: 'react' | 'deliver' | 'spill'; s: string }[];
 }
@@ -157,7 +174,7 @@ export function newWorld(): World {
   const w: World = {
     ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
-    up: { extract: 0, belt: 0, machine: 0 }, solved: [], practice: {}, playMs: 0, tick: 0, events: [], fx: [],
+    up: { extract: 0, belt: 0, machine: 0 }, solved: [], practice: {}, made: {}, vented: {}, spilled: {}, buckets: [], playMs: 0, tick: 0, events: [], fx: [],
   };
   for (const [x, y] of hubTiles(2)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
   return w;
@@ -216,6 +233,7 @@ export function remove(w: World, x: number, y: number): boolean {
 }
 
 export function clearRecipe(e: Ent) {
+  e.ts = undefined; e.n = 0; e.u = 0;
   e.recipe = undefined; e.outOrder = undefined; e.outSlot = undefined; e.inBuf = undefined; e.outBuf = undefined; e.busy = false; e.prog = 0;
 }
 
@@ -305,6 +323,62 @@ export function configure(e: Ent, r: Recipe, order: string[], poles?: ('c' | 'a'
   e.outBuf = e.outOrder.map(() => 0);
   e.busy = false;
   e.prog = 0;
+  e.ts = [0, 0, 0]; e.n = 0; e.u = 0;
+}
+
+/** いまの区切り。なければ作る */
+function bucket(w: World): Bucket {
+  const t = Math.floor(w.playMs / 1000 / BUCKET_SEC), last = w.buckets[w.buckets.length - 1];
+  if (last && last.t === t) return last;
+  const b: Bucket = { t, deliver: 0, goal: 0, vent: 0, spill: 0, made: 0 };
+  w.buckets.push(b);
+  if (w.buckets.length > BUCKET_KEEP) w.buckets.shift();
+  return b;
+}
+const bump = (rec: Record<string, number>, s: string, n = 1) => { rec[s] = (rec[s] || 0) + n; };
+
+/** 装置がいま止まっている理由。0 動いている、1 原料待ち、2 出口が詰まっている */
+export const machineState = (e: Ent): 0 | 1 | 2 => (e.busy ? 0 : e.outBuf?.some((n) => n > 0) ? 2 : 1);
+
+export interface FlowStats {
+  /** 直近 1 分・5 分の、1 分あたりの納品数（搬出口から出し直したものは除く） */
+  perMin1: number;
+  perMin5: number;
+  /** いまの指令の物質の、直近 1 分の納品数 */
+  goalPerMin: number;
+  /** いまの速さで指令が終わるまでの秒数。流れていなければ null */
+  etaSec: number | null;
+  /** 設定済みの装置の、直近の稼働率の平均（0〜1）。装置がなければ null */
+  util: number | null;
+  machines: number;
+  jammed: number;
+  starved: number;
+  unset: number;
+  /** 作ったもののうち、捨てた割合（直近 5 分）。作っていなければ null */
+  wasteRate: number | null;
+}
+/** 工場全体の効率 */
+export function flowStats(w: World): FlowStats {
+  const now = Math.floor(w.playMs / 1000 / BUCKET_SEC);
+  const span = (n: number) => w.buckets.filter((b) => b.t > now - n);
+  const sum = (bs: Bucket[], k: keyof Bucket) => bs.reduce((a, b) => a + b[k], 0);
+  // 経過時間が短いうちは、その時間で割る
+  const mins = (n: number) => Math.max(BUCKET_SEC, Math.min(n * BUCKET_SEC, w.playMs / 1000)) / 60;
+  const m1 = span(6), m5 = span(30);
+  const ms = [...w.ents.values()].filter((e) => isMachine(e.kind));
+  const set = ms.filter((e) => e.recipe);
+  const goalPerMin = sum(m1, 'goal') / mins(6);
+  const g = currentGoal(w);
+  const left = g ? requiredOf(w, g) - goalCount(w) : 0;
+  const made5 = sum(m5, 'made'), lost5 = sum(m5, 'vent') + sum(m5, 'spill');
+  return {
+    perMin1: sum(m1, 'deliver') / mins(6), perMin5: sum(m5, 'deliver') / mins(30), goalPerMin,
+    etaSec: g && goalPerMin > 0 ? (left / goalPerMin) * 60 : null,
+    util: set.length ? set.reduce((a, e) => a + (e.u || 0), 0) / set.length : null,
+    machines: set.length, jammed: set.filter((e) => machineState(e) === 2 && (e.stuck || 0) > 2.5).length,
+    starved: set.filter((e) => machineState(e) === 1 && (e.u || 0) < 0.15).length, unset: ms.length - set.length,
+    wasteRate: made5 > 0 ? Math.min(1, lost5 / made5) : null,
+  };
 }
 
 /** 初めて正しく設定できた反応に研究点を出す。もらえた点を返す */
@@ -412,6 +486,7 @@ function deliver(w: World, s: string, x: number, y: number, rc?: boolean) {
   w.fx.push({ x, y, type: 'deliver', s });
   if (rc) return; // 搬出口や試薬棚から出して納めただけのものは数えない
   w.delivered[s] = (w.delivered[s] || 0) + 1;
+  bucket(w).deliver++;
   const g = currentGoal(w), ch = w.chapter;
   if (!g) return;
   if (g.s !== s) {
@@ -424,8 +499,10 @@ function deliver(w: World, s: string, x: number, y: number, rc?: boolean) {
     return;
   }
   w.counts[ch]++;
+  bucket(w).goal++;
   w.points++;
   if (w.counts[ch] >= requiredOf(w, g)) {
+    for (const b of w.buckets) b.goal = 0; // 指令が変わるので、指令ぶんの速さは数え直す
     w.progress[ch]++;
     w.counts[ch] = 0;
     w.points += 30;
@@ -464,6 +541,8 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): 
       deliver(w, s, x, y, rc);
       return true;
     case 'vent':
+      bump(w.vented, s);
+      bucket(w).vent++;
       return true;
     case 'extractor':
     case 'depot':
@@ -475,7 +554,7 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): 
       const need = r.inputs.find(([id]) => id === s)?.[1];
       if (!need) return false;
       // 入れすぎた分はあふれて捨てる（1 本のベルトに混ぜても詰まらない）
-      if ((t.inBuf[s] || 0) >= need * 4) { w.fx.push({ x, y, type: 'spill', s }); return true; }
+      if ((t.inBuf[s] || 0) >= need * 4) { w.fx.push({ x, y, type: 'spill', s }); bump(w.spilled, s); bucket(w).spill++; return true; }
       t.inBuf[s] = (t.inBuf[s] || 0) + 1;
       return true;
     }
@@ -486,7 +565,7 @@ export function step(w: World, dt: number) {
   w.tick++;
   w.playMs += dt * 1000;
   if (currentGoal(w)) { const gk = `${w.chapter}:${w.progress[w.chapter]}`; w.goalMs[gk] = (w.goalMs[gk] || 0) + dt * 1000; }
-  const speed = beltSpeed(w), every = extractInterval(w), rate = machineRate(w);
+  const speed = beltSpeed(w), every = extractInterval(w), rate = machineRate(w), kU = 1 - Math.exp(-dt / UTIL_TAU);
   for (const e of w.ents.values()) {
     switch (e.kind) {
       case 'belt': {
@@ -539,7 +618,9 @@ export function step(w: World, dt: number) {
       }
       case 'extractor': {
         e.timer = (e.timer || 0) + dt;
-        if (e.timer >= every && push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, resourceAt(e.x, e.y))) e.timer = 0;
+        if (e.timer >= every && push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, resourceAt(e.x, e.y))) { e.timer = 0; e.n = (e.n || 0) + 1; }
+        // 出した先がふさがっていると、採れるのに出せない
+        e.u = (e.u ?? 1) + ((e.timer < every + dt ? 1 : 0) - (e.u ?? 1)) * kU;
         break;
       }
       case 'depot': {
@@ -568,8 +649,11 @@ export function step(w: World, dt: number) {
             e.busy = false;
             e.prog = 0;
             w.fx.push({ x: e.x + (sizeOf(e) - 1) / 2, y: e.y + (sizeOf(e) - 1) / 2, type: 'react', s: e.outOrder[0] });
+            e.n = (e.n || 0) + 1;
             e.outOrder.forEach((s, i) => {
-              e.outBuf![i] += r.outputs.find(([id]) => id === s)![1];
+              const k = r.outputs.find(([id]) => id === s)![1];
+              e.outBuf![i] += k;
+              if (s !== 'e') { bump(w.made, s, k); bucket(w).made += k; }
               discover(w, s);
             });
           }
@@ -580,6 +664,9 @@ export function step(w: World, dt: number) {
           if (push(w, p.tx, p.ty, p.d, s)) e.outBuf![i]--;
         });
         e.stuck = !e.busy && e.outBuf.some((n) => n > 0) ? (e.stuck || 0) + dt : 0;
+        const st = machineState(e);
+        (e.ts ??= [0, 0, 0])[st] += dt;
+        e.u = (e.u || 0) + ((st === 0 ? 1 : 0) - (e.u || 0)) * kU;
       }
     }
   }
@@ -593,7 +680,7 @@ export function serialize(w: World): string {
   return JSON.stringify({
     v: SAVE_VERSION, ents: [...w.ents.values()].filter((e) => e.kind !== 'part'), chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
     hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
-    discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, practice: w.practice,
+    discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled,
     playMs: Math.round(w.playMs), savedAt: Date.now(),
   });
 }
@@ -645,6 +732,9 @@ export function deserialize(json: string): World | null {
     w.up = { extract: d.up?.extract | 0, belt: d.up?.belt | 0, machine: d.up?.machine | 0 };
     w.solved = d.solved || [];
     w.practice = d.practice || {};
+    w.made = d.made || {};
+    w.vented = d.vented || {};
+    w.spilled = d.spilled || {};
     w.playMs = d.playMs || 0;
     return w;
   } catch {

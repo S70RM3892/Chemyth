@@ -26,6 +26,14 @@ export function statusOf(e: Ent, r: Recipe): string {
   return `原料待ち：${lack.join('、')} が足りない。手持ち：${have}`;
 }
 
+/** 装置の稼働の記録を 1 行で */
+export function utilText(e: Ent): string {
+  const ts = e.ts ?? [0, 0, 0], total = ts[0] + ts[1] + ts[2];
+  if (total < 1) return '稼働率：まだ記録がない。';
+  const p = (x: number) => Math.round((x / total) * 100);
+  return `直近の稼働率 ${Math.round((e.u || 0) * 100)} %。置いてからの内訳：稼働 ${p(ts[0])} %・原料待ち ${p(ts[1])} %・出口詰まり ${p(ts[2])} %。反応 ${e.n || 0} 回。`;
+}
+
 /** 復習のとき：装置に結びつけず、指定した反応を何も見ずに再現させる */
 export interface Review { recipe: Recipe; done(correct: boolean): void }
 
@@ -151,6 +159,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
           h('div', { class: 'stack' },
             h('p', {}, h('b', {}, r.name)),
             h('p', { class: 'status', id: 'cfg-status' }, statusOf(e, r)),
+            h('p', { class: 'muted', id: 'cfg-util' }, utilText(e)),
             h('p', { class: 'note' }, r.note),
             h('p', { class: 'muted' }, `${cond.label}：${r.accept.join(' または ')}` + (isBat ? `　負極 ${label(r.neg!)}　正極 ${label(r.pos!)}` : '') + (r.shift ? `　平衡上有利：${r.shift}` : '')),
             h('button', { class: 'ghost', type: 'button', id: 'cfg-redo', onclick: () => { clearRecipe(e); render(); } }, '設定をやり直す'),

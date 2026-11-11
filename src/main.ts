@@ -2,7 +2,7 @@ import { CHAPTERS, TOTAL_GOALS } from './content/goals';
 import { HUB_CENTER, LAND, ZONES, hubRect, resourceAt, zoneAt } from './content/map';
 import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
-import { BIG, at, autoDir, configure, currentGoal, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { BIG, at, autoDir, configure, currentGoal, flowStats, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
 import { recipeById } from './content/recipes';
 import { about, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
@@ -10,6 +10,7 @@ import { attachInput, Z_MIN } from './ui/input';
 import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
 import { showDrills, showStructure } from './ui/practice';
 import { draw, type Camera } from './ui/render';
+import { showStats, type StatsCtx } from './ui/stats';
 import { setSound, sfx, soundOn } from './ui/sound';
 import { initTitle, skinButtons, slotName, store, themeButtons } from './ui/title';
 import { applySkin, applyTheme } from './ui/theme';
@@ -48,6 +49,8 @@ function boot(data: HotData) {
   /** なぞり書きで、いま乗っている「横切るかもしれない」ベルト */
   let cross: [number, number] | null = null;
   let lastWrong = 0;
+  /** 地図に稼働率の札を出すか */
+  let overlay = store.meta().overlay === true;
   const app = $('app');
   const cv = $<HTMLCanvasElement>('cv');
   const ctx = cv.getContext('2d')!;
@@ -153,6 +156,17 @@ function boot(data: HotData) {
     erase: (e: Ent) => { group = null; doErase(e.x, e.y); sfx.erase(); },
   };
   const panel = (): PanelCtx => ({ w: world, show: showSheet, close: closeModal, toast, sheet, actions: sheetActions });
+  const statsBtn = $('b-stats');
+  const paintOverlay = () => statsBtn.classList.toggle('hot', overlay);
+  const statsCtx = (): StatsCtx => ({
+    ...panel(),
+    overlay: () => overlay,
+    setOverlay: (on) => { overlay = on; store.setMeta({ overlay }); paintOverlay(); },
+    // 統計の行から、その装置の場所へ移って選ぶ
+    focus: (e) => { closeModal(); camTo = { x: e.x + sizeOf(e) / 2, y: e.y + sizeOf(e) / 2 + 1, z: nearZoom() }; selected = e; },
+  });
+  statsBtn.onclick = () => showStats(statsCtx());
+  paintOverlay();
 
   const sideOf = (e: Ent) => {
     const side = h('div', { class: 'side' });
@@ -205,28 +219,39 @@ function boot(data: HotData) {
       h('li', {}, h('b', {}, '設定する'), '装置を置くと設定が開く。原料、生成物の化学式、係数、条件を自分で決める。蒸留塔・反応器・電解槽・電池は 2×2 マスで、出口が 6 か所ある。どの出口から何が出るかは、出口の絵柄でわかる。'),
       h('li', {}, h('b', {}, '納める'), 'ベルトを納品所までつなぐ。要らない副生成物は「廃棄口」へ。出口が詰まると装置は止まる。'),
       h('li', {}, h('b', {}, '強化する'), '研究点がたまったら「強化」。計算問題を解くと、採取・運搬・処理が速くなる。'),
+      h('li', {}, h('b', {}, '見直す'), '右上の「統計」で、納品の速さ、装置ごとの稼働率、止まっている理由がわかる。地図に稼働率を重ねて表示できる。'),
     ),
     h('p', { class: 'muted' }, '物質の絵柄は、元素ごとに決まった形の組み合わせでできている（「図鑑」で確認できる）。置いたものをタップすると、その場に「設定・回す・消す」が出る。間違えたら右上の「元に戻す」。'),
     first ? h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'start', onclick: closeModal }, '始める')) : null,
   );
 
-  const showMenu = () => showSheet(
-    h('header', {}, h('h2', {}, 'メニュー'), closeBtn()),
-    h('div', { class: 'menu' },
-      h('button', { class: 'ghost', type: 'button', id: 'm-chapters', onclick: () => showChapters(panel()) }, '指令の一覧（章を切り替える）'),
-      h('button', { class: 'ghost', type: 'button', id: 'm-passages', onclick: () => showPassages(panel()) }, 'リード文課題（京大形式の空欄補充）'),
-      h('button', { class: 'ghost', type: 'button', id: 'm-drills', onclick: () => showDrills(panel()) }, '連鎖計算（京大形式の理論の大問。数値は毎回変わる）'),
-      h('button', { class: 'ghost', type: 'button', id: 'm-structure', onclick: () => showStructure(panel()) }, '構造決定（異性体の数え上げ・構造の特定・ペプチドの配列）'),
-      h('button', { class: 'ghost', type: 'button', id: 'm-syllabus', onclick: () => showSyllabus(panel()) }, '範囲表（入試範囲のどこまで進んだか）'),
-      h('button', { class: 'ghost', type: 'button', id: 'm-log', onclick: () => showLog(panel()) }, '記録（間違えたところ）'),
-      h('button', { class: 'ghost', type: 'button', id: 'm-help', onclick: () => showHelp() }, '遊び方'),
-      h('div', { class: 'row' }, h('span', { class: 'muted' }, '見た目'), h('span', { class: 'seg' }, ...skinButtons(showMenu)), h('span', { class: 'seg' }, ...themeButtons(showMenu))),
-      h('button', { class: 'ghost', type: 'button', id: 'm-rank', onclick: () => showRanking(panel()) }, 'ランキング'),
-      h('button', { class: 'ghost', type: 'button', id: 'm-sound', onclick: () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); showMenu(); } }, soundOn() ? '音：あり' : '音：なし'),
-      h('button', { class: 'ghost', type: 'button', id: 'm-title', onclick: () => { modal.hidden = true; sheet.replaceChildren(); toTitle(); } }, '保存してタイトルへ戻る'),
-    ),
-    h('p', { class: 'muted' }, `${slotName(slot)}。この端末に自動で保存している。`),
-  );
+  const showMenu = () => {
+    const item = (id: string, text: string, go: () => void) => h('button', { class: 'ghost', type: 'button', id, onclick: go }, text);
+    showSheet(
+      h('header', {}, h('h2', {}, 'メニュー'), closeBtn()),
+      h('h3', {}, '工場'),
+      h('div', { class: 'menu' },
+        item('m-chapters', '指令の一覧（章を切り替える）', () => showChapters(panel())),
+        item('m-stats', '統計（納品の速さ・装置の稼働率・学習の進み）', () => showStats(statsCtx()))),
+      h('h3', {}, '京大形式の演習'),
+      h('div', { class: 'menu' },
+        item('m-drills', '連鎖計算（理論の大問。数値は毎回変わる）', () => showDrills(panel())),
+        item('m-structure', '構造決定（異性体の数え上げ・構造の特定・ペプチドの配列）', () => showStructure(panel())),
+        item('m-passages', 'リード文課題（空欄補充）', () => showPassages(panel()))),
+      h('h3', {}, 'ふり返り'),
+      h('div', { class: 'menu' },
+        item('m-syllabus', '範囲表（入試範囲のどこまで進んだか）', () => showSyllabus(panel())),
+        item('m-log', '記録（間違えたところ）', () => showLog(panel())),
+        item('m-rank', 'ランキング', () => showRanking(panel()))),
+      h('h3', {}, '設定'),
+      h('div', { class: 'menu' },
+        h('div', { class: 'row' }, h('span', { class: 'muted' }, '見た目'), h('span', { class: 'seg' }, ...skinButtons(showMenu)), h('span', { class: 'seg' }, ...themeButtons(showMenu))),
+        item('m-sound', soundOn() ? '音：あり' : '音：なし', () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); showMenu(); }),
+        item('m-help', '遊び方', () => showHelp()),
+        item('m-title', '保存してタイトルへ戻る', () => { modal.hidden = true; sheet.replaceChildren(); toTitle(); })),
+      h('p', { class: 'muted' }, `${slotName(slot)}。この端末に自動で保存している。`),
+    );
+  };
 
   $('b-menu').onclick = showMenu;
   $('b-up').onclick = () => showUpgrades(panel());
@@ -290,7 +315,8 @@ function boot(data: HotData) {
     act.hidden = false;
     const hr = hubRect(world.hubSize);
     const ax = ((hub ? hr.x + hr.s / 2 : selected.x + sizeOf(selected) / 2) - cam.x) * cam.z + cw / 2;
-    const ay = ((hub ? hr.y : selected.y) - cam.y) * cam.z + ch / 2 - 14;
+    // 稼働率の札を出しているときは、札の上に出す
+    const ay = ((hub ? hr.y : selected.y) - cam.y) * cam.z + ch / 2 - 14 - (overlay && !hub ? 26 : 0);
     act.style.transform = `translate(${Math.round(Math.min(cw - 110, Math.max(110, ax)))}px, ${Math.round(Math.max(64, ay))}px) translate(-50%, -100%)`;
   };
 
@@ -378,6 +404,11 @@ function boot(data: HotData) {
       $('goal-hint').textContent = g ? g.hint : '記録を開いて、間違えた反応を紙に書き出して確認しろ。';
     }
     $('goal-count').textContent = g ? `${goalCount(world)} / ${requiredOf(world, g)}` : '';
+    // 納品の速さと、終わるまでの見込み。1 秒に 2 回だけ計算する
+    if (g && world.tick % 30 === 0) {
+      const f = flowStats(world);
+      $('goal-rate').textContent = f.goalPerMin > 0 ? `${f.goalPerMin.toFixed(1)} 個/分${f.etaSec !== null && f.etaSec > 0 ? `　あと約 ${f.etaSec >= 90 ? `${Math.round(f.etaSec / 60)} 分` : `${Math.max(5, Math.round(f.etaSec / 5) * 5)} 秒`}` : ''}` : '';
+    } else if (!g) $('goal-rate').textContent = '';
     $('goal-bar').style.width = g ? `${Math.min(100, (goalCount(world) / requiredOf(world, g)) * 100)}%` : '100%';
   };
 
@@ -434,7 +465,7 @@ function boot(data: HotData) {
       } else input.tick(dt);
       if (selected && at(world, selected.x, selected.y) !== selected) selected = null;
       if (lastSeen !== world.seen) { lastSeen = world.seen; refreshTools(true); }
-      draw(ctx, cw, ch, world, cam, now / 1000, dt, { tool, selected });
+      draw(ctx, cw, ch, world, cam, now / 1000, dt, { tool, selected, stats: overlay });
       hud();
     }
     placeAct();

@@ -93,7 +93,7 @@ function runDrill(c: PanelCtx, g: DrillGen) {
   };
   c.show(
     h('header', {}, h('h2', {}, d.title), back('drill-back', '一覧へ', () => showDrills(c))),
-    h('p', { class: 'passage' }, d.intro),
+    h('p', { class: 'drill-intro' }, d.intro),
     body,
   );
   ask(0);

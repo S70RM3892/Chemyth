@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
-import { fitAnchor, inDoors, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
+import { fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
@@ -549,6 +549,59 @@ describe('工場の動作', () => {
     expect(at(w, 10, 10)).toBeUndefined();
     expect(restore(w, e)).toBe(true);
     expect(at(w, 11, 10)).toBe(e);
+  });
+
+  it('稼働率・納品の速さ・捨てた数を記録する', () => {
+    const w = newWorld();
+    w.progress[0] = 2;
+    // 納品所が広がっても巻き込まれない場所に置き、ベルトでつなぐ
+    place(w, 'reactor', hx - 5, hy, 0);
+    for (const x of [hx - 3, hx - 2, hx - 1]) place(w, 'belt', x, hy, 0);
+    const e = at(w, hx - 5, hy)!;
+    configure(e, rec('haber-bosch'), ['NH3']);
+    expect(flowStats(w).util).toBe(0);
+    // 原料が切れない状態で 30 秒。1 回に 2 個できるので、出口のベルトが空くのを待つ時間が少しある
+    for (let i = 0; i < 8 * 60; i++) { e.inBuf = { N2: 4, H2: 12 }; step(w, 1 / 60); }
+    // 指令（NH₃ を 10 個）の途中：指令ぶんの速さと、終わるまでの見込みが出る
+    expect(goalCount(w)).toBeGreaterThan(0);
+    expect(flowStats(w).goalPerMin).toBeGreaterThan(10);
+    expect(flowStats(w).etaSec!).toBeGreaterThan(0);
+    for (let i = 0; i < 22 * 60; i++) { e.inBuf = { N2: 4, H2: 12 }; step(w, 1 / 60); }
+    expect(e.u!).toBeGreaterThan(0.5);
+    expect(e.ts![0]).toBeGreaterThan(18);
+    expect(e.ts![2]).toBeGreaterThan(1);
+    expect(e.n!).toBeGreaterThan(10);
+    expect(machineState(e)).toBe(0);
+    expect(w.made.NH3).toBe(e.n! * 2);
+    const f = flowStats(w);
+    expect(f.machines).toBe(1);
+    expect(f.util!).toBeGreaterThan(0.5);
+    expect(f.perMin1).toBeGreaterThan(20);
+    expect(f.goalPerMin).toBe(0); // 指令を終えて次へ移ったので、数え直しになる
+    expect(f.etaSec).toBeNull();
+    expect(f.wasteRate).toBe(0);
+    // 原料を止めると、稼働率が下がり、原料待ちの時間が増える
+    e.inBuf = {};
+    run(w, 60);
+    expect(e.u!).toBeLessThan(0.1);
+    expect(e.ts![1]).toBeGreaterThan(55);
+    expect(machineState(e)).toBe(1);
+    expect(flowStats(w).starved).toBe(1);
+    // 廃棄口とあふれ
+    const w2 = newWorld();
+    place(w2, 'electrolyzer', 10, 10, 0);
+    const c = at(w2, 10, 10)!;
+    configure(c, rec('water-electrolysis'), ['H2', 'O2'], ['c', 'a']);
+    place(w2, 'vent', 11, 9, 0);   // 陰極側（左手・手前）の先
+    place(w2, 'vent', 11, 12, 0);  // 陽極側（右手・手前）の先
+    for (let i = 0; i < 20 * 60; i++) { c.inBuf = { H2O: 8 }; step(w2, 1 / 60); }
+    expect(w2.vented.H2).toBeGreaterThan(5);
+    expect(w2.vented.O2).toBeGreaterThan(2);
+    expect(flowStats(w2).wasteRate!).toBeGreaterThan(0.8);
+    // 保存して読み戻しても、累計は残る
+    const r = deserialize(serialize(w2))!;
+    expect(r.vented.H2).toBe(w2.vented.H2);
+    expect(r.made.H2).toBe(w2.made.H2);
   });
 
   it('1 マスだった頃の装置は、そのまま 3 つの出口で動く', () => {
