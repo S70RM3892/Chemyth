@@ -162,7 +162,8 @@ export function showLog(c: PanelCtx) {
   const PART: Record<string, string> = { reactants: '原料の組み合わせ', products: '生成物', electrodes: '電極', coefficients: '係数', electrons: '電子の数', equilibrium: '平衡の条件', revealed: '答えを見た', calc: '計算問題', isomer: '違う物質を納めた', quiz: '知識問題', passage: 'リード文' };
   const tally = new Map<string, number>();
   for (const m of w.mistakes) {
-    const name = m.machine === 'calc' ? QUESTIONS.find((q) => q.id === m.recipe)?.topic ?? '計算'
+    const name = m.machine === 'drill' ? `連鎖計算：${m.recipe ?? ''}` : m.machine === 'structure' ? `構造決定：${m.recipe ?? ''}`
+      : m.machine === 'calc' ? QUESTIONS.find((q) => q.id === m.recipe)?.topic ?? '計算'
       : m.machine === 'analysis' ? `仕分け：${m.recipe ? sub(m.recipe).name : ''}`
       : m.machine === 'quiz' ? KNOWLEDGE.find((k) => k.id === m.recipe)?.topic ?? '知識'
       : m.machine === 'passage' ? PASSAGES.find((x) => m.recipe?.startsWith(x.id))?.title ?? 'リード文'
@@ -196,8 +197,9 @@ export function unitProgress(w: World, u: Unit) {
   const c = coverageOf(u);
   const blanks = c.passages.flatMap((p) => p.blanks.map((b) => `${p.id}:${b.id}`));
   const done = c.recipes.filter((r) => w.learned.includes(r.id)).length + c.questions.filter((q) => w.solved.includes(q.id)).length
-    + c.knowledge.filter((k) => (w.srs[`k:${k.id}`]?.iv ?? 0) >= 1).length + blanks.filter((b) => w.cleared.includes(b)).length;
-  const total = c.recipes.length + c.questions.length + c.knowledge.length + blanks.length;
+    + c.knowledge.filter((k) => (w.srs[`k:${k.id}`]?.iv ?? 0) >= 1).length + blanks.filter((b) => w.cleared.includes(b)).length
+    + c.practice.filter((id) => (w.practice[id]?.clean ?? 0) >= 1).length;
+  const total = c.recipes.length + c.questions.length + c.knowledge.length + blanks.length + c.practice.length;
   return { c, done, total };
 }
 
@@ -215,7 +217,7 @@ export function showSyllabus(c: PanelCtx) {
     const { c: cov, done, total } = unitProgress(w, u);
     all += total; got += done;
     const parts = [cov.recipes.length ? `反応 ${cov.recipes.length}` : '', cov.sets.length ? `仕分け ${cov.sets.length} 組` : '', cov.questions.length ? `計算 ${cov.questions.length}` : '',
-      cov.knowledge.length ? `知識 ${cov.knowledge.length}` : '', cov.passages.length ? `リード文 ${cov.passages.length}` : ''].filter(Boolean).join('・');
+      cov.knowledge.length ? `知識 ${cov.knowledge.length}` : '', cov.passages.length ? `リード文 ${cov.passages.length}` : '', cov.practice.length ? `演習 ${cov.practice.length} 型` : ''].filter(Boolean).join('・');
     const row = h('details', { class: 'syl' },
       h('summary', {}, h('span', { class: 'syl-t' }, u.title), h('span', { class: 'syl-n' }, `${done} / ${total}`),
         bar(total ? done / total : 0)),
@@ -231,19 +233,19 @@ export function showSyllabus(c: PanelCtx) {
   c.show(
     h('header', {}, h('h2', {}, '範囲表'), closeBtn(c)),
     h('p', {}, `高等学校学習指導要領の「化学基礎」14 項目と「化学」20 項目に、このゲームの内容を割り当てた表。全体の進み具合は `, h('b', {}, `${got} / ${all}`), '。'),
-    h('p', { class: 'muted' }, '数字は、正しく設定できた反応・解いた計算問題・復習で正解した知識問題・埋めたリード文の空欄の合計。項目をタップすると中身が開く。'),
+    h('p', { class: 'muted' }, '数字は、正しく設定できた反応・解いた計算問題・復習で正解した知識問題・埋めたリード文の空欄・全問正解したことのある演習の型の合計。項目をタップすると中身が開く。'),
     ...[...groups].flatMap(([k, rows]) => [h('h3', {}, k), ...rows]),
   );
 }
 
 // ---------------- 入力用のキー ----------------
 
-function numPad(press: (k: string) => void): HTMLElement {
+export function numPad(press: (k: string) => void): HTMLElement {
   return h('div', { class: 'keys numpad' }, ...['7', '8', '9', '4', '5', '6', '1', '2', '3', '−', '0', '.'].map((k) =>
     h('button', { class: 'key n', type: 'button', onclick: () => press(k) }, k)),
     h('button', { class: 'key fn wide', type: 'button', onclick: () => press('⌫') }, '⌫'));
 }
-function typeNumber(text: string, k: string): string {
+export function typeNumber(text: string, k: string): string {
   if (k === '⌫') return text.slice(0, -1);
   if (k === '−') return text.startsWith('-') ? text.slice(1) : '-' + text;
   if (k === '.') return text.includes('.') ? text : text + (text === '' || text === '-' ? '0.' : '.');

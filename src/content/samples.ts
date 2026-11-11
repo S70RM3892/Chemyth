@@ -145,4 +145,4 @@ export const setsOf = (substance: string) => SETS.filter((s) => s.members.includ
 /** 試薬棚から出せる実験室の試薬。ここから出したものを納品しても指令には数えない */
 export const REAGENTS = ['H2O2', 'MnO2', 'KClO3', 'NH4Cl', 'Ca(OH)2', 'CaCO3', 'NaCl', 'FeS', 'Zn', 'Cu', 'HCl', 'H2SO4', 'HNO3', 'NaOH',
   'NaNO2', 'CH3COOH', 'C6H5NH2', 'C6H5ONa', 'HOOC(CH2)4COOH', 'H2N(CH2)6NH2', 'CH2CHCHCH2', 'resinH', 'AgNO3', 'HI', 'H3PO4', 'C5H10O4', 'base',
-  'F2', 'KBr', 'KI', 'Ag', 'HCN', 'CO(NH2)2', 'caprolactam', 'MMA', 'sucrose'];
+  'F2', 'KBr', 'KI', 'Ag', 'HCN', 'CO(NH2)2', 'caprolactam', 'MMA', 'sucrose', 'KMnO4', '(COOH)2', 'Na2S2O3', 'Sn'];

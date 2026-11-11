@@ -2,6 +2,7 @@ import { recipeById, RECIPES, CONDITIONS, electronsOf, productsOf, type MachineK
 import { HUB_AT, HUB_CENTER, HUB_DEMAND, HUB_SIZES, hubTiles, resourceAt } from '../content/map';
 import { CHAPTERS, TOTAL_GOALS, type Goal } from '../content/goals';
 import { hasSub, sub } from '../content/substances';
+import { isBalanced } from '../chem/formula';
 import { isPositive, setById } from '../content/samples';
 
 /** 0:右 1:下 2:左 3:上 */
@@ -9,7 +10,10 @@ export type Dir = 0 | 1 | 2 | 3;
 export const DX = [1, 0, -1, 0];
 export const DY = [0, 1, 0, -1];
 
-export type Kind = 'belt' | 'extractor' | 'vent' | 'hub' | 'splitter' | 'bridge' | 'depot' | 'sampler' | 'analyzer' | MachineKind;
+/** 'part' は 2×2 の装置が占める残りのマス。ref が本体の位置を指す */
+export type Kind = 'belt' | 'extractor' | 'vent' | 'hub' | 'splitter' | 'bridge' | 'depot' | 'sampler' | 'analyzer' | 'part' | MachineKind;
+/** 2×2 マスを占める装置。出口が 6 か所あり、奥の面が入口の目安になる */
+export const BIG: Kind[] = ['separator', 'reactor', 'electrolyzer', 'battery'];
 
 /** 流れている物質。p は 0〜1 の進み具合、m は最後に動いた tick、rc は搬出口から出た印 */
 export interface Item { s: string; p: number; m: number; rc?: boolean; d?: Dir }
@@ -34,8 +38,15 @@ export interface Ent {
   /** 装置：出口が詰まったままの秒数 */
   stuck?: number;
   recipe?: string;
-  /** 出口ごとの物質。0:正面 1:右手 2:左手 */
+  /** 2×2 の装置。左上のマスが本体で、残り 3 マスは 'part' が埋める */
+  big?: boolean;
+  /** 'part'：本体のマスのキー */
+  ref?: string;
+  /** 出口ごとの物質 */
   outOrder?: string[];
+  /** 出口ごとの、出口の場所の番号。省くと 0, 1, 2, … の順。
+   *  1 マスの装置：0 正面 1 右手 2 左手。2×2 の装置：0 正面の左 1 正面の右 2 右手の手前 3 左手の手前 4 右手の奥 5 左手の奥 */
+  outSlot?: number[];
   inBuf?: Record<string, number>;
   outBuf?: number[];
   busy?: boolean;
@@ -45,7 +56,7 @@ export interface Ent {
 
 export type MistakePart = 'reactants' | 'products' | 'electrodes' | 'coefficients' | 'electrons' | 'condition' | 'equilibrium' | 'revealed' | 'calc' | 'isomer' | 'quiz' | 'passage';
 export interface Mistake {
-  machine: MachineKind | 'calc' | 'analysis' | 'quiz' | 'passage';
+  machine: MachineKind | 'calc' | 'analysis' | 'quiz' | 'passage' | 'drill' | 'structure';
   /** 特定できた場合の反応、または計算問題の id */
   recipe: string | null;
   part: MistakePart;
@@ -85,6 +96,8 @@ export interface World {
   up: Record<UpgradeKey, number>;
   /** 正解した計算問題 */
   solved: string[];
+  /** 演習（連鎖計算・構造決定）の型ごとの成績。tries：解いた回数、clean：全問正解した回数 */
+  practice: Record<string, { tries: number; clean: number }>;
   playMs: number;
   tick: number;
   /** UI に知らせる出来事。保存しない */
@@ -124,7 +137,10 @@ export function growHub(w: World): boolean {
   if (size <= w.hubSize && at(w, HUB_CENTER[0], HUB_CENTER[1])?.kind === 'hub') return false;
   const grew = size > w.hubSize;
   w.hubSize = Math.max(size, w.hubSize);
-  for (const [x, y] of hubTiles(w.hubSize)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
+  for (const [x, y] of hubTiles(w.hubSize)) {
+    if (at(w, x, y) && at(w, x, y)!.kind !== 'hub') remove(w, x, y);
+    w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
+  }
   return grew;
 }
 export const goalCount = (w: World) => w.counts[w.chapter] || 0;
@@ -141,14 +157,36 @@ export function newWorld(): World {
   const w: World = {
     ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
-    up: { extract: 0, belt: 0, machine: 0 }, solved: [], playMs: 0, tick: 0, events: [], fx: [],
+    up: { extract: 0, belt: 0, machine: 0 }, solved: [], practice: {}, playMs: 0, tick: 0, events: [], fx: [],
   };
   for (const [x, y] of hubTiles(2)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
   return w;
 }
 
+/** そのマスにあるもの。2×2 の装置は、どのマスを指しても本体を返す */
 export function at(w: World, x: number, y: number): Ent | undefined {
-  return w.ents.get(key(x, y));
+  const e = w.ents.get(key(x, y));
+  return e?.kind === 'part' ? w.ents.get(e.ref!) : e;
+}
+export const sizeOf = (e: Ent) => (e.big ? 2 : 1);
+export const footprint = (x: number, y: number, size: number): [number, number][] =>
+  size === 1 ? [[x, y]] : [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]];
+/** 本体と、それが占める残りのマスを書き込む */
+function put(w: World, e: Ent) {
+  for (const [x, y] of footprint(e.x, e.y, sizeOf(e))) w.ents.set(key(x, y), x === e.x && y === e.y ? e : { kind: 'part', x, y, dir: 0, ref: key(e.x, e.y) });
+}
+/** 消したものを元の場所に戻す。場所がふさがっていたら false */
+export function restore(w: World, e: Ent): boolean {
+  if (footprint(e.x, e.y, sizeOf(e)).some(([x, y]) => w.ents.has(key(x, y)))) return false;
+  put(w, e);
+  return true;
+}
+/** 2×2 の装置を置くとき、タップしたマスを含む空き場所を探す。左上のマスを返す */
+export function fitAnchor(w: World, x: number, y: number): [number, number] | null {
+  for (const [ax, ay] of [[x, y], [x - 1, y], [x, y - 1], [x - 1, y - 1]]) {
+    if (footprint(ax, ay, 2).every(([fx, fy]) => !w.ents.has(key(fx, fy)))) return [ax, ay];
+  }
+  return null;
 }
 
 export function discover(w: World, s: string) {
@@ -157,33 +195,37 @@ export function discover(w: World, s: string) {
 
 /** 置けない理由を返す。置けたら null */
 export function place(w: World, kind: Kind, x: number, y: number, dir: Dir): string | null {
-  if (at(w, x, y)) return 'そこはもう埋まっている';
+  const big = BIG.includes(kind);
+  if (footprint(x, y, big ? 2 : 1).some(([fx, fy]) => w.ents.has(key(fx, fy)))) return big ? 'この装置は 2×2 マスを使う。空いた場所に置け' : 'そこはもう埋まっている';
   const e: Ent = { kind, x, y, dir };
+  if (big) e.big = true;
   if (kind === 'belt' || kind === 'splitter' || kind === 'analyzer') e.item = null;
   if (kind === 'splitter') e.rr = 0;
   if (kind === 'bridge') e.items = [null, null];
   if (kind === 'extractor') { e.timer = 0; discover(w, resourceAt(x, y)); }
   if (kind === 'depot' || kind === 'sampler') { e.timer = 0; e.rr = 0; }
-  w.ents.set(key(x, y), e);
+  put(w, e);
   return null;
 }
 
 export function remove(w: World, x: number, y: number): boolean {
   const e = at(w, x, y);
   if (!e || e.kind === 'hub') return false;
-  w.ents.delete(key(x, y));
+  for (const [fx, fy] of footprint(e.x, e.y, sizeOf(e))) w.ents.delete(key(fx, fy));
   return true;
 }
 
 export function clearRecipe(e: Ent) {
-  e.recipe = undefined; e.outOrder = undefined; e.inBuf = undefined; e.outBuf = undefined; e.busy = false; e.prog = 0;
+  e.recipe = undefined; e.outOrder = undefined; e.outSlot = undefined; e.inBuf = undefined; e.outBuf = undefined; e.busy = false; e.prog = 0;
 }
 
 export interface Answer {
   /** [物質id, 係数] */
   reactants: [string, number][];
-  /** [物質id（読めなければ null）, 係数]。電解槽では [陰極, 陽極, …] */
+  /** [物質id（読めなければ null）, 係数] */
   products: [string | null, number][];
+  /** 電解槽のみ：生成物ごとに、陰極側 'c' か陽極側 'a' か */
+  poles?: ('c' | 'a')[];
   condition: string;
   /** 電池のみ */
   neg?: string;
@@ -207,8 +249,13 @@ export function judge(machine: MachineKind, a: Answer): Verdict {
   if (!r) return { ok: false, part: 'products', recipe: cands[0], message: '生成物が違う。数も種類もよく考えろ。' };
   const outs = productsOf(r);
 
-  if (machine === 'electrolyzer' && (got[0] !== outs[0][0] || got[1] !== outs[1][0])) {
-    return { ok: false, part: 'electrodes', recipe: r, message: '陰極と陽極が違う。陰極は還元、陽極は酸化が起きる。' };
+  if (machine === 'electrolyzer') {
+    // どちらの極で生じるか。溶液全体にできるもの（'x'）は、どちら側に書いてもよい
+    const wrong = outs.some(([s], i) => {
+      const want = poleOf(r, i);
+      return want !== 'x' && (a.poles?.[got.indexOf(s)] ?? 'c') !== want;
+    });
+    if (wrong) return { ok: false, part: 'electrodes', recipe: r, message: '陰極と陽極が違う。陰極では還元、陽極では酸化が起きる。溶液に生じる物質は、それを生むイオンができる極の側に書け。' };
   }
   if (machine === 'battery' && (a.neg !== r.neg || a.pos !== r.pos)) {
     return { ok: false, part: 'electrodes', recipe: r, message: '負極と正極が違う。負極では酸化が起きて電子が出る。正極では還元が起きる。' };
@@ -217,6 +264,10 @@ export function judge(machine: MachineKind, a: Answer): Verdict {
     if (!r.inputs.every(([s, n]) => a.reactants.find(([x]) => x === s)?.[1] === n)) {
       return { ok: false, part: 'coefficients', recipe: r, message: '混ぜる比が違う。[H⁺] = Ka × [酸]/[塩] から比を計算しろ。最も簡単な整数比で入れる。' };
     }
+  } else if (r.free) {
+    // 生成物の比が決まらない反応：原子の数が合っていればよい
+    const f = (side: [string | null, number][]) => side.map(([s, n]) => [sub(s!).formula!, n] as [string, number]);
+    if (!isBalanced(f(a.reactants), f(a.products))) return { ok: false, part: 'coefficients', recipe: r, message: '係数が違う。両辺の原子の数を数えろ。' };
   } else if (!r.loose) {
     const okIn = r.inputs.every(([s, n]) => a.reactants.find(([x]) => x === s)?.[1] === n);
     const okOut = outs.every(([s, n]) => a.products.find(([g]) => g === s)?.[1] === n);
@@ -235,9 +286,21 @@ export function judge(machine: MachineKind, a: Answer): Verdict {
 }
 
 /** 採点に通った設定を装置に書き込む。order はプレイヤーが入れた生成物の順（＝出口の順） */
-export function configure(e: Ent, r: Recipe, order: string[]) {
+export function configure(e: Ent, r: Recipe, order: string[], poles?: ('c' | 'a')[]) {
   e.recipe = r.id;
   e.outOrder = r.machine === 'battery' ? ['e', ...order] : order;
+  e.outSlot = undefined;
+  if (r.machine === 'electrolyzer' && poles) {
+    if (e.big) {
+      // 陰極側の生成物は左手、陽極側は右手から出す
+      const C = [3, 5, 0], A = [2, 4, 1];
+      let c = 0, a2 = 0;
+      e.outSlot = order.map((_, i) => (poles[i] === 'a' ? A[a2++] : C[c++]));
+    } else {
+      // 1 マスの古い電解槽：陰極のものを先に並べる
+      e.outOrder = [...order.filter((_, i) => poles[i] !== 'a'), ...order.filter((_, i) => poles[i] === 'a')];
+    }
+  }
   e.inBuf = {};
   e.outBuf = e.outOrder.map(() => 0);
   e.busy = false;
@@ -259,15 +322,61 @@ export function portDir(dir: Dir, port: number): Dir {
   return ((dir + [0, 1, 3][port]) % 4) as Dir;
 }
 
+/** 電解槽：i 番目の生成物が生じる極。'x' は溶液全体 */
+export const poleOf = (r: Recipe, i: number): 'c' | 'a' | 'x' => ((r.poles ?? 'ca')[i] ?? 'x') as 'c' | 'a' | 'x';
+/** 出口の場所の数 */
+export const slotCount = (e: Ent) => (e.big ? 6 : 3);
+export const SLOT_NAMES = { small: ['正面', '右手', '左手'], big: ['正面・左', '正面・右', '右手・手前', '左手・手前', '右手・奥', '左手・奥'] };
+
+/** 2×2 の装置のマス。a：0 奥 / 1 手前（正面側）、b：0 左手 / 1 右手 */
+function cell(e: Ent, a: number, b: number): [number, number] {
+  switch (e.dir) {
+    case 0: return [e.x + a, e.y + b];
+    case 1: return [e.x + 1 - b, e.y + a];
+    case 2: return [e.x + 1 - a, e.y + 1 - b];
+    default: return [e.x + b, e.y + 1 - a];
+  }
+}
+const BIG_SLOT: [number, number, number][] = [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 3], [0, 1, 1], [0, 0, 3]];
+export interface Port { x: number; y: number; d: Dir; tx: number; ty: number }
+/** 出口の場所 slot の、出口のあるマス (x, y)、出ていく向き d、出ていく先のマス (tx, ty) */
+export function slotPort(e: Ent, slot: number): Port {
+  if (!e.big) { const d = portDir(e.dir, slot); return { x: e.x, y: e.y, d, tx: e.x + DX[d], ty: e.y + DY[d] }; }
+  const [a, b, turn] = BIG_SLOT[slot], [x, y] = cell(e, a, b), d = ((e.dir + turn) % 4) as Dir;
+  return { x, y, d, tx: x + DX[d], ty: y + DY[d] };
+}
+/** i 番目の生成物の出口 */
+export const outPort = (e: Ent, i: number): Port => slotPort(e, e.outSlot?.[i] ?? i);
+/** 2×2 の装置の入口の目安（奥の面の 2 マス）。原料はどの面からでも入るが、ここから入れると出口とぶつからない */
+export function inDoors(e: Ent): { x: number; y: number; d: Dir }[] {
+  if (!e.big) return [];
+  return [0, 1].map((b) => { const [x, y] = cell(e, 0, b); return { x, y, d: e.dir }; });
+}
+/** 出口の場所を入れ替える（空いた場所なら移すだけ） */
+export function moveOutput(e: Ent, i: number, slot: number) {
+  if (!e.outOrder) return;
+  const slots = e.outOrder.map((_, k) => e.outSlot?.[k] ?? k);
+  const j = slots.indexOf(slot);
+  if (j >= 0) slots[j] = slots[i];
+  slots[i] = slot;
+  e.outSlot = slots;
+}
+
+/** n が、マス (x, y) へ向き d で物を送り出すか */
+function emits(w: World, n: Ent, x: number, y: number, d: Dir, depth = 0): boolean {
+  switch (n.kind) {
+    case 'belt': case 'extractor': case 'depot': case 'sampler': return n.dir === d;
+    case 'analyzer': return [0, 1].some((i) => portDir(n.dir, i) === d);
+    case 'splitter': return [0, 1, 2].some((i) => portDir(n.dir, i) === d);
+    case 'bridge': return through(w, n, d, depth + 1);
+    default: return !!n.outOrder && n.outOrder.some((_, i) => { const p = outPort(n, i); return p.d === d && p.tx === x && p.ty === y; });
+  }
+}
+
 /** 立体交差 b を向き d に通り抜ける流れがあるか（立体交差が続いていてもたどる） */
 function through(w: World, b: Ent, d: Dir, depth = 0): boolean {
   const n = at(w, b.x - DX[d], b.y - DY[d]);
-  if (!n || depth > 8) return false;
-  if ((n.kind === 'belt' || n.kind === 'extractor' || n.kind === 'depot' || n.kind === 'sampler') && n.dir === d) return true;
-  if (n.kind === 'bridge') return through(w, n, d, depth + 1);
-  if (n.kind === 'splitter') return [0, 1, 2].some((i) => portDir(n.dir, i) === d);
-  if (n.kind === 'analyzer') return [0, 1].some((i) => portDir(n.dir, i) === d);
-  return !!n.outOrder && n.outOrder.some((_, i) => portDir(n.dir, i) === d);
+  return !!n && depth <= 8 && emits(w, n, b.x, b.y, d, depth);
 }
 
 /** (x,y) へ流れ込んでくるものがあれば、その進行方向を返す。prefer の向きを優先する */
@@ -275,13 +384,7 @@ export function inflow(w: World, x: number, y: number, prefer?: Dir): Dir | null
   const order: Dir[] = prefer === undefined ? [0, 1, 2, 3] : [prefer, ((prefer + 1) % 4) as Dir, ((prefer + 3) % 4) as Dir];
   for (const d of order) {
     const n = at(w, x - DX[d], y - DY[d]);
-    if (!n) continue;
-    if ((n.kind === 'belt' || n.kind === 'extractor' || n.kind === 'depot' || n.kind === 'sampler') && n.dir === d) return d;
-    if (n.kind === 'analyzer' && [0, 1].some((i) => portDir(n.dir, i) === d)) return d;
-    // 立体交差は、その向こう側から同じ向きに流れ込んでいれば、こちらへ流れ出す
-    if (n.kind === 'bridge' && through(w, n, d)) return d;
-    if (n.kind === 'splitter' && [0, 1, 2].some((i) => portDir(n.dir, i) === d)) return d;
-    if (n.outOrder && n.outOrder.some((_, i) => portDir(n.dir, i) === d)) return d;
+    if (n && emits(w, n, x, y, d)) return d;
   }
   return null;
 }
@@ -294,8 +397,10 @@ export function autoDir(w: World, kind: Kind, x: number, y: number): Dir {
       if (n && n.kind !== 'extractor' && n.kind !== 'depot' && n.kind !== 'sampler' && n.kind !== 'hub' && !(n.kind === 'belt' && n.dir === (d + 2) % 4)) return d;
     }
   } else {
-    const d = inflow(w, x, y);
-    if (d !== null) return d;
+    for (const [fx, fy] of footprint(x, y, BIG.includes(kind) ? 2 : 1)) {
+      const d = inflow(w, fx, fy);
+      if (d !== null) return d;
+    }
   }
   const dx = HUB_CENTER[0] - (x + 0.5), dy = HUB_CENTER[1] - (y + 0.5);
   return (Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 0 : 2) : dy >= 0 ? 1 : 3) as Dir;
@@ -445,6 +550,7 @@ export function step(w: World, dt: number) {
       }
       case 'vent':
       case 'hub':
+      case 'part':
         break;
       default: {
         const r = recipeById(e.recipe);
@@ -461,7 +567,7 @@ export function step(w: World, dt: number) {
           if (e.prog >= 1) {
             e.busy = false;
             e.prog = 0;
-            w.fx.push({ x: e.x, y: e.y, type: 'react', s: e.outOrder[0] });
+            w.fx.push({ x: e.x + (sizeOf(e) - 1) / 2, y: e.y + (sizeOf(e) - 1) / 2, type: 'react', s: e.outOrder[0] });
             e.outOrder.forEach((s, i) => {
               e.outBuf![i] += r.outputs.find(([id]) => id === s)![1];
               discover(w, s);
@@ -470,8 +576,8 @@ export function step(w: World, dt: number) {
         }
         e.outOrder.forEach((s, i) => {
           if (e.outBuf![i] <= 0) return;
-          const d = portDir(e.dir, i);
-          if (push(w, e.x + DX[d], e.y + DY[d], d, s)) e.outBuf![i]--;
+          const p = outPort(e, i);
+          if (push(w, p.tx, p.ty, p.d, s)) e.outBuf![i]--;
         });
         e.stuck = !e.busy && e.outBuf.some((n) => n > 0) ? (e.stuck || 0) + dt : 0;
       }
@@ -485,9 +591,9 @@ export const SAVE_VERSION = 2;
 
 export function serialize(w: World): string {
   return JSON.stringify({
-    v: SAVE_VERSION, ents: [...w.ents.values()], chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
+    v: SAVE_VERSION, ents: [...w.ents.values()].filter((e) => e.kind !== 'part'), chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
     hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
-    discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved,
+    discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, practice: w.practice,
     playMs: Math.round(w.playMs), savedAt: Date.now(),
   });
 }
@@ -497,7 +603,8 @@ export function deserialize(json: string): World | null {
     const d = JSON.parse(json);
     if (d.v !== SAVE_VERSION || !Array.isArray(d.ents)) return null;
     const w = newWorld();
-    w.ents = new Map(d.ents.map((e: Ent) => [key(e.x, e.y), e]));
+    w.ents = new Map();
+    for (const e of d.ents as Ent[]) if (e.kind !== 'part') restore(w, e);
     for (const e of w.ents.values()) {
       if (e.recipe && !recipeById(e.recipe)) clearRecipe(e);
       if (e.item && !hasSub(e.item.s)) e.item = null;
@@ -537,6 +644,7 @@ export function deserialize(json: string): World | null {
     w.points = d.points | 0;
     w.up = { extract: d.up?.extract | 0, belt: d.up?.belt | 0, machine: d.up?.machine | 0 };
     w.solved = d.solved || [];
+    w.practice = d.practice || {};
     w.playMs = d.playMs || 0;
     return w;
   } catch {

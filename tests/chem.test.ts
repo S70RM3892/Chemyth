@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
+import { fitAnchor, inDoors, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
@@ -7,7 +8,7 @@ import { HUB_TILES, MAP_H, MAP_W, ZONES, hubTiles, zoneAt, zoneSpots, type Zone 
 import { GOALS, CHAPTERS, chapterOf } from '../src/content/goals';
 import { QUESTIONS, isCorrect } from '../src/content/questions';
 import { MACHINES } from '../src/content/machines';
-import { at, autoDir, inflow, configure, currentGoal, growHub, hubLevel, requiredOf, deserialize, doneCount, dueIds, goalCount, judge, learn, newWorld, place, schedule, serialize, setChapter, step, toolUnlocked, type Answer } from '../src/engine/world';
+import { at, autoDir, remove, inflow, configure, currentGoal, growHub, hubLevel, requiredOf, deserialize, doneCount, dueIds, goalCount, judge, learn, newWorld, place, schedule, serialize, setChapter, step, toolUnlocked, type Answer } from '../src/engine/world';
 import { REAGENTS, SETS, TESTS, isPositive } from '../src/content/samples';
 import { KNOWLEDGE } from '../src/content/knowledge';
 import { SYLLABUS, coverageOf } from '../src/content/syllabus';
@@ -46,10 +47,10 @@ describe('内容データ', () => {
     expect(new Set(RECIPES.map((r) => r.id)).size).toBe(RECIPES.length);
   });
   for (const r of RECIPES) {
-    it(`${r.name}：定義済みの物質だけを使い、正解の条件が選択肢にあり、出口は 3 つまで`, () => {
+    it(`${r.name}：定義済みの物質だけを使い、正解の条件が選択肢にあり、出口は 6 つまで`, () => {
       for (const [s] of [...r.inputs, ...r.outputs]) expect(() => sub(s)).not.toThrow();
       for (const a of r.accept) expect(CONDITIONS[r.machine].options).toContain(a);
-      expect(r.outputs.length).toBeLessThanOrEqual(3);
+      expect(r.outputs.length).toBeLessThanOrEqual(6);
       expect(r.source).not.toBe('');
       if (r.machine === 'battery') { expect(r.outputs[0][0]).toBe('e'); expect(r.inputs.map(([s]) => s)).toContain(r.neg); expect(r.inputs.map(([s]) => s)).toContain(r.pos); }
     });
@@ -183,10 +184,38 @@ describe('採点', () => {
     expect(v('reactor', { ...haber, reactants: [['N2', 1], ['O2', 1]] })).toBe('reactants');
   });
   it('電解槽は陰極と陽極の取り違えを見抜く', () => {
-    expect(v('electrolyzer', { reactants: [['H2O', 2]], products: [['O2', 1], ['H2', 2]], condition: '水 + NaOH' })).toBe('electrodes');
-    expect(v('electrolyzer', { reactants: [['H2O', 2]], products: [['H2', 2], ['O2', 1]], condition: '水のみ' })).toBe('condition');
-    expect(v('electrolyzer', { reactants: [['NaCl', 2], ['H2O', 2]], products: [['H2', 1], ['Cl2', 1], ['NaOH', 2]], condition: '飽和食塩水（陽イオン交換膜）' })).toBe('brine-electrolysis');
-    expect(v('electrolyzer', { reactants: [['NaCl', 2]], products: [['Na', 2], ['Cl2', 1]], condition: '融解塩（水なし）' })).toBe('molten-nacl');
+    expect(v('electrolyzer', { reactants: [['H2O', 2]], products: [['O2', 1], ['H2', 2]], poles: ['c', 'a'], condition: '水 + NaOH' })).toBe('electrodes');
+    expect(v('electrolyzer', { reactants: [['H2O', 2]], products: [['O2', 1], ['H2', 2]], poles: ['a', 'c'], condition: '水 + NaOH' })).toBe('water-electrolysis'); // 書く順は問わない
+    expect(v('electrolyzer', { reactants: [['H2O', 2]], products: [['H2', 2], ['O2', 1]], poles: ['c', 'a'], condition: '水のみ' })).toBe('condition');
+    expect(v('electrolyzer', { reactants: [['NaCl', 2], ['H2O', 2]], products: [['H2', 1], ['NaOH', 2], ['Cl2', 1]], poles: ['c', 'c', 'a'], condition: '飽和食塩水（陽イオン交換膜）' })).toBe('brine-electrolysis');
+    expect(v('electrolyzer', { reactants: [['NaCl', 2], ['H2O', 2]], products: [['H2', 1], ['Cl2', 1], ['NaOH', 2]], poles: ['c', 'a', 'a'], condition: '飽和食塩水（陽イオン交換膜）' })).toBe('electrodes'); // NaOH は陰極側
+    expect(v('electrolyzer', { reactants: [['NaCl', 2]], products: [['Na', 2], ['Cl2', 1]], poles: ['c', 'a'], condition: '融解塩（水なし）' })).toBe('molten-nacl');
+  });
+  it('1 つの極で 2 つのものが生じる電気分解を受けつける', () => {
+    // 硫酸銅(II)水溶液：陽極で O₂ と H₂SO₄（H⁺）
+    const cu: Answer = { reactants: [['CuSO4', 2], ['H2O', 2]], products: [['Cu', 2], ['O2', 1], ['H2SO4', 2]], poles: ['c', 'a', 'a'], condition: '水溶液・白金電極' };
+    expect(v('electrolyzer', cu)).toBe('cuso4-electrolysis');
+    expect(v('electrolyzer', { ...cu, poles: ['c', 'a', 'c'] })).toBe('electrodes');
+    // 鉛蓄電池の充電：硫酸はどちらの極に書いてもよい
+    const pb: Answer = { reactants: [['PbSO4', 2], ['H2O', 2]], products: [['Pb', 1], ['PbO2', 1], ['H2SO4', 2]], poles: ['c', 'a', 'a'], condition: '水 + H₂SO₄' };
+    expect(v('electrolyzer', pb)).toBe('lead-charge');
+    expect(v('electrolyzer', { ...pb, poles: ['c', 'a', 'c'] })).toBe('lead-charge');
+    // アルミナの溶融塩電解：陽極は CO だけ、CO₂ だけ、両方のどれでもよい
+    const al = (products: [string, number][], reactants: [string, number][]): Answer => ({ reactants, products, poles: products.map(([p]) => (p === 'Al' ? 'c' : 'a')), condition: '融解した氷晶石' });
+    expect(v('electrolyzer', al([['Al', 4], ['CO2', 3]], [['Al2O3', 2], ['C', 3]]))).toBe('hall-heroult');
+    expect(v('electrolyzer', al([['Al', 2], ['CO', 3]], [['Al2O3', 1], ['C', 3]]))).toBe('hall-heroult-co');
+    expect(v('electrolyzer', al([['Al', 4], ['CO', 2], ['CO2', 2]], [['Al2O3', 2], ['C', 4]]))).toBe('hall-heroult-mix');
+    expect(v('electrolyzer', al([['Al', 6], ['CO', 1], ['CO2', 4]], [['Al2O3', 3], ['C', 5]]))).toBe('hall-heroult-mix'); // 比が違っても原子の数が合えばよい
+    expect(v('electrolyzer', al([['Al', 4], ['CO', 1], ['CO2', 1]], [['Al2O3', 2], ['C', 2]]))).toBe('coefficients');
+    // 電解槽に書ける生成物の数：極ごとに 3 つまで
+    for (const r of RECIPES.filter((x) => x.machine === 'electrolyzer')) {
+      const n = (pole: string) => r.outputs.filter((_, i) => poleOf(r, i) === pole).length;
+      expect(n('c') + n('x'), r.id).toBeLessThanOrEqual(3);
+      expect(n('a') + n('x'), r.id).toBeLessThanOrEqual(3);
+    }
+  });
+  it('どの反応も、装置の出口の数に収まる', () => {
+    for (const r of RECIPES) expect(r.outputs.length, r.id).toBeLessThanOrEqual(6);
   });
   it('同じ原料でも生成物で反応を見分ける（エタノールの脱水）', () => {
     expect(v('reactor', { reactants: [['C2H5OH', 2]], products: [['C2H5OC2H5', 1], ['H2O', 1]], condition: '濃硫酸 130〜140 ℃' })).toBe('ether');
@@ -233,8 +262,8 @@ describe('工場の動作', () => {
   it('反応器は 1:3 で消費して 2 を出し、納品所に届いて点が入る', () => {
     const w = newWorld();
     w.progress[0] = 2;
-    expect(place(w, 'reactor', hx - 1, hy, 0)).toBeNull();
-    const e = at(w, hx - 1, hy)!;
+    expect(place(w, 'reactor', hx - 2, hy, 0)).toBeNull();
+    const e = at(w, hx - 2, hy)!;
     configure(e, rec('haber-bosch'), ['NH3']);
     e.inBuf = { N2: 1, H2: 3 };
     run(w, 4);
@@ -246,13 +275,17 @@ describe('工場の動作', () => {
 
   it('副生成物の出口がないと詰まり、廃棄口をつなぐと再開する', () => {
     const w = newWorld();
-    place(w, 'electrolyzer', hx - 1, hy, 0);
-    const e = at(w, hx - 1, hy)!;
-    configure(e, rec('water-electrolysis'), ['H2', 'O2']);
+    // 南向きに置くと、左手（陰極側）が東の納品所、右手（陽極側）が西を向く
+    place(w, 'electrolyzer', hx - 2, hy - 1, 1);
+    const e = at(w, hx - 2, hy - 1)!;
+    configure(e, rec('water-electrolysis'), ['H2', 'O2'], ['c', 'a']);
+    expect(e.outSlot).toEqual([3, 2]);
+    expect(outPort(e, 0)).toMatchObject({ tx: hx, ty: hy, d: 0 });
+    expect(outPort(e, 1)).toMatchObject({ tx: hx - 3, ty: hy, d: 2 });
     e.inBuf = { H2O: 4 };
     run(w, 10);
     expect(w.delivered.H2).toBe(2);
-    place(w, 'vent', hx - 1, hy + 1, 0);
+    place(w, 'vent', hx - 3, hy, 0);
     run(w, 5);
     expect(w.delivered.H2).toBe(4);
   });
@@ -261,13 +294,13 @@ describe('工場の動作', () => {
     const w = newWorld();
     expect(place(w, 'extractor', 30, 30, 0)).toBeNull();
     place(w, 'separator', 31, 30, 0);
-    place(w, 'vent', 31, 31, 0);
-    place(w, 'vent', 32, 30, 0);
+    place(w, 'vent', 33, 30, 0);
+    place(w, 'vent', 33, 31, 0);
     configure(at(w, 31, 30)!, rec('air-distillation'), ['N2', 'O2']);
     place(w, 'extractor', 1, 20, 0);
     place(w, 'separator', 2, 20, 0);
-    place(w, 'vent', 2, 21, 0);
-    place(w, 'vent', 3, 20, 0);
+    place(w, 'vent', 4, 20, 0);
+    place(w, 'vent', 4, 21, 0);
     configure(at(w, 2, 20)!, rec('seawater-distillation'), ['H2O', 'NaCl']);
     run(w, 12);
     expect(w.discovered).toEqual(expect.arrayContaining(['N2', 'O2', 'H2O', 'NaCl']));
@@ -335,7 +368,7 @@ describe('工場の動作', () => {
     const w = newWorld();
     place(w, 'reactor', 30, 30, 0);
     configure(at(w, 30, 30)!, rec('haber-bosch'), ['NH3']);
-    place(w, 'bridge', 31, 30, 0);
+    place(w, 'bridge', 32, 30, 0);
     w.points = 77; w.up.belt = 2; w.progress[0] = 3; w.progress[1] = 2; setChapter(w, 1); w.counts[1] = 4; w.stock.H2 = 4;
     const r = deserialize(serialize(w))!;
     expect(r.points).toBe(77);
@@ -368,8 +401,8 @@ describe('工場の動作', () => {
     expect(toolUnlocked(w, MACHINES.battery)).toBe(true);
     setChapter(w, 0);
     w.progress[0] = 2; w.counts[0] = 19;
-    place(w, 'reactor', hx - 1, hy, 0);
-    const e = at(w, hx - 1, hy)!;
+    place(w, 'reactor', hx - 2, hy, 0);
+    const e = at(w, hx - 2, hy)!;
     configure(e, rec('haber-bosch'), ['NH3']);
     e.inBuf = { N2: 1, H2: 3 };
     run(w, 4);
@@ -442,19 +475,85 @@ describe('工場の動作', () => {
     const g = CHAPTERS[0].goals[0];
     expect(requiredOf(w, g)).toBe(10);
     place(w, 'belt', hx - 1, hy, 0);
-    place(w, 'reactor', hx - 2, hy, 0);
+    place(w, 'reactor', hx - 4, hy, 0);   // 外側
+    place(w, 'reactor', hx - 2, hy + 2, 0); // 2×2 の半分だけが重なる
     w.progress[0] = 3;
     expect(growHub(w)).toBe(true);
     expect(w.hubSize).toBe(4);
     expect(hubLevel(w)).toBe(1);
     expect(at(w, hx - 1, hy)!.kind).toBe('hub');   // 重なったベルトは納品所に置き換わる
-    expect(at(w, hx - 2, hy)!.kind).toBe('reactor'); // 外側は残る
+    expect(at(w, hx - 4, hy)!.kind).toBe('reactor'); // 外側は残る
+    expect(at(w, hx - 2, hy + 2)).toBeUndefined();   // 半分重なった装置は、丸ごと撤去される
+    expect(at(w, hx - 2, hy + 3)).toBeUndefined();
     expect(requiredOf(w, g)).toBe(15);
     expect(requiredOf(w, CHAPTERS[9].goals[0])).toBe(8); // 仕分けは増やさない
     expect([...w.ents.values()].filter((e) => e.kind === 'hub').length).toBe(hubTiles(4).length);
     const r = deserialize(serialize(w))!;
     expect(r.hubSize).toBe(4);
     expect(growHub(r)).toBe(false);
+  });
+
+  it('2×2 の装置は 4 マスを占め、6 か所の出口をもつ', () => {
+    const w = newWorld();
+    expect(place(w, 'reactor', 10, 10, 0)).toBeNull();
+    const e = at(w, 10, 10)!;
+    expect(e.big).toBe(true);
+    for (const [x, y] of [[10, 10], [11, 10], [10, 11], [11, 11]]) expect(at(w, x, y)).toBe(e);
+    expect(place(w, 'belt', 11, 11, 0)).not.toBeNull();
+    expect(place(w, 'reactor', 11, 11, 0)).not.toBeNull();
+    expect(fitAnchor(w, 12, 12)).toEqual([12, 12]);
+    expect(fitAnchor(w, 12, 11)).toEqual([12, 11]);
+    place(w, 'belt', 13, 12, 0);
+    expect(fitAnchor(w, 13, 13)).toEqual([13, 13]);          // (13,12) がふさがっても、(13,13) を左上にすれば置ける
+    expect(fitAnchor(w, 12, 12)).toEqual([12, 12].map((n, i) => (i === 0 ? n - 1 : n))); // (12,12)-(13,13) は置けないので、左へずらす
+    for (const dir of [0, 1, 2, 3] as const) {
+      e.dir = dir;
+      const seen = new Set<string>();
+      for (let slot = 0; slot < slotCount(e); slot++) {
+        const p = slotPort(e, slot);
+        // 出口のマスは装置の中、出ていく先は装置の外
+        expect(at(w, p.x, p.y)).toBe(e);
+        expect(at(w, p.tx, p.ty)).not.toBe(e);
+        seen.add(`${p.tx},${p.ty}`);
+      }
+      expect(seen.size).toBe(6);
+      // 奥の面の 2 マスには出口がない
+      for (const d of inDoors(e)) expect(seen.has(`${d.x - [1, 0, -1, 0][d.d]},${d.y - [0, 1, 0, -1][d.d]}`)).toBe(false);
+    }
+    e.dir = 0;
+    // 出口から出たものを、隣のベルトが流れ込みとして認識する
+    configure(e, rec('soda-ash'), ['Na2CO3', 'H2O', 'CO2']);
+    expect(inflow(w, 12, 10)).toBe(0); // 正面・左
+    expect(inflow(w, 12, 11)).toBe(0); // 正面・右
+    expect(inflow(w, 11, 12)).toBe(1); // 右手・手前
+    expect(inflow(w, 10, 12)).toBeNull(); // 右手・奥は使っていない
+    moveOutput(e, 2, 4);
+    expect(inflow(w, 11, 12)).toBeNull();
+    expect(inflow(w, 10, 12)).toBe(1);
+    moveOutput(e, 0, 1); // 入れ替え
+    expect(e.outSlot).toEqual([1, 0, 4]);
+    // 保存して読み戻しても、大きさと出口が残る
+    const r = deserialize(serialize(w))!;
+    expect(at(r, 11, 11)).toBe(at(r, 10, 10));
+    expect(at(r, 10, 10)!.outSlot).toEqual([1, 0, 4]);
+    // 消すと 4 マスとも空く。元に戻せる
+    expect(remove(w, 11, 11)).toBe(true);
+    expect(at(w, 10, 10)).toBeUndefined();
+    expect(restore(w, e)).toBe(true);
+    expect(at(w, 11, 10)).toBe(e);
+  });
+
+  it('1 マスだった頃の装置は、そのまま 3 つの出口で動く', () => {
+    const w = newWorld();
+    w.progress[0] = 2;
+    const old = JSON.parse(serialize(w));
+    old.ents.push({ kind: 'reactor', x: hx - 1, y: hy, dir: 0, recipe: 'haber-bosch', outOrder: ['NH3'], inBuf: { N2: 1, H2: 3 }, outBuf: [0], busy: false, prog: 0 });
+    const r = deserialize(JSON.stringify(old))!;
+    const e = at(r, hx - 1, hy)!;
+    expect(e.big).toBeUndefined();
+    expect(slotCount(e)).toBe(3);
+    run(r, 4);
+    expect(r.delivered.NH3).toBe(2);
   });
 
   it('立体交差の先で曲がるベルトは、立体交差からの流れ込みを向きとして認識する', () => {

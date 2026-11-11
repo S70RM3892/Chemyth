@@ -2,12 +2,13 @@ import { CHAPTERS, TOTAL_GOALS } from './content/goals';
 import { HUB_CENTER, LAND, ZONES, hubRect, resourceAt, zoneAt } from './content/map';
 import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
-import { at, autoDir, configure, currentGoal, deserialize, doneCount, goalCount, requiredOf, isMachine, key, newWorld, place, remove, serialize, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { BIG, at, autoDir, configure, currentGoal, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
 import { recipeById } from './content/recipes';
 import { about, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
 import { attachInput, Z_MIN } from './ui/input';
 import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
+import { showDrills, showStructure } from './ui/practice';
 import { draw, type Camera } from './ui/render';
 import { setSound, sfx, soundOn } from './ui/sound';
 import { initTitle, skinButtons, slotName, store, themeButtons } from './ui/title';
@@ -15,14 +16,14 @@ import { applySkin, applyTheme } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
 import { drawToken } from './ui/token';
 
-type Placeable = Exclude<Kind, 'hub'>;
+type Placeable = Exclude<Kind, 'hub' | 'part'>;
 type Tool = 'pan' | 'erase' | Placeable;
 type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir };
 const SESSION_LIMIT_MS = 25 * 60 * 1000;
 const BUILD: Placeable[] = ['belt', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'sampler', 'analyzer', 'collector', 'splitter', 'bridge', 'depot', 'vent'];
 const SPEEDS = [1, 2, 4, 0];
 /** 複製：同じ設定の装置を続けて置く */
-interface Clone { kind: Placeable; recipe?: string; outOrder?: string[]; test?: string; sub?: string }
+interface Clone { kind: Placeable; recipe?: string; outOrder?: string[]; outSlot?: number[]; big?: boolean; test?: string; sub?: string }
 
 const TOOLS: { id: Tool; glyph: string; name: string; tip: string; color?: string; need: { done?: number; chapter?: number } }[] = [
   { id: 'pan', glyph: '☝', name: '見る', need: {}, tip: 'タップで選ぶ。装置やベルトから指を引くとベルトが伸びる。何もない所を引くと地図が動く。' },
@@ -132,7 +133,7 @@ function boot(data: HotData) {
     selected = null;
     for (const op of g.reverse()) {
       if (op.t === 'add') remove(world, op.x, op.y);
-      else if (op.t === 'del') { if (!at(world, op.ent.x, op.ent.y)) world.ents.set(key(op.ent.x, op.ent.y), op.ent); }
+      else if (op.t === 'del') restore(world, op.ent);
       else { const e = at(world, op.x, op.y); if (e) e.dir = op.dir; }
     }
     toast('ひとつ前に戻した', 1400);
@@ -201,7 +202,7 @@ function boot(data: HotData) {
     h('ol', { class: 'steps' },
       h('li', {}, h('b', {}, '採る'), '下の道具から「採取機」を選んでタップ。陸地では空気、資源地ではその産出物が、天然のままの姿で出てくる。'),
       h('li', {}, h('b', {}, 'つなぐ'), '装置から指を引くとベルトが伸びる。なぞった向きに流れ、角は自然に曲がる。'),
-      h('li', {}, h('b', {}, '設定する'), '装置を置くと設定が開く。原料、生成物の化学式、係数、条件を自分で決める。'),
+      h('li', {}, h('b', {}, '設定する'), '装置を置くと設定が開く。原料、生成物の化学式、係数、条件を自分で決める。蒸留塔・反応器・電解槽・電池は 2×2 マスで、出口が 6 か所ある。どの出口から何が出るかは、出口の絵柄でわかる。'),
       h('li', {}, h('b', {}, '納める'), 'ベルトを納品所までつなぐ。要らない副生成物は「廃棄口」へ。出口が詰まると装置は止まる。'),
       h('li', {}, h('b', {}, '強化する'), '研究点がたまったら「強化」。計算問題を解くと、採取・運搬・処理が速くなる。'),
     ),
@@ -214,6 +215,8 @@ function boot(data: HotData) {
     h('div', { class: 'menu' },
       h('button', { class: 'ghost', type: 'button', id: 'm-chapters', onclick: () => showChapters(panel()) }, '指令の一覧（章を切り替える）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-passages', onclick: () => showPassages(panel()) }, 'リード文課題（京大形式の空欄補充）'),
+      h('button', { class: 'ghost', type: 'button', id: 'm-drills', onclick: () => showDrills(panel()) }, '連鎖計算（京大形式の理論の大問。数値は毎回変わる）'),
+      h('button', { class: 'ghost', type: 'button', id: 'm-structure', onclick: () => showStructure(panel()) }, '配列決定（ペプチドのアミノ酸配列を実験事実から決める）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-syllabus', onclick: () => showSyllabus(panel()) }, '範囲表（入試範囲のどこまで進んだか）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-log', onclick: () => showLog(panel()) }, '記録（間違えたところ）'),
       h('button', { class: 'ghost', type: 'button', id: 'm-help', onclick: () => showHelp() }, '遊び方'),
@@ -270,7 +273,7 @@ function boot(data: HotData) {
   actCopy.onclick = () => {
     if (!selected || !copyable(selected)) return;
     const e = selected;
-    clone = { kind: e.kind as Placeable, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, test: e.test, sub: e.sub };
+    clone = { kind: e.kind as Placeable, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, big: e.big, test: e.test, sub: e.sub };
     selected = null;
     pick(clone.kind, true);
     sfx.ok();
@@ -286,7 +289,7 @@ function boot(data: HotData) {
     actCopy.hidden = !copyable(selected);
     act.hidden = false;
     const hr = hubRect(world.hubSize);
-    const ax = ((hub ? hr.x + hr.s / 2 : selected.x + 0.5) - cam.x) * cam.z + cw / 2;
+    const ax = ((hub ? hr.x + hr.s / 2 : selected.x + sizeOf(selected) / 2) - cam.x) * cam.z + cw / 2;
     const ay = ((hub ? hr.y : selected.y) - cam.y) * cam.z + ch / 2 - 14;
     act.style.transform = `translate(${Math.round(Math.min(cw - 110, Math.max(110, ax)))}px, ${Math.round(Math.max(64, ay))}px) translate(-50%, -100%)`;
   };
@@ -312,14 +315,20 @@ function boot(data: HotData) {
         return;
       }
       if (tool === 'pan') { if (selected) selected = null; else showZone(x, y); return; }
-      const err = doPlace(tool, x, y, tool === 'belt' ? beltDir : autoDir(world, tool, x, y));
+      // 2×2 の装置は、タップしたマスを含む空き場所に置く
+      const [px, py] = (BIG.includes(tool) ? fitAnchor(world, x, y) : null) ?? [x, y];
+      const err = doPlace(tool, px, py, tool === 'belt' ? beltDir : autoDir(world, tool, px, py));
       if (err) { toast(err); sfx.bad(); return; }
       sfx.place();
-      const placed = at(world, x, y)!;
+      const placed = at(world, px, py)!;
       if (clone && clone.kind === tool) {
         // 複製：設定を写す
         const r = recipeById(clone.recipe);
-        if (r && clone.outOrder) configure(placed, r, clone.outOrder.filter((s) => s !== 'e'));
+        if (r && clone.outOrder) {
+          configure(placed, r, clone.outOrder.filter((s) => s !== 'e'));
+          if (r.machine === 'electrolyzer') placed.outOrder = [...clone.outOrder];
+          if (clone.big === placed.big && clone.outSlot) placed.outSlot = [...clone.outSlot];
+        }
         placed.test = clone.test;
         placed.sub = clone.sub;
         return;

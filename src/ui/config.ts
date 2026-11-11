@@ -3,12 +3,12 @@ import { ELEMENTS } from '../content/elements';
 import { MACHINES } from '../content/machines';
 import { CONDITIONS, SHIFTS, electronsOf, productsOf, recipeById, type MachineKind, type Recipe } from '../content/recipes';
 import { label, sameAtoms, sub, subByFormula, SUBSTANCES } from '../content/substances';
-import { clearRecipe, configure, judge, learn, portDir, type Ent, type Kind, type World } from '../engine/world';
+import { DX, DY, clearRecipe, configure, inDoors, judge, learn, moveOutput, sizeOf, slotCount, slotPort, SLOT_NAMES, type Ent, type Kind, type World } from '../engine/world';
 import { h } from './dom';
 import { sfx } from './sound';
 import { elementIcon, tokenIcon } from './token';
 
-const PORT_NAME = ['正面', '右手', '左手'];
+type Placed = Exclude<Kind, 'hub' | 'part'>;
 const NAMED = SUBSTANCES.filter((s) => s.named);
 
 export function equation(r: Recipe): string {
@@ -39,7 +39,7 @@ function shuffle<T>(a: T[]): T[] {
 }
 
 /** 装置の説明ブロック */
-export function about(kind: Exclude<Kind, 'hub'>): HTMLElement {
+export function about(kind: Placed): HTMLElement {
   const m = MACHINES[kind];
   return h('dl', { class: 'about' },
     h('dt', {}, '働き'), h('dd', {}, m.what),
@@ -48,28 +48,62 @@ export function about(kind: Exclude<Kind, 'hub'>): HTMLElement {
   );
 }
 
-/** 装置を上から見た図。どの側から何が出るかを示す */
-export function diagram(e: Ent): HTMLElement {
-  const kind = e.kind as Exclude<Kind, 'hub'>;
-  const cells: (HTMLElement | null)[] = Array(9).fill(null);
-  const cellOf = [5, 7, 3, 1]; // 右・下・左・上
-  const names: string[] = kind === 'electrolyzer' ? ['陰極', '陽極', 'ほか'] : kind === 'battery' ? ['e⁻', '生成物', '生成物']
-    : kind === 'extractor' ? ['産出物'] : kind === 'depot' ? ['在庫'] : kind === 'sampler' ? ['試薬'] : kind === 'analyzer' ? ['陽性', '陰性'] : kind === 'collector' ? ['集めた気体'] : kind === 'splitter' ? ['出口', '出口', '出口']
-    : kind === 'vent' || kind === 'belt' || kind === 'bridge' ? [] : PORT_NAME;
-  const count = e.outOrder ? e.outOrder.length : names.length;
-  for (let i = 0; i < count; i++) {
-    const d = portDir(e.dir, i);
-    const s = e.outOrder?.[i];
-    const c = h('div', { class: 'port' }, h('span', { class: 'arrow' }, '→↓←↑'[d]), h('span', {}, s ? label(s) : names[i]));
-    if (s) c.style.setProperty('--dot', sub(s).color);
-    cells[cellOf[d]] = c;
-  }
-  const g = h('div', { class: 'diagram' });
-  g.setAttribute('aria-label', '出口の向き');
-  for (let i = 0; i < 9; i++) {
-    if (i === 4) { const c = h('div', { class: 'core' }, MACHINES[kind].glyph); c.style.background = MACHINES[kind].color; g.append(c); }
-    else g.append(cells[i] ?? h('div', {}));
-  }
+/** 装置を上から見た図。どの出口から何が出て、どこから入れるかを示す。
+ *  swap を渡すと、出口をタップして場所を入れ替えられる */
+export function diagram(e: Ent, swap?: () => void): HTMLElement {
+  const kind = e.kind as Placed, size = sizeOf(e), big = size === 2, N = size + 2;
+  const g = h('div', { class: 'diagram' + (big ? ' big' : '') });
+  g.setAttribute('aria-label', '入口と出口の向き');
+  g.style.gridTemplateColumns = `repeat(${N}, var(--cell))`;
+  const put = (c: HTMLElement, tx: number, ty: number) => { c.style.gridColumn = String(tx - e.x + 2); c.style.gridRow = String(ty - e.y + 2); g.append(c); };
+  const isM = kind === 'separator' || kind === 'reactor' || kind === 'electrolyzer' || kind === 'battery' || kind === 'collector';
+  // まだ設定していないときに出す、出口ごとの名前
+  const blank = (slot: number): string | null => {
+    if (kind === 'electrolyzer') return big ? ([3, 5, 0].includes(slot) ? '陰極側' : '陽極側') : ['陰極', '陽極', 'ほか'][slot];
+    if (kind === 'battery') return slot === 0 ? 'e⁻' : big || slot < 3 ? '生成物' : null;
+    if (kind === 'extractor') return slot === 0 ? '産出物' : null;
+    if (kind === 'depot') return slot === 0 ? '在庫' : null;
+    if (kind === 'sampler') return slot === 0 ? '試薬' : null;
+    if (kind === 'collector') return slot === 0 ? '集めた気体' : null;
+    if (kind === 'analyzer') return ['陽性', '陰性'][slot] ?? null;
+    if (kind === 'splitter') return '出口';
+    if (kind === 'vent' || kind === 'belt' || kind === 'bridge') return null;
+    return '出口';
+  };
+  let sel: number | null = null;
+  const canSwap = !!swap && !!e.outOrder && kind !== 'electrolyzer' && kind !== 'collector';
+  const paint = () => {
+    g.replaceChildren();
+    const core = h('div', { class: 'core' }, MACHINES[kind].glyph);
+    core.style.background = MACHINES[kind].color;
+    core.style.gridColumn = `2 / span ${size}`; core.style.gridRow = `2 / span ${size}`;
+    g.append(core);
+    const used = new Map<number, number>();
+    e.outOrder?.forEach((_, i) => used.set(e.outSlot?.[i] ?? i, i));
+    for (let slot = 0; slot < slotCount(e); slot++) {
+      const p = slotPort(e, slot), i = used.get(slot), s = i === undefined ? undefined : e.outOrder![i];
+      const name = s ? label(s) : e.outOrder ? (canSwap ? '空き' : null) : blank(slot);
+      if (name === null) continue;
+      const c = h(canSwap ? 'button' : 'div', { class: 'port' + (s ? ' out' : ' free') + (sel !== null && sel === i ? ' on' : '') }, h('span', { class: 'arrow' }, '→↓←↑'[p.d]), h('span', {}, name));
+      if (canSwap) {
+        (c as HTMLButtonElement).type = 'button';
+        c.id = `port-${slot}`;
+        c.onclick = () => {
+          if (sel === null) { if (i !== undefined) sel = i; }
+          else { if (sel !== i) { moveOutput(e, sel, slot); swap!(); } sel = null; }
+          sfx.tap();
+          paint();
+        };
+      }
+      if (s) c.style.setProperty('--dot', sub(s).color);
+      put(c, p.tx, p.ty);
+    }
+    // 入口の目安：奥の面
+    if (isM) for (const d of big ? inDoors(e) : [{ x: e.x, y: e.y, d: e.dir }]) {
+      put(h('div', { class: 'port in' }, h('span', { class: 'arrow' }, '→↓←↑'[d.d]), h('span', {}, '入口')), d.x - DX[d.d], d.y - DY[d.d]);
+    }
+  };
+  paint();
   return g;
 }
 
@@ -91,11 +125,12 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
 
   const side = () => {
     const box = h('div', { class: 'side' });
-    const paint = () => box.replaceChildren(
-      diagram(e),
+    const paint = () => box.replaceChildren(...[
+      diagram(e, () => {}),
+      e.outOrder && !isCell && !isCol ? h('p', { class: 'muted tiny' }, '出口をタップしてから、移したい場所をタップすると入れ替わる。') : null,
       h('button', { class: 'ghost', type: 'button', id: 'cfg-rotate', onclick: () => { act.rotate(e); paint(); } }, '↻ 向きを変える'),
       h('button', { class: 'ghost warn', type: 'button', id: 'cfg-erase', onclick: () => { act.erase(e); act.close(); } }, '✕ この装置を消す'),
-    );
+    ].filter((n): n is HTMLElement => n !== null));
     paint();
     return box;
   };
@@ -170,7 +205,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
   const form = () => {
     const picked = new Map<string, number>();
     /** 生成物の欄。化学式を打つか、名前で選ぶ */
-    const prods: { coef: number; formula: string; id?: string }[] = [];
+    const prods: { coef: number; formula: string; id?: string; pole: 'c' | 'a' }[] = [];
     let active = 0, condition = '', neg = '', pos = '', electrons = 1, shift = '';
     let lastRecipe: Recipe | null = null;
     let asked = false;
@@ -223,21 +258,45 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
       return b;
     }));
 
-    const slotName = (i: number) => (isCell ? ['陰極', '陽極', 'ほか'][i] : isBat ? ['右手', '左手'][i] : PORT_NAME[i]);
-    const maxProds = isBat ? 2 : 3;
+    const names = e.big ? SLOT_NAMES.big : SLOT_NAMES.small;
+    const slotName = (i: number) => (isBat ? names[i + 1] : names[i]) ?? '';
+    /** 出口の数の上限。電解槽は極ごとに 3 つまで */
+    const maxProds = isBat ? slotCount(e) - 1 : slotCount(e);
+    const perPole = e.big ? 3 : 2;
+    const row = (p: (typeof prods)[number], i: number, tag: string) => {
+      const text = p.id ? sub(p.id).name : p.formula ? pretty(p.formula) : '下のキーで化学式を入れる';
+      const slot = h('button', { class: 'slot' + (i === active ? ' on' : '') + (p.formula || p.id ? '' : ' empty') + (p.id ? ' named' : ''), type: 'button', id: `cfg-slot-${i}` }, text);
+      slot.onclick = () => { active = i; paintProds(); };
+      const del = prods.length > (isCell ? 2 : 1) && !(isCell && prods.filter((q) => q.pole === p.pole).length === 1)
+        ? h('button', { class: 'ghost mini', type: 'button', id: `cfg-del-${i}`, ariaLabel: 'この欄を消す', onclick: () => { prods.splice(i, 1); active = Math.min(active, prods.length - 1); paintProds(); } }, '✕') : null;
+      return h('div', { class: 'row' }, h('span', { class: 'tag' }, tag), isSep ? null : stepper(`cfg-pc-${i}`, () => p.coef, (n) => { p.coef = n; }), slot, del);
+    };
+    const adder = (id: string, text: string, pole: 'c' | 'a') => {
+      const b = h('button', { class: 'ghost', type: 'button', id }, text);
+      b.onclick = () => { prods.push({ coef: 1, formula: '', pole }); active = prods.length - 1; paintProds(); };
+      return b;
+    };
     const paintProds = () => {
-      prodRows.replaceChildren(...prods.map((p, i) => {
-        const text = p.id ? sub(p.id).name : p.formula ? pretty(p.formula) : '下のキーで化学式を入れる';
-        const slot = h('button', { class: 'slot' + (i === active ? ' on' : '') + (p.formula || p.id ? '' : ' empty') + (p.id ? ' named' : ''), type: 'button', id: `cfg-slot-${i}` }, text);
-        slot.onclick = () => { active = i; paintProds(); };
-        return h('div', { class: 'row' }, h('span', { class: 'tag' }, slotName(i)),
-          isSep ? null : stepper(`cfg-pc-${i}`, () => p.coef, (n) => { p.coef = n; }), slot);
-      }));
+      if (isCell) {
+        // 極ごとに欄を分ける。1 つの極で 2 つ以上のものが生じてもよい
+        const group = (pole: 'c' | 'a', title: string, hint: string, addId: string) => {
+          const mine = prods.map((p, i) => [p, i] as const).filter(([p]) => p.pole === pole);
+          return h('div', { class: 'pole ' + pole }, h('p', { class: 'pole-t' }, h('b', {}, title), h('span', { class: 'muted' }, hint)),
+            ...mine.map(([p, i], k) => row(p, i, `${pole === 'c' ? '陰' : '陽'}${k + 1}`)),
+            mine.length < perPole ? adder(addId, `＋ ${pole === 'c' ? '陰極' : '陽極'}側に生成物を追加`, pole) : null);
+        };
+        prodRows.replaceChildren(
+          group('c', '陰極（−）側', '還元が起きる。左手の出口から出る。', 'cfg-add-c'),
+          group('a', '陽極（＋）側', '酸化が起きる。右手の出口から出る。', 'cfg-add-a'));
+        more.hidden = true;
+        return;
+      }
+      prodRows.replaceChildren(...prods.map((p, i) => row(p, i, slotName(i))));
       more.hidden = prods.length >= maxProds;
     };
-    const more = h('button', { class: 'ghost', type: 'button', id: 'cfg-add' }, '＋ 生成物を追加');
-    more.onclick = () => { prods.push({ coef: 1, formula: '' }); active = prods.length - 1; paintProds(); };
-    for (let i = 0; i < (isCell ? 2 : 1); i++) prods.push({ coef: 1, formula: '' });
+    const more = adder('cfg-add', '＋ 生成物を追加', 'c');
+    prods.push({ coef: 1, formula: '', pole: 'c' });
+    if (isCell) prods.push({ coef: 1, formula: '', pole: 'a' });
 
     // 化学式の専用キー。元素は多めに並べて、答えの手がかりにならないようにする
     const press = (k: string) => {
@@ -304,7 +363,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
       h('section', {}, h('h3', {}, `${n[0]} ${isCol ? '集める気体' : '原料'}`), h('p', { class: 'muted' }, isCol ? 'この装置で集める気体を選べ。' : 'この装置に流し込む物質を選べ。' + (isSep ? '' : '選んだら係数を合わせろ。')), chips, reactRows),
       isBat ? h('section', {}, h('h3', {}, `${n[1]} 負極と正極`), poleBox) : null,
       isCol ? null : h('section', {}, h('h3', {}, `${n[isBat ? 2 : 1]} ${isSep ? '取り出す物質' : '生成物'}`),
-        h('p', { class: 'muted' }, isCell ? '各極で生じる物質を化学式で入れろ。溶液中にできるものがあれば追加しろ。' : isBat ? '電子のほかにできる物質を入れろ。' : '入れた順に、正面・右手・左手の出口から出る。'),
+        h('p', { class: 'muted' }, isCell ? '各極で生じる物質を化学式で入れろ。1 つの極で 2 つ以上のものが生じるときは、その極の側に欄を足せ。溶液に残るもの（酸や塩基）も、それが生じる極の側に書く。' : isBat ? '電子のほかにできる物質を入れろ。' : `入れた順に、${names.slice(0, 3).join('・')}… の出口から出る。出口の場所は、設定のあとで入れ替えられる。`),
         prodRows, more, keypad),
       isBat ? h('section', {}, h('h3', {}, `${n[3]} 流れる電子 e⁻ の数`), h('div', { class: 'row' }, stepper('cfg-el', () => electrons, (x) => { electrons = x; }), h('span', { class: 'muted' }, '上の係数で反応したとき、導線を流れる電子は何 mol か。'))) : null,
       h('section', {}, h('h3', {}, `${n[isCol ? 1 : isBat ? 4 : 2]} ${cond.label}`), condChips),
@@ -319,7 +378,8 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
       if (picked.size === 0) { feedback.textContent = '原料を選べ。'; return; }
       const filled = prods.filter((p) => p.formula || p.id);
       const products = filled.map((p) => [p.id ?? subByFormula(p.formula)?.id ?? null, p.coef] as [string | null, number]);
-      const verdict = judge(kind, { reactants: [...picked], products, condition, neg, pos, electrons, shift });
+      const poles = filled.map((p) => p.pole);
+      const verdict = judge(kind, { reactants: [...picked], products, condition, neg, pos, electrons, shift, poles: isCell ? poles : undefined });
       if (verdict.ok && review) {
         if (verdict.recipe.id !== review.recipe.id) { feedback.textContent = `それは別の反応（${verdict.recipe.name}）だ。`; return; }
         sfx.ok();
@@ -329,7 +389,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
       }
       if (verdict.ok && verdict.recipe.ask && !asked) { askCondition(verdict.recipe, () => { asked = true; f.requestSubmit(); }); return; }
       if (verdict.ok) {
-        configure(e, verdict.recipe, isCol ? productsOf(verdict.recipe).map(([s]) => s) : products.map(([p]) => p!));
+        configure(e, verdict.recipe, isCol ? productsOf(verdict.recipe).map(([s]) => s) : products.map(([p]) => p!), isCell ? poles : undefined);
         const gain = learn(w, verdict.recipe, fails === 0);
         sfx.ok();
         act.stamp('正解');

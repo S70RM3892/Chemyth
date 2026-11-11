@@ -1,7 +1,7 @@
-import { ZONES, hubRect, zoneAt, zoneSpots, type Zone } from '../content/map';
+import { ZONES, hubRect, isSea, zoneAt, zoneSpots, type Zone } from '../content/map';
 import { MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { beltSpeed, currentGoal, DX, DY, goalCount, inflow, isMachine, portDir, requiredOf, type Dir, type Ent, type World } from '../engine/world';
+import { beltSpeed, currentGoal, DX, DY, goalCount, inDoors, inflow, isMachine, outPort, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { mix, onThemeChange, palette, type Palette } from './theme';
 import { sprite } from './token';
 
@@ -82,7 +82,7 @@ function buildChunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
     t.lineWidth = punk ? 1.1 : 1.4;
     t.lineCap = 'round';
     t.beginPath();
-    if (zn === 'sea') {
+    if (isSea(zn)) {
       const r = TS * 0.62, p = TS * 1.1;
       for (let y = -mod(OY, r); y < SIZE + r; y += r) {
         const row = Math.round((y + OY) / r);
@@ -177,7 +177,7 @@ function buildChunkPunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
   for (let ty = 0; ty < CH; ty++) for (let tx = 0; tx < CH; tx++) {
     const x = ox + tx, y = oy + ty, zn = zoneAt(x, y);
     if (!zn) continue;
-    const core = ZONES[zn].tint[1], px = tx * TS, py = ty * TS, sea = zn === 'sea';
+    const core = ZONES[zn].tint[1], px = tx * TS, py = ty * TS, sea = isSea(zn);
     g.fillStyle = sea ? (light ? '#62aebf' : '#06202b') : mix(base, core, light ? 0.62 : 0.36);
     g.fillRect(px, py, TS, TS);
     if (sea) {
@@ -483,11 +483,12 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
 
   // ---- 装置 ----
   for (const e of w.ents.values()) {
-    if (e.kind === 'belt' || e.kind === 'bridge' || e.kind === 'hub' || !inView(e)) continue;
+    if (e.kind === 'belt' || e.kind === 'bridge' || e.kind === 'hub' || e.kind === 'part' || !(inView(e) || (e.big && inView({ ...e, x: e.x + 1, y: e.y + 1 })))) continue;
     if (!born.has(e)) born.set(e, t);
     const age = t - born.get(e)!;
     const pop = age < 0.24 ? 0.7 + 0.3 * (1 - Math.pow(1 - age / 0.24, 3)) + 0.1 * Math.sin((age / 0.24) * Math.PI) : 1;
-    machine(ctx, P, sx(e.x + 0.5), sy(e.y + 0.5), z * pop, z, e, t);
+    const sz = sizeOf(e);
+    machine(ctx, P, sx(e.x + sz / 2), sy(e.y + sz / 2), z * pop * sz, z, e, t);
   }
 
   // 闇の炉：稼働中の装置と納品所は、暗がりに光をこぼす
@@ -502,7 +503,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     };
     const hr0 = hubRect(w.hubSize);
     pool(hr0.x + hr0.s / 2, hr0.y + hr0.s / 2, hr0.s * 1.6 + 1, 0.2 + 0.04 * Math.sin(t * 2.3));
-    for (const e of w.ents.values()) if (e.busy && inView(e)) pool(e.x + 0.5, e.y + 0.5, 1.5, 0.22 + 0.06 * Math.sin(t * 9 + e.x));
+    for (const e of w.ents.values()) if (e.busy && inView(e)) pool(e.x + sizeOf(e) / 2, e.y + sizeOf(e) / 2, 1 + sizeOf(e) * 0.5, 0.22 + 0.06 * Math.sin(t * 9 + e.x));
     ctx.globalCompositeOperation = 'source-over';
   }
   const hr = hubRect(w.hubSize);
@@ -513,7 +514,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     const e = view.selected;
     if (punk) {
       // 照準の角
-      const cx0 = sx(e.x + 0.5), cy0 = sy(e.y + 0.5), r = z * (0.6 + 0.03 * Math.sin(t * 6)), L = z * 0.2;
+      const cx0 = sx(e.x + sizeOf(e) / 2), cy0 = sy(e.y + sizeOf(e) / 2), r = z * (sizeOf(e) * 0.5 + 0.1 + 0.03 * Math.sin(t * 6)), L = z * 0.2;
       ctx.strokeStyle = P.hi; ctx.lineWidth = lw(0.08); ctx.lineCap = 'butt';
       ctx.beginPath();
       for (const [ax, ay] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
@@ -526,7 +527,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.lineWidth = lw(0.12);
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.arc(sx(e.x + 0.5), sy(e.y + 0.5), z * 0.62, -0.4 + Math.sin(t * 2) * 0.1, Math.PI * 2 - 0.9);
+    ctx.arc(sx(e.x + sizeOf(e) / 2), sy(e.y + sizeOf(e) / 2), z * (sizeOf(e) === 2 ? 1.3 : 0.62), -0.4 + Math.sin(t * 2) * 0.1, Math.PI * 2 - 0.9);
     ctx.stroke();
     ctx.globalAlpha = 1;
     }
@@ -708,28 +709,45 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
     ctx.fillText(info.glyph, cx - u * 0.325, cy - u * 0.315);
   }
 
-  // 出口の矢じり
-  const port = (d: number, color: string, text?: string) => {
+  // 出口の矢じり。大きい装置では、出口のあるマスごとに描く。ox, oy は装置の中心から出口のマスの中心までのずれ（マス単位）
+  const sz = sizeOf(e), pu = u / sz, EO = sz === 2 ? 0.34 : 0.42, mx = e.x + sz / 2, my = e.y + sz / 2;
+  const port = (d: number, color: string, text?: string, ox = 0, oy = 0, s?: string) => {
+    const bx = cx + ox * pu, by = cy + oy * pu;
     ctx.save();
-    ctx.translate(cx + DX[d] * u * 0.42, cy + DY[d] * u * 0.42);
+    ctx.translate(bx + DX[d] * pu * EO, by + DY[d] * pu * EO);
     ctx.rotate((d * Math.PI) / 2);
     ctx.beginPath();
-    ctx.moveTo(u * 0.15, 0); ctx.lineTo(-u * 0.03, -u * 0.12); ctx.lineTo(-u * 0.03, u * 0.12);
+    ctx.moveTo(pu * 0.15, 0); ctx.lineTo(-pu * 0.03, -pu * 0.12); ctx.lineTo(-pu * 0.03, pu * 0.12);
     ctx.closePath();
     inked(color);
     ctx.restore();
-    if (text && z >= 48) {
-      ctx.font = `600 ${u * 0.13}px ${FONT_MONO}`;
+    if (sz === 2 && s && z >= 26) {
+      // 何が出る出口かを、出口のすぐ内側に絵柄で示す
+      const d2 = pu * 0.44, ix = bx + DX[d] * pu * 0.06, iy = by + DY[d] * pu * 0.06;
+      disc(ix, iy, d2 * 0.52); ctx.fillStyle = P.plate; ctx.fill(); ctx.strokeStyle = P.ink; ctx.lineWidth = line * 0.6; ctx.stroke();
+      ctx.drawImage(sprite(s), ix - d2 / 2, iy - d2 / 2, d2, d2);
+    } else if (text && z >= 48) {
+      ctx.font = `600 ${pu * 0.13}px ${FONT_MONO}`;
       ctx.fillStyle = P.ink;
       ctx.textAlign = 'center';
       ctx.fillText(text, cx + DX[d] * u * 0.2 + (DY[d] ? u * 0.26 : 0), cy + DY[d] * u * 0.25 + (DX[d] ? u * 0.3 : 0));
     }
   };
+  // 入口の目安：奥の面に、内向きの切り欠き
+  for (const dr of inDoors(e)) {
+    ctx.save();
+    ctx.translate(cx + (dr.x + 0.5 - mx) * pu - DX[dr.d] * pu * (EO + 0.1), cy + (dr.y + 0.5 - my) * pu - DY[dr.d] * pu * (EO + 0.1));
+    ctx.rotate((dr.d * Math.PI) / 2);
+    ctx.strokeStyle = P.ink; ctx.lineWidth = line;
+    ctx.beginPath(); ctx.moveTo(-pu * 0.06, -pu * 0.13); ctx.lineTo(pu * 0.08, 0); ctx.lineTo(-pu * 0.06, pu * 0.13); ctx.stroke();
+    ctx.restore();
+  }
   if (e.kind === 'extractor' || e.kind === 'depot' || e.kind === 'sampler') port(e.dir, P.plate);
   else if (e.kind === 'analyzer') { port(portDir(e.dir, 0), '#7fc06a', '陽'); port(portDir(e.dir, 1), P.red, '陰'); }
   else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), P.plate);
-  else if (e.outOrder) e.outOrder.forEach((s, i) => port(portDir(e.dir, i), sub(s).color, label(s)));
-  else if (unset) port(e.dir, P.plate);
+  else if (e.outOrder) e.outOrder.forEach((s2, i) => { const p = outPort(e, i); port(p.d, sub(s2).color, label(s2), p.x + 0.5 - mx, p.y + 0.5 - my, s2); });
+  else if (unset) { const p = slotPort(e, 0); port(p.d, P.plate, undefined, p.x + 0.5 - mx, p.y + 0.5 - my); }
+  if (e.kind === 'electrolyzer' && e.big) poleMarks(ctx, P, e, cx, cy, pu, line);
 
   // 赤ペンの印：設定が要る「？」、詰まっている「！」
   const jam = (e.stuck || 0) > 2.5;
@@ -766,19 +784,30 @@ function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: 
   ctx.lineJoin = 'miter';
   ctx.lineCap = 'butt';
 
-  // 出口：筐体から突き出た管
-  const port = (d: number, color: string, text?: string) => {
+  // 出口：筐体から突き出た管。大きい装置では、出口のあるマスごとに描く
+  const sz = sizeOf(e), pu = u / sz, EO = sz === 2 ? 0.42 : 0.46, mx = e.x + sz / 2, my = e.y + sz / 2;
+  const marks: (() => void)[] = [];
+  const port = (d: number, color: string, text?: string, ox = 0, oy = 0, s?: string) => {
+    const bx = cx + ox * pu, by = cy + oy * pu;
     ctx.save();
-    ctx.translate(cx + DX[d] * a, cy + DY[d] * a);
+    ctx.translate(bx + DX[d] * pu * EO, by + DY[d] * pu * EO);
     ctx.rotate((d * Math.PI) / 2);
     ctx.fillStyle = light ? '#8d969e' : '#4d545c';
     ctx.strokeStyle = INK; ctx.lineWidth = line * 0.8;
-    ctx.fillRect(-u * 0.02, -u * 0.13, u * 0.1, u * 0.26); ctx.strokeRect(-u * 0.02, -u * 0.13, u * 0.1, u * 0.26);
-    ctx.beginPath(); ctx.moveTo(u * 0.2, 0); ctx.lineTo(u * 0.08, -u * 0.1); ctx.lineTo(u * 0.08, u * 0.1); ctx.closePath();
+    ctx.fillRect(-pu * 0.02, -pu * 0.13, pu * 0.1, pu * 0.26); ctx.strokeRect(-pu * 0.02, -pu * 0.13, pu * 0.1, pu * 0.26);
+    ctx.beginPath(); ctx.moveTo(pu * 0.2, 0); ctx.lineTo(pu * 0.08, -pu * 0.1); ctx.lineTo(pu * 0.08, pu * 0.1); ctx.closePath();
     ctx.fillStyle = color; ctx.fill(); ctx.stroke();
     ctx.restore();
-    if (text && z >= 48) {
-      ctx.font = `600 ${u * 0.12}px ${FONT_MONO}`;
+    if (sz === 2 && s && z >= 26) {
+      // 筐体を描いたあとで、出口のすぐ内側に中身の絵柄を載せる
+      const d2 = pu * 0.44, ix = bx + DX[d] * pu * 0.1, iy = by + DY[d] * pu * 0.1;
+      marks.push(() => {
+        ctx.beginPath(); ctx.arc(ix, iy, d2 * 0.52, 0, Math.PI * 2);
+        ctx.fillStyle = '#eef0ea'; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = line * 0.6; ctx.stroke();
+        ctx.drawImage(sprite(s), ix - d2 / 2, iy - d2 / 2, d2, d2);
+      });
+    } else if (text && z >= 48) {
+      ctx.font = `600 ${pu * 0.12}px ${FONT_MONO}`;
       ctx.textAlign = 'center';
       const tx = cx + DX[d] * u * 0.22 + (DY[d] ? u * 0.2 : 0), ty = cy + DY[d] * u * 0.25 + (DX[d] ? u * 0.25 : 0);
       ctx.fillStyle = '#eef0ea';
@@ -786,11 +815,22 @@ function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: 
     }
   };
   const ports = () => {
+    // 入口の目安：奥の面の受け口
+    for (const dr of inDoors(e)) {
+      ctx.save();
+      ctx.translate(cx + (dr.x + 0.5 - mx) * pu - DX[dr.d] * pu * (EO + 0.06), cy + (dr.y + 0.5 - my) * pu - DY[dr.d] * pu * (EO + 0.06));
+      ctx.rotate((dr.d * Math.PI) / 2);
+      ctx.fillStyle = INK;
+      ctx.fillRect(-pu * 0.08, -pu * 0.16, pu * 0.14, pu * 0.32);
+      ctx.strokeStyle = P.hi; ctx.lineWidth = line * 0.7;
+      ctx.beginPath(); ctx.moveTo(-pu * 0.05, -pu * 0.09); ctx.lineTo(pu * 0.03, 0); ctx.lineTo(-pu * 0.05, pu * 0.09); ctx.stroke();
+      ctx.restore();
+    }
     if (e.kind === 'extractor' || e.kind === 'depot' || e.kind === 'sampler') port(e.dir, '#eef0ea');
     else if (e.kind === 'analyzer') { port(portDir(e.dir, 0), '#7fc06a', '陽'); port(portDir(e.dir, 1), P.red, '陰'); }
     else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), '#eef0ea');
-    else if (e.outOrder) e.outOrder.forEach((s, i) => port(portDir(e.dir, i), sub(s).color, label(s)));
-    else if (unset) port(e.dir, '#eef0ea');
+    else if (e.outOrder) e.outOrder.forEach((s2, i) => { const p = outPort(e, i); port(p.d, sub(s2).color, label(s2), p.x + 0.5 - mx, p.y + 0.5 - my, s2); });
+    else if (unset) { const p = slotPort(e, 0); port(p.d, '#eef0ea', undefined, p.x + 0.5 - mx, p.y + 0.5 - my); }
   };
 
   // 影と筐体
@@ -839,6 +879,8 @@ function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: 
     ctx.textAlign = 'center';
     ctx.fillText(info.name.slice(0, 2), cx - a + u * 0.21, cy - a + u * 0.075);
   }
+  for (const m of marks) m();
+  if (e.kind === 'electrolyzer' && e.big) poleMarks(ctx, P, e, cx, cy, pu, line);
   // 状態ランプ：緑＝稼働、橙＝待機、赤の点滅＝設定待ち・詰まり
   const lamp = needs || jam ? (Math.sin(t * 10) > 0 ? P.red : '#3a1410') : busy ? '#58e06a' : e.recipe || e.test || e.sub || e.kind === 'extractor' ? '#ffb020' : '#3b4048';
   ctx.beginPath(); ctx.arc(cx + a - u * 0.14, cy - a + u * 0.07, u * 0.045, 0, Math.PI * 2);
@@ -1075,6 +1117,21 @@ function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, 
 }
 
 /** 角を落とした四角 */
+/** 電解槽：左半分が陰極（−）、右半分が陽極（＋） */
+function poleMarks(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy: number, pu: number, line: number) {
+  const f = e.dir as number, l = (f + 3) % 4, r = (f + 1) % 4;
+  for (const [side, text, color] of [[l, '−', '#3f7fc0'], [r, '＋', P.red]] as [number, string, string][]) {
+    const x = cx + DX[side] * pu * 0.68 - DX[f] * 0, y = cy + DY[side] * pu * 0.68 - DY[f] * 0;
+    ctx.beginPath(); ctx.arc(x, y, pu * 0.15, 0, Math.PI * 2);
+    ctx.fillStyle = color; ctx.fill();
+    ctx.strokeStyle = '#0b0d10'; ctx.lineWidth = line * 0.8; ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `700 ${pu * 0.22}px ${FONT_UI}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(text, x, y + pu * 0.01);
+  }
+}
+
 function chamfer(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, c: number) {
   ctx.beginPath();
   ctx.moveTo(x + c, y); ctx.lineTo(x + w - c, y); ctx.lineTo(x + w, y + c); ctx.lineTo(x + w, y + h - c);

@@ -1,3 +1,4 @@
+import { DRILLS } from './drills';
 import { KNOWLEDGE, type Knowledge } from './knowledge';
 import { PASSAGES, type Passage } from './passages';
 import { QUESTIONS, type Question } from './questions';
@@ -22,6 +23,8 @@ export interface Unit {
   knowledge?: string[];
   /** リード文課題 */
   passages?: string[];
+  /** 構造決定の演習の型（'iso-count-1' など）。連鎖計算は、演習の側がもつ項目の id で自動的に入る */
+  practice?: string[];
 }
 
 const B1 = '(1) 化学と人間生活', B2 = '(2) 物質の構成', B3 = '(3) 物質の変化とその利用';
@@ -54,7 +57,7 @@ export const SYLLABUS: Unit[] = [
   { id: 'b33', subject: '化学基礎', section: B3, title: '酸・塩基と中和', points: '酸・塩基の定義と強弱、電離度、pH、中和と塩、中和滴定と指示薬、塩の水溶液の性質',
     questions: ['中和', '中和滴定', 'pH'], knowledge: ['指示薬', '酸と塩基'], sets: ['T'], recipes: ['neutralize-acetate', 'slaking', 'phenoxide'] },
   { id: 'b34', subject: '化学基礎', section: B3, title: '酸化と還元', points: '酸化数、酸化剤と還元剤、金属のイオン化傾向、ダニエル電池、金属の製錬',
-    questions: ['酸化還元'], sets: ['S'], recipes: ['金属の製錬', 'daniell', 'cl-br', 'thermite'], knowledge: ['酸化と還元', 'イオンの色'] },
+    questions: ['酸化還元'], sets: ['S'], recipes: ['酸化と還元', '金属の製錬', 'daniell', 'cl-br', 'thermite'], knowledge: ['酸化と還元', 'イオンの色'] },
   { id: 'b35', subject: '化学基礎', section: B3, title: '化学が拓く世界', points: '洗剤・食品保存・水の浄化・金属の利用など、化学基礎で学んだことの利用',
     recipes: ['肥料', 'saponification', 'bleaching-powder', 'ion-exchange'], knowledge: ['実用電池', '油脂'] },
 
@@ -94,14 +97,14 @@ export const SYLLABUS: Unit[] = [
   { id: 'c44', subject: '化学', section: C4, title: '合成高分子化合物', points: '付加重合と縮合重合、合成繊維、合成樹脂（熱可塑性・熱硬化性）、ゴム、イオン交換樹脂、機能性高分子',
     recipes: ['合成繊維', '合成樹脂', 'ゴム', '機能性高分子', '再生繊維', '半合成繊維', 'polyethylene', 'polypropylene', 'pvc', 'polystyrene', 'styrene', 'phenol-resin'], sets: ['W'], knowledge: ['合成高分子', 'ゴム', 'イオン交換'], questions: ['高分子', 'イオン交換'] },
   { id: 'c45', subject: '化学', section: C4, title: '天然高分子化合物', points: '単糖・二糖・多糖、アミノ酸とタンパク質、酵素、核酸',
-    recipes: ['糖類', 'タンパク質', '核酸', 'セルロース'], sets: ['V', 'E', 'F', 'N'], knowledge: ['天然高分子', '核酸', '有機の検出'], questions: ['アミノ酸', '高分子'], passages: ['peptide'] },
+    recipes: ['糖類', 'タンパク質', '核酸', 'セルロース'], sets: ['V', 'E', 'F', 'N'], knowledge: ['天然高分子', '核酸', '有機の検出'], questions: ['アミノ酸', '高分子'], passages: ['peptide'], practice: ['pep-1', 'pep-2', 'pep-3'] },
   { id: 'c51', subject: '化学', section: C5, title: '様々な物質と人間生活', points: '肥料、医薬品、染料、洗剤、金属やセラミックスなど、生活を支える物質',
     recipes: ['肥料', '医薬品', 'アゾ化合物', 'waterglass', 'silicon'], knowledge: ['油脂', '遷移元素'] },
   { id: 'c52', subject: '化学', section: C5, title: '化学が築く未来', points: '燃料電池、機能性高分子、資源の再利用など',
     recipes: ['fuel-cell', '機能性高分子', 'steam-reforming'], knowledge: ['合成高分子', '実用電池'] },
 ];
 
-export interface Coverage { recipes: Recipe[]; sets: SampleSet[]; questions: Question[]; knowledge: Knowledge[]; passages: Passage[]; total: number }
+export interface Coverage { recipes: Recipe[]; sets: SampleSet[]; questions: Question[]; knowledge: Knowledge[]; passages: Passage[]; practice: string[]; total: number }
 
 /** 項目に対応する内容を、実際のデータから拾う */
 export function coverageOf(u: Unit): Coverage {
@@ -110,5 +113,6 @@ export function coverageOf(u: Unit): Coverage {
   const questions = QUESTIONS.filter((q) => (u.questions ?? []).includes(q.topic));
   const knowledge = KNOWLEDGE.filter((k) => (u.knowledge ?? []).includes(k.topic));
   const passages = PASSAGES.filter((p) => (u.passages ?? []).includes(p.id));
-  return { recipes, sets, questions, knowledge, passages, total: recipes.length + sets.length + questions.length + knowledge.length + passages.length };
+  const practice = [...DRILLS.filter((d) => d.unit === u.id).map((d) => d.id), ...(u.practice ?? [])];
+  return { recipes, sets, questions, knowledge, passages, practice, total: recipes.length + sets.length + questions.length + knowledge.length + passages.length + practice.length };
 }

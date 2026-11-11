@@ -6,8 +6,12 @@ export interface Recipe {
   name: string;
   /** [物質id, 係数] */
   inputs: [string, number][];
-  /** 電解槽では [陰極, 陽極, …]。電池では先頭が電子 */
+  /** 電池では先頭が電子 */
   outputs: [string, number][];
+  /** 電解槽：生成物ごとに、生じる極。c 陰極、a 陽極、x 溶液全体（どちらに書いてもよい）。省くと 'ca'、3 つ目以降は x */
+  poles?: string;
+  /** 生成物の比が決まらない反応。原子の数が合う係数ならどれでも正解にする */
+  free?: boolean;
   /** 装置ごとの条件欄で正解になる選択肢 */
   accept: string[];
   /** 1回の反応にかかる秒数 */
@@ -40,7 +44,7 @@ export const CONDITIONS: Record<MachineKind, { label: string; options: string[] 
   },
   electrolyzer: {
     label: '電解の条件',
-    options: ['水 + NaOH', '水 + H₂SO₄', '水のみ', '飽和食塩水（陽イオン交換膜）', 'CuSO₄ 水溶液（硫酸酸性）', '融解した氷晶石', '融解塩（水なし）'],
+    options: ['水 + NaOH', '水 + H₂SO₄', '水のみ', '飽和食塩水（陽イオン交換膜）', 'CuSO₄ 水溶液（硫酸酸性）', '水溶液・白金電極', '水溶液・炭素電極', '水溶液・銅電極', '融解した氷晶石', '融解塩（水なし）'],
   },
   reactor: {
     label: '触媒・条件',
@@ -62,10 +66,10 @@ const side = (s: string): [string, number][] => s.split(' + ').map((t) => {
   return [m[2], m[1] ? +m[1] : 1];
 });
 
-type Opt = { time?: number; loose?: boolean; mix?: boolean; shift?: string; neg?: string; pos?: string; ask?: Recipe['ask'] };
+type Opt = { time?: number; loose?: boolean; mix?: boolean; shift?: string; neg?: string; pos?: string; ask?: Recipe['ask']; poles?: string; free?: boolean };
 const R = (id: string, machine: MachineKind, name: string, eq: string, accept: string[], source: string, note: string, o: Opt = {}): Recipe => {
   const [l, r] = eq.split(' -> ');
-  return { id, machine, name, inputs: side(l), outputs: side(r), accept, source, note, time: o.time ?? 1.6, loose: o.loose, mix: o.mix, shift: o.shift, neg: o.neg, pos: o.pos, ask: o.ask };
+  return { id, machine, name, inputs: side(l), outputs: side(r), accept, source, note, time: o.time ?? 1.6, loose: o.loose, mix: o.mix, shift: o.shift, neg: o.neg, pos: o.pos, ask: o.ask, poles: o.poles, free: o.free };
 };
 const ANY = ['なし', '加熱'];
 const HEAT = ['加熱'];
@@ -87,17 +91,61 @@ export const RECIPES: Recipe[] = [
   R('water-electrolysis', 'electrolyzer', '水の電気分解', '2H2O -> 2H2 + O2', ['水 + NaOH', '水 + H₂SO₄'], '化学：電気分解',
     '2H₂O → 2H₂ + O₂。純水は電気をほとんど通さないので NaOH か希硫酸を加える。陰極で還元が起きて H₂、陽極で酸化が起きて O₂ が発生する。電子 4 mol で H₂ 2 mol、O₂ 1 mol。'),
   R('brine-electrolysis', 'electrolyzer', '食塩水の電気分解（イオン交換膜法）', '2NaCl + 2H2O -> H2 + Cl2 + 2NaOH', ['飽和食塩水（陽イオン交換膜）'], '化学：電気分解／アルカリ金属',
-    '2NaCl + 2H₂O → H₂ + Cl₂ + 2NaOH。陰極では Na⁺ ではなく水が還元されて H₂ と OH⁻ が生じ、陽極では Cl⁻ が酸化されて Cl₂ になる。陽イオン交換膜は Na⁺ だけを通すので、陰極側に純度の高い NaOH がたまる。'),
+    '2NaCl + 2H₂O → H₂ + Cl₂ + 2NaOH。陰極では Na⁺ ではなく水が還元されて H₂ と OH⁻ が生じ、陽極では Cl⁻ が酸化されて Cl₂ になる。陽イオン交換膜は Na⁺ だけを通すので、陰極側に純度の高い NaOH がたまる。', { poles: 'cac' }),
   R('molten-nacl', 'electrolyzer', '塩化ナトリウムの溶融塩電解', '2NaCl -> 2Na + Cl2', ['融解塩（水なし）'], '化学：アルカリ金属',
     '2NaCl → 2Na + Cl₂。水溶液では水が先に還元されて Na は得られない。イオン化傾向の大きい金属は、水のない融解塩を電気分解して取り出す。'),
   R('hall-heroult', 'electrolyzer', 'アルミナの溶融塩電解', '2Al2O3 + 3C -> 4Al + 3CO2', ['融解した氷晶石'], '化学：金属元素（アルミニウム）',
     '融点の高い Al₂O₃（約 2000 ℃）を、融解した氷晶石 Na₃AlF₆ に溶かして約 1000 ℃ で電気分解する。陰極に Al が析出し、陽極の炭素は O²⁻ と反応して CO や CO₂ になって消耗する。大量の電力が要る。'),
+  R('hall-heroult-co', 'electrolyzer', 'アルミナの溶融塩電解（陽極で CO が生じる場合）', 'Al2O3 + 3C -> 2Al + 3CO', ['融解した氷晶石'], '化学：金属元素（アルミニウム）',
+    '陰極：Al³⁺ + 3e⁻ → Al。陽極：C + O²⁻ → CO + 2e⁻。陽極の炭素は、酸化物イオンと反応して CO や CO₂ になり、消耗していく。入試では CO だけ、CO₂ だけ、両方のどの形でも問われる。'),
+  R('hall-heroult-mix', 'electrolyzer', 'アルミナの溶融塩電解（陽極で CO と CO₂ が生じる場合）', '2Al2O3 + 4C -> 4Al + 2CO + 2CO2', ['融解した氷晶石'], '化学：金属元素（アルミニウム）',
+    '陰極：Al³⁺ + 3e⁻ → Al。陽極：C + O²⁻ → CO + 2e⁻ と C + 2O²⁻ → CO₂ + 4e⁻ の両方が起きる。CO と CO₂ の比は条件で変わるので、係数は原子の数が合っていればよい。流れた電子の量は、Al の物質量の 3 倍で数える。', { poles: 'caa', free: true }),
   R('copper-refining', 'electrolyzer', '銅の電解精錬', '10 crudeCu -> 9 Cu + 1 slime', ['CuSO₄ 水溶液（硫酸酸性）'], '化学：金属元素（銅）／電気分解',
     '粗銅を陽極、純銅を陰極にして硫酸酸性の CuSO₄ 水溶液を電気分解する。陽極で Cu → Cu²⁺ + 2e⁻、陰極で Cu²⁺ + 2e⁻ → Cu。銅よりイオン化傾向の大きい Fe・Zn・Ni は溶けたまま残り、小さい Ag・Au は陽極泥として沈む。', { loose: true, time: 2 }),
   R('lead-charge', 'electrolyzer', '鉛蓄電池の充電', '2PbSO4 + 2H2O -> Pb + PbO2 + 2H2SO4', ['水 + H₂SO₄'], '化学：電池',
-    '放電の逆反応。外部電源の負極をつないだ側（陰極）で PbSO₄ が還元されて Pb に、正極をつないだ側（陽極）で PbSO₄ が酸化されて PbO₂ に戻る。硫酸の濃度も元に戻る。'),
+    '放電の逆反応。外部電源の負極をつないだ側（陰極）で PbSO₄ が還元されて Pb に、正極をつないだ側（陽極）で PbSO₄ が酸化されて PbO₂ に戻る。硫酸の濃度も元に戻る。', { poles: 'cax' }),
+  R('cu-cl2', 'reactor', '銅と塩素の反応', 'Cu + Cl2 -> CuCl2', HEAT, '化学：非金属元素（ハロゲン）',
+    '熱した銅線を塩素の中に入れると、激しく反応して褐色の煙（CuCl₂）を生じる。塩素は強い酸化剤で、多くの金属と直接反応する。CuCl₂ を水に溶かすと青色（濃いと緑色）の水溶液になる。'),
+  R('cuso4-electrolysis', 'electrolyzer', '硫酸銅(II)水溶液の電気分解（白金電極）', '2CuSO4 + 2H2O -> 2Cu + O2 + 2H2SO4', ['水溶液・白金電極', '水溶液・炭素電極'], '化学：電気分解',
+    '陰極：Cu²⁺ + 2e⁻ → Cu。陽極：2H₂O → O₂ + 4H⁺ + 4e⁻。SO₄²⁻ は酸化されず、水が酸化される。陽極のまわりに H⁺ が増えるので、溶液は硫酸酸性になっていく。陽極では O₂ と H⁺（H₂SO₄）の 2 つが生じる点が計算問題の要。', { poles: 'caa' }),
+  R('agno3-electrolysis', 'electrolyzer', '硝酸銀水溶液の電気分解（白金電極）', '4AgNO3 + 2H2O -> 4Ag + O2 + 4HNO3', ['水溶液・白金電極', '水溶液・炭素電極'], '化学：電気分解',
+    '陰極：Ag⁺ + e⁻ → Ag。陽極：2H₂O → O₂ + 4H⁺ + 4e⁻。NO₃⁻ は酸化されない。電子 1 mol で Ag が 1 mol（108 g）析出する。直列につないだ電解槽では、どの槽にも同じ量の電子が流れる。', { poles: 'caa' }),
+  R('cucl2-electrolysis', 'electrolyzer', '塩化銅(II)水溶液の電気分解（炭素電極）', 'CuCl2 -> Cu + Cl2', ['水溶液・炭素電極', '水溶液・白金電極'], '化学：電気分解',
+    '陰極：Cu²⁺ + 2e⁻ → Cu。陽極：2Cl⁻ → Cl₂ + 2e⁻。ハロゲン化物イオン（Cl⁻・Br⁻・I⁻）は水より酸化されやすい。水溶液中の溶質そのものが分解される例。'),
+  R('ki-electrolysis', 'electrolyzer', 'ヨウ化カリウム水溶液の電気分解', '2KI + 2H2O -> H2 + 2KOH + I2', ['水溶液・白金電極', '水溶液・炭素電極'], '化学：電気分解',
+    '陰極：2H₂O + 2e⁻ → H₂ + 2OH⁻（K⁺ は還元されない）。陽極：2I⁻ → I₂ + 2e⁻。陰極のまわりは塩基性になり、フェノールフタレインが赤くなる。陽極のまわりは I₂（I₃⁻）で褐色になり、デンプンで青紫色。', { poles: 'cca' }),
 
   // ================= 無機の反応 =================
+  // ---- 同じ原料から別の生成物ができるもの、同じ目的に別の試薬を使うもの ----
+  R('carbon-burn', 'reactor', '炭素の完全燃焼', 'C + O2 -> CO2', ANY, '化学：非金属元素（炭素）',
+    '酸素が十分にあると CO₂ になる。酸素が足りないと CO が生じる（不完全燃焼）。同じ原料でも条件で生成物が変わる例。'),
+  R('co2-reduce', 'reactor', '二酸化炭素とコークスの反応', 'CO2 + C -> 2CO', HEAT, '化学：金属の製錬（鉄）',
+    '高炉の中では、コークスの燃焼で生じた CO₂ が、赤熱したコークスに触れて CO に還元される。鉄鉱石を実際に還元しているのはこの CO。'),
+  R('zinc-reduce-co2', 'reactor', '酸化亜鉛の炭素還元（CO₂ が生じる式）', '2ZnO + C -> 2Zn + CO2', HEAT, '化学：金属の製錬',
+    '炭素による還元は、CO が生じる式（ZnO + C → Zn + CO）でも CO₂ が生じる式でも書かれる。問題文の指定に合わせろ。'),
+  R('lab-h2-hcl', 'reactor', '水素の製法（亜鉛と塩酸）', 'Zn + 2HCl -> ZnCl2 + H2', ['希酸'], '化学：非金属元素（気体の製法）',
+    '水素よりイオン化傾向の大きい金属に、希硫酸か塩酸を加える。硝酸や熱濃硫酸は酸化力があるので水素は出ない。'),
+  R('lab-h2s-hcl', 'reactor', '硫化水素の製法（硫化鉄(II)と塩酸）', 'FeS + 2HCl -> FeCl2 + H2S', ['希酸'], '化学：非金属元素（気体の製法）',
+    '弱酸の塩に強酸を加えると、弱酸が遊離する。希硫酸でも塩酸でもよい。'),
+  R('lab-so2-sulfite', 'reactor', '二酸化硫黄の製法（亜硫酸ナトリウムと希硫酸）', 'Na2SO3 + H2SO4 -> Na2SO4 + SO2 + H2O', ['希酸'], '化学：非金属元素（気体の製法）',
+    '弱酸の塩に強酸を加えると、弱酸（H₂SO₃ → SO₂ + H₂O）が遊離する。銅と熱濃硫酸の反応（酸化還元）とは仕組みが違う。'),
+  R('salicylic-acid-hcl', 'reactor', 'サリチル酸の遊離（塩酸）', 'C6H4(OH)COONa + HCl -> C6H4(OH)COOH + NaCl', ['なし'], '化学：有機化合物（芳香族カルボン酸）',
+    'カルボン酸の塩に、それより強い酸を加えるとカルボン酸が遊離する。希硫酸でも塩酸でもよい。'),
+  R('phenol-release-hcl', 'reactor', 'フェノールの遊離（塩酸）', 'C6H5ONa + HCl -> C6H5OH + NaCl', ['なし'], '化学：有機化合物（フェノール）',
+    '酸の強さは 塩酸・硫酸 ＞ カルボン酸 ＞ 炭酸 ＞ フェノール。ナトリウムフェノキシドは、塩酸でも、CO₂ を吹き込んでも、フェノールに戻る。'),
+
+  // ---- 酸化還元の反応式（滴定で使う組み合わせ） ----
+  R('kmno4-h2o2', 'reactor', '過マンガン酸カリウムと過酸化水素', '2KMnO4 + 5H2O2 + 3H2SO4 -> 2MnSO4 + K2SO4 + 5O2 + 8H2O', ['なし'], '化学基礎：酸化と還元',
+    '硫酸酸性で MnO₄⁻ + 8H⁺ + 5e⁻ → Mn²⁺ + 4H₂O、H₂O₂ → O₂ + 2H⁺ + 2e⁻。電子の数をそろえて 2 : 5。赤紫色が消えなくなった点が終点。塩酸は Cl⁻ が酸化され、硝酸はそれ自身が酸化剤なので、酸性にするのには使えない。'),
+  R('kmno4-oxalic', 'reactor', '過マンガン酸カリウムとシュウ酸', '2KMnO4 + 5(COOH)2 + 3H2SO4 -> 2MnSO4 + K2SO4 + 10CO2 + 8H2O', HEAT, '化学基礎：酸化と還元',
+    '(COOH)₂ → 2CO₂ + 2H⁺ + 2e⁻。MnO₄⁻ とは 2 : 5 で反応する。反応が遅いので 60〜70 ℃ に温めて滴定する。シュウ酸は中和滴定の標準溶液にも使う。'),
+  R('so2-h2s', 'reactor', '二酸化硫黄と硫化水素', 'SO2 + 2H2S -> 3S + 2H2O', ['なし'], '化学基礎：酸化と還元',
+    'ふつうは還元剤としてはたらく SO₂ が、より強い還元剤の H₂S に対しては酸化剤になる。硫黄が析出して白く濁る。'),
+  R('h2o2-ki', 'reactor', '過酸化水素とヨウ化カリウム', 'H2O2 + 2KI + H2SO4 -> I2 + K2SO4 + 2H2O', ['なし'], '化学基礎：酸化と還元',
+    'H₂O₂ + 2H⁺ + 2e⁻ → 2H₂O、2I⁻ → I₂ + 2e⁻。ここでは H₂O₂ が酸化剤。生じた I₂ をチオ硫酸ナトリウムで滴定すれば、酸化剤の量がわかる（ヨウ素滴定）。'),
+  R('iodometry', 'reactor', 'ヨウ素とチオ硫酸ナトリウム', 'I2 + 2Na2S2O3 -> 2NaI + Na2S4O6', ['なし'], '化学基礎：酸化と還元',
+    'I₂ + 2e⁻ → 2I⁻、2S₂O₃²⁻ → S₄O₆²⁻ + 2e⁻。指示薬はデンプン。青紫色が消えた点が終点。'),
+
   R('haber-bosch', 'reactor', 'ハーバー・ボッシュ法', 'N2 + 3H2 -> 2NH3', ['Fe₃O₄'], '化学：化学平衡／非金属元素',
     'N₂ + 3H₂ ⇄ 2NH₃。四酸化三鉄 Fe₃O₄ を主成分とする触媒を使う。発熱反応で気体分子数が減るので、平衡上は低温・高圧が有利。ただし低温では遅いので、実際は 400〜600 ℃、高圧で行う。', { time: 2, shift: '低温・高圧' }),
   R('ostwald-1', 'reactor', 'オストワルト法 ①アンモニアの酸化', '4NH3 + 5O2 -> 4NO + 6H2O', ['Pt'], '化学：非金属元素（硝酸）',
@@ -420,6 +468,10 @@ export const RECIPES: Recipe[] = [
     'ベンゼンスルホン酸ナトリウムを固体の NaOH と約 300 ℃ で融解すると、ナトリウムフェノキシドになる。クメン法より古いフェノールの製法。'),
   R('phenol-release', 'reactor', 'フェノールの遊離', 'C6H5ONa + CO2 + H2O -> C6H5OH + NaHCO3', ['なし'], '化学：有機化合物（フェノール）',
     'ナトリウムフェノキシドの水溶液に二酸化炭素を通じると、フェノールが遊離する。酸の強さが 炭酸 ＞ フェノール であることを示す反応。生じるのは Na₂CO₃ ではなく NaHCO₃。'),
+  R('aniline-sn', 'reactor', 'ニトロベンゼンの還元（スズと塩酸）', '2C6H5NO2 + 3Sn + 14HCl -> 2C6H5NH3Cl + 3SnCl4 + 4H2O', HEAT, '化学：有機化合物（芳香族アミン）',
+    '実験室では、ニトロベンゼンをスズ（または鉄）と濃塩酸で還元する。Sn → Sn⁴⁺ + 4e⁻、C₆H₅NO₂ + 6H⁺ + 6e⁻ → C₆H₅NH₂ + 2H₂O。酸性なので、アニリンはアニリン塩酸塩として水に溶けている。'),
+  R('aniline-release', 'reactor', 'アニリンの遊離', 'C6H5NH3Cl + NaOH -> C6H5NH2 + NaCl + H2O', ['なし'], '化学：有機化合物（芳香族アミン）',
+    '弱塩基の塩に強塩基を加えると、弱塩基が遊離する。油状のアニリンが浮いてくるので、エーテルで抽出する。'),
   R('anilinium', 'reactor', 'アニリンと塩酸', 'C6H5NH2 + HCl -> C6H5NH3Cl', ['なし'], '化学：有機化合物（芳香族アミン）',
     'アニリンは弱塩基で、塩酸と反応してアニリン塩酸塩になり、水に溶ける。NaOH を加えると、再びアニリンが遊離する。'),
   R('acetanilide', 'reactor', 'アニリンのアセチル化', 'C6H5NH2 + (CH3CO)2O -> C6H5NHCOCH3 + CH3COOH', ['なし'], '化学：有機化合物（芳香族アミン）',
