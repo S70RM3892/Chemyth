@@ -374,7 +374,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
       h('section', {}, h('h3', {}, `${n[0]} ${isCol ? '集める気体' : '原料'}`), h('p', { class: 'muted' }, isCol ? 'この装置で集める気体を選べ。' : 'この装置に流し込む物質を選べ。' + (isSep ? '' : '選んだら係数を合わせろ。')), chips, reactRows),
       isBat ? h('section', {}, h('h3', {}, `${n[1]} 負極と正極`), poleBox) : null,
       isCol ? null : h('section', {}, h('h3', {}, `${n[isBat ? 2 : 1]} ${isSep ? '取り出す物質' : '生成物'}`),
-        h('p', { class: 'muted' }, isCell ? '各極で生じる物質を化学式で入れろ。1 つの極で 2 つ以上のものが生じるときは、その極の側に欄を足せ。溶液に残るもの（酸や塩基）も、それが生じる極の側に書く。' : isBat ? '電子のほかにできる物質を入れろ。' : `入れた順に、${[0, 1, 2].map(slotName).join(' → ')} … の出口から出る。出口の場所は、設定のあとで入れ替えられる。`),
+        h('p', { class: 'muted' }, isCell ? '各極で生じる物質を化学式で入れろ。1 つの極で 2 つ以上のものが生じるときは、その極の側に欄を足せ。溶液に残る酸や塩基は、H⁺ や OH⁻ が生じる極の側に書く（各極の反応式を書けば決まる）。' : isBat ? '電子のほかにできる物質を入れろ。' : `入れた順に、${[0, 1, 2].map(slotName).join(' → ')} … の出口から出る。出口の場所は、設定のあとで入れ替えられる。`),
         prodRows, more, keypad),
       isBat ? h('section', {}, h('h3', {}, `${n[3]} 流れる電子 e⁻ の数`), h('div', { class: 'row' }, stepper('cfg-el', () => electrons, (x) => { electrons = x; }), h('span', { class: 'muted' }, '上の係数で反応したとき、導線を流れる電子は何 mol か。'))) : null,
       h('section', {}, h('h3', {}, `${n[isCol ? 1 : isBat ? 4 : 2]} ${cond.label}`), condChips),

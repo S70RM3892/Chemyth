@@ -190,6 +190,14 @@ describe('採点', () => {
     expect(v('electrolyzer', { reactants: [['NaCl', 2], ['H2O', 2]], products: [['H2', 1], ['NaOH', 2], ['Cl2', 1]], poles: ['c', 'c', 'a'], condition: '飽和食塩水（陽イオン交換膜）' })).toBe('brine-electrolysis');
     expect(v('electrolyzer', { reactants: [['NaCl', 2], ['H2O', 2]], products: [['H2', 1], ['Cl2', 1], ['NaOH', 2]], poles: ['c', 'a', 'a'], condition: '飽和食塩水（陽イオン交換膜）' })).toBe('electrodes'); // NaOH は陰極側
     expect(v('electrolyzer', { reactants: [['NaCl', 2]], products: [['Na', 2], ['Cl2', 1]], poles: ['c', 'a'], condition: '融解塩（水なし）' })).toBe('molten-nacl');
+    // 極を間違えたときは、どの物質が違うのかと、その理由を返す
+    const naoh = judge('electrolyzer', { reactants: [['NaCl', 2], ['H2O', 2]], products: [['H2', 1], ['NaOH', 2], ['Cl2', 1]], poles: ['c', 'a', 'a'], condition: '飽和食塩水（陽イオン交換膜）' });
+    expect(naoh.ok).toBe(false);
+    if (!naoh.ok) { expect(naoh.message).toContain('NaOH'); expect(naoh.message).toContain('OH⁻'); expect(naoh.message).not.toContain('Cl₂'); }
+    const acid = judge('electrolyzer', { reactants: [['CuSO4', 2], ['H2O', 2]], products: [['Cu', 2], ['O2', 1], ['H2SO4', 2]], poles: ['c', 'a', 'c'], condition: '水溶液・白金電極' });
+    if (!acid.ok) { expect(acid.message).toContain('H₂SO₄'); expect(acid.message).toContain('H⁺'); }
+    const swap = judge('electrolyzer', { reactants: [['H2O', 2]], products: [['O2', 1], ['H2', 2]], poles: ['c', 'a'], condition: '水 + NaOH' });
+    if (!swap.ok) { expect(swap.message).toContain('還元'); }
   });
   it('1 つの極で 2 つのものが生じる電気分解を受けつける', () => {
     // 硫酸銅(II)水溶液：陽極で O₂ と H₂SO₄（H⁺）

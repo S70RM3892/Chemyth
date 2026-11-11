@@ -1,7 +1,7 @@
 import { recipeById, RECIPES, CONDITIONS, electronsOf, productsOf, type MachineKind, type Recipe } from '../content/recipes';
 import { HUB_AT, HUB_CENTER, HUB_DEMAND, HUB_SIZES, hubTiles, resourceAt } from '../content/map';
 import { CHAPTERS, TOTAL_GOALS, type Goal } from '../content/goals';
-import { hasSub, sub } from '../content/substances';
+import { hasSub, label, sub } from '../content/substances';
 import { isBalanced } from '../chem/formula';
 import { isPositive, setById } from '../content/samples';
 
@@ -272,11 +272,20 @@ export function judge(machine: MachineKind, a: Answer): Verdict {
 
   if (machine === 'electrolyzer') {
     // どちらの極で生じるか。溶液全体にできるもの（'x'）は、どちら側に書いてもよい
-    const wrong = outs.some(([s], i) => {
+    const wrong = outs.filter(([s], i) => {
       const want = poleOf(r, i);
       return want !== 'x' && (a.poles?.[got.indexOf(s)] ?? 'c') !== want;
-    });
-    if (wrong) return { ok: false, part: 'electrodes', recipe: r, message: '陰極と陽極が違う。陰極では還元、陽極では酸化が起きる。溶液に生じる物質は、それを生むイオンができる極の側に書け。' };
+    }).map(([s]) => s);
+    if (wrong.length) {
+      // どれが違うのかと、考え方を伝える。気体や金属は酸化・還元で、酸と塩基は H⁺・OH⁻ がどちらの極でできるかで決まる
+      const names = wrong.map((s) => label(s)).join('、');
+      const f = (s: string) => sub(s).formula ?? '';
+      const base = wrong.some((s) => /^(Na|K)OH$/.test(f(s))), acid = wrong.some((s) => /^H(2SO4|NO3|Cl)$/.test(f(s)));
+      const why = base ? '塩基は OH⁻ が生じる極の側にできる。OH⁻ が生じるのは、水が電子を受け取る反応（2H₂O + 2e⁻ → H₂ + 2OH⁻）が起きる極だ。'
+        : acid ? '酸は H⁺ が生じる極の側にできる。H⁺ が生じるのは、水が電子を失う反応（2H₂O → O₂ + 4H⁺ + 4e⁻）が起きる極だ。'
+        : '陰極では還元（電子を受け取る）、陽極では酸化（電子を失う）が起きる。';
+      return { ok: false, part: 'electrodes', recipe: r, message: `物質の種類と数は合っている。${names} を書く極が違う。${why}` };
+    }
   }
   if (machine === 'battery' && (a.neg !== r.neg || a.pos !== r.pos)) {
     return { ok: false, part: 'electrodes', recipe: r, message: '負極と正極が違う。負極では酸化が起きて電子が出る。正極では還元が起きる。' };
