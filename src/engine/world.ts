@@ -74,6 +74,9 @@ export interface Ent {
   buf?: string[];
   /** 積む駅が走らせている列車。p：0 が自分の駅、1 が行き先。back：戻り。to：行き先の駅のキー */
   tr?: { p: number; back: boolean; cargo: string[]; wait: number; to?: string };
+  /** 積む駅：自分で敷いた線路。曲がり角の座標（マスの中心）と、行き先の駅のキー。なければ自動で引く */
+  rail?: [number, number][];
+  railTo?: string;
 }
 
 /** 有毒な気体と、無害にする方法。捨てても罰はないが、処理の反応は入試で問われる */
@@ -169,6 +172,17 @@ export const machineRate = (w: World) => 1 + 0.4 * w.up.machine;
 export const trainSpeed = (w: World) => 14 * (1 + 0.35 * w.up.belt);
 /** 線路の長さ：横に進んでから縦に進む、直角の道のり（マス） */
 export const railLength = (a: Ent, b: Ent) => Math.max(1, Math.abs(b.x - a.x) + Math.abs(b.y - a.y));
+export const pathLength = (pts: [number, number][]) => Math.max(1, pts.slice(1).reduce((a, q, i) => a + Math.abs(q[0] - pts[i][0]) + Math.abs(q[1] - pts[i][1]), 0));
+/** 積む駅 e の線路：自分で敷いたものがあればそれ、なければ自動（横に進んでから縦に曲がる。駅ごとに少しずらす） */
+export function railOf(w: World, e: Ent): { pts: [number, number][]; dest: Ent; len: number; custom: boolean } | null {
+  const own = e.rail && e.railTo ? w.ents.get(e.railTo) : undefined;
+  if (own && own.kind === 'station' && own.role === 'out' && own.ch === e.ch && e.rail!.length >= 2) return { pts: e.rail!, dest: own, len: pathLength(e.rail!), custom: true };
+  const dest = stationTarget(w, e);
+  if (!dest) return null;
+  const off = ((((e.x * 7 + e.y * 13) % 5) + 5) % 5 - 2) * 0.24;
+  const pts: [number, number][] = [[e.x + 1, e.y + 1 + off], [dest.x + 1 + off, e.y + 1 + off], [dest.x + 1 + off, dest.y + 1]];
+  return { pts, dest, len: railLength(e, dest), custom: false };
+}
 
 export const key = (x: number, y: number) => `${x},${y}`;
 export const isMachine = (k: Kind): k is MachineKind => k === 'separator' || k === 'electrolyzer' || k === 'reactor' || k === 'battery' || k === 'collector';
@@ -808,7 +822,7 @@ export function step(w: World, dt: number) {
           tr.wait += dt;
           // 満載か、少し待っても増えなければ発車する
           if (tr.cargo.length && (tr.cargo.length >= TRAIN_CAP || tr.wait > 2.5)) {
-            const to = stationTarget(w, e);
+            const to = railOf(w, e)?.dest;
             if (to) { tr.to = key(to.x, to.y); tr.p = 1e-6; tr.wait = 0; }
           }
           break;
@@ -816,7 +830,7 @@ export function step(w: World, dt: number) {
         const dest = tr.to ? w.ents.get(tr.to) : undefined;
         const ok = !!dest && dest.kind === 'station' && dest.role === 'out' && dest.ch === e.ch;
         if (!ok) tr.back = true; // 行き先がなくなった：引き返す
-        const v = (trainSpeed(w) * dt) / (ok ? railLength(e, dest!) : 12);
+        const v = (trainSpeed(w) * dt) / (ok ? (railOf(w, e)?.len ?? railLength(e, dest!)) : 12);
         if (!tr.back) {
           tr.p = Math.min(1, tr.p + v);
           if (tr.p >= 1) {

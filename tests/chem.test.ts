@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
-import { STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, railLength, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
+import { STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
@@ -821,6 +821,74 @@ describe('工場の動作', () => {
     expect(w3.delivered.N2).toBeUndefined();
     const r = deserialize(serialize(w))!;
     expect(at(r, 60, 10)!.role).toBe('out');
+  });
+
+  it('自分で敷いた線路があれば、列車はその道のりを走る', () => {
+    const w = newWorld();
+    place(w, 'station', 10, 10, 0); place(w, 'station', 30, 10, 0);
+    const a = at(w, 10, 10)!, b = at(w, 30, 10)!;
+    b.role = 'out';
+    const auto = railOf(w, a)!;
+    expect(auto.custom).toBe(false);
+    expect(auto.len).toBe(20);
+    // 遠回りの線路：下へ 10、右へ 20、上へ 10
+    a.rail = [[10.5, 10.5], [10.5, 20.5], [30.5, 20.5], [30.5, 10.5]];
+    a.railTo = '30,10';
+    const own = railOf(w, a)!;
+    expect(own.custom).toBe(true);
+    expect(own.len).toBe(40);
+    expect(pathLength(a.rail)).toBe(40);
+    a.buf = ['N2'];
+    run(w, 2.6);                         // 発車
+    const p1 = a.tr!.p;
+    run(w, 1);
+    expect(a.tr!.p - p1).toBeCloseTo(trainSpeed(w) / 40, 1); // 長いぶん、進む割合は小さい
+    // 行き先の番線を変えると、敷いた線路は使われなくなる
+    b.ch = 2;
+    expect(railOf(w, a)).toBeNull();
+    b.ch = 1; remove(w, 30, 10);
+    expect(railOf(w, a)).toBeNull();
+  });
+
+  it('コンビナートの最初の指令を、実際に工場を組んで通す（入り江 → 蒸留 → 電解 → 列車 → 納品所）', () => {
+    const w = newWorld();
+    const ch = CHAPTERS.findIndex((c) => c.name.includes('コンビナート'));
+    setChapter(w, ch);
+    const g = currentGoal(w)!;
+    expect([g.s, ...g.also!]).toEqual(['NaOH', 'Cl2', 'H2']);
+    // 入り江 (53,21) で海水を採り、蒸留塔で H₂O と NaCl に分ける
+    expect(place(w, 'extractor', 53, 21, 0)).toBeNull();
+    expect(place(w, 'separator', 54, 21, 0)).toBeNull();
+    configure(at(w, 54, 21)!, rec('seawater-distillation'), ['H2O', 'NaCl']);   // H₂O は正面 (56,21) へ、NaCl は右手 (55,23) へ
+    expect(outPort(at(w, 54, 21)!, 0)).toMatchObject({ tx: 56, ty: 21 });
+    expect(outPort(at(w, 54, 21)!, 1)).toMatchObject({ tx: 55, ty: 23 });
+    // 電解槽は蒸留塔の正面に直結。NaCl はベルトで回り込ませて下の面から入れる
+    expect(place(w, 'electrolyzer', 56, 21, 0)).toBeNull();
+    expect(place(w, 'belt', 55, 23, 0)).toBeNull();
+    expect(place(w, 'belt', 56, 23, 3)).toBeNull();
+    const cell = at(w, 56, 21)!;
+    const v = judge('electrolyzer', { reactants: [['NaCl', 2], ['H2O', 2]], products: [['H2', 1], ['NaOH', 2], ['Cl2', 1]], poles: ['c', 'c', 'a'], condition: '飽和食塩水（陽イオン交換膜）' });
+    expect(v.ok).toBe(true);
+    configure(cell, rec('brine-electrolysis'), ['H2', 'NaOH', 'Cl2'], ['c', 'c', 'a']);
+    // 陰極側（H₂ と NaOH）は北へ、陽極側（Cl₂）は南へ出る。それぞれ積む駅で受ける
+    expect(outPort(cell, 0)).toMatchObject({ tx: 57, ty: 20 });
+    expect(outPort(cell, 1)).toMatchObject({ tx: 56, ty: 20 });
+    expect(outPort(cell, 2)).toMatchObject({ tx: 57, ty: 23 });
+    expect(place(w, 'station', 56, 19, 0)).toBeNull();      // 1 番線：H₂ と NaOH を混載
+    expect(place(w, 'station', 57, 23, 0)).toBeNull();      // 2 番線：Cl₂
+    at(w, 57, 23)!.ch = 2;
+    // 納品所の西と東に降ろす駅
+    expect(place(w, 'station', hx - 2, hy, 0)).toBeNull();
+    at(w, hx - 2, hy)!.role = 'out';
+    expect(place(w, 'station', hx + 2, hy, 2)).toBeNull();
+    Object.assign(at(w, hx + 2, hy)!, { role: 'out', ch: 2 });
+    let sec = 0;
+    while (w.progress[ch] === 0 && sec < 600) { run(w, 1); sec++; }
+    expect(w.progress[ch], `かかった時間 ${sec} 秒、納めた数 ${JSON.stringify(w.multi)}`).toBe(1);
+    expect(sec).toBeLessThan(400);
+    expect(w.spilled.H2O).toBeGreaterThan(0);               // 水は余るので、あふれて捨てられる
+    expect(w.fed.Na).toBeGreaterThanOrEqual(10);            // 納品所は Na・O・H・Cl を飲み込んだ
+    expect(w.grades[`${ch}:0`]).toBeTruthy();
   });
 
   it('1 マスだった頃の装置は、そのまま 3 つの出口で動く', () => {

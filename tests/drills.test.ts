@@ -13,11 +13,15 @@ function near(actual: number, expected: number, rel = 1e-9): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(Math.max(Math.abs(expected) * rel, 1e-12));
 }
 
-/** ある生成器を SEEDS 個の種で回し、答えと元の数値を渡す */
-function each(id: string, fn: (a: number[], p: Record<string, number>, d: Drill) => void): void {
+/**
+ * ある生成器を SEEDS 個の種で回し、数値を答える小問の答え・元の数値・ドリル・数値の小問を渡す。
+ * 式を選ぶ小問（choices）は a と num に入れない。
+ */
+function each(id: string, fn: (a: number[], p: Record<string, number>, d: Drill, num: DrillStep[]) => void): void {
   for (let seed = 0; seed < SEEDS; seed++) {
     const { drill, params } = inspectDrill(id, mulberry32(seed));
-    fn(drill.steps.map((s) => s.answer), params, drill);
+    const num = drill.steps.filter((s) => !s.choices);
+    fn(num.map((s) => s.answer), params, drill, num);
   }
 }
 
@@ -101,8 +105,8 @@ describe('ドリル：共通', () => {
         expect(d.title).toBe(g.title);
         expect(d.unit).toBe(g.unit);
         expect(d.steps.length).toBeGreaterThanOrEqual(4);
-        expect(d.steps.length).toBeLessThanOrEqual(6);
-        const texts = [d.intro, ...d.steps.flatMap((s) => [s.text, s.how, s.unit])];
+        expect(d.steps.length).toBeLessThanOrEqual(7);
+        const texts = [d.intro, ...d.steps.flatMap((s) => [s.text, s.how, s.unit, ...(s.choices ?? [])])];
         for (const t of texts) {
           expect(typeof t).toBe('string');
           expect(t).not.toMatch(/NaN|undefined|Infinity|null|\[object/);
@@ -115,6 +119,19 @@ describe('ドリル：共通', () => {
           expect(s.text.length).toBeGreaterThan(0);
           expect(s.how.length).toBeGreaterThan(0);
           expect(Number.isFinite(s.answer)).toBe(true);
+          if (s.choices) {
+            // 選択式：4 つの異なる選択肢、答えは 0〜3 の番号、単位なし
+            expect(s.choices.length).toBe(4);
+            expect(new Set(s.choices).size).toBe(4);
+            for (const c of s.choices) expect(c.length).toBeGreaterThan(0);
+            expect(Number.isInteger(s.answer)).toBe(true);
+            expect(s.answer).toBeGreaterThanOrEqual(0);
+            expect(s.answer).toBeLessThan(4);
+            expect(s.unit).toBe('');
+            expect(s.tol).toBeUndefined();
+            for (let i = 0; i < 4; i++) expect(checkStep(s, i)).toBe(i === s.answer);
+            expect(checkStep(s, s.answer + 0.01)).toBe(false);
+          }
           if (s.tol !== undefined) {
             expect(s.tol).toBeGreaterThan(0);
             expect(s.tol).toBeLessThanOrEqual(0.05);
@@ -187,7 +204,7 @@ describe('ドリル：化学としての検算', () => {
   });
 
   it('weak-acid-titration：pH は単調に上がり、厳密解とほぼ一致し、与えた対数で届く', () => {
-    each('weak-acid-titration', ([Ve, pH0, pHhalf, pHq, pHe, pHx], p, d) => {
+    each('weak-acid-titration', ([Ve, pH0, pHhalf, pHq, pHe, pHx], p, _d, num) => {
       near(p.c * p.V, p.cb * Ve);
       for (const x of [pH0, pHhalf, pHq, pHe, pHx]) {
         expect(x).toBeGreaterThan(0);
@@ -211,7 +228,7 @@ describe('ドリル：化学としての検算', () => {
       near(p.cs, (p.c * p.V) / (p.V + Ve));
       // 過剰の NaOH
       near(10 ** (pHx - 14), (p.cb * p.x) / (p.V + Ve + p.x));
-      d.steps.slice(1).forEach(reachable);
+      num.slice(1).forEach(reachable);
     });
   });
 
@@ -263,7 +280,7 @@ describe('ドリル：化学としての検算', () => {
   });
 
   it('series-electrolysis：どの極でも電子の物質量が一致する', () => {
-    each('series-electrolysis', ([a1, cu, ag, o2, pH, cCu], p, d) => {
+    each('series-electrolysis', ([a1, cu, ag, o2, pH, cCu], p, _d, num) => {
       const ne = a1 * 1e-2;
       near(ne * F, p.I * p.t);
       near((cu / 63.5) * 2, ne);
@@ -276,7 +293,7 @@ describe('ドリル：化学としての検算', () => {
       expect(p.c0 * p.Vs).toBeGreaterThan(ne);
       expect(pH).toBeGreaterThan(0);
       expect(pH).toBeLessThan(7);
-      reachable(d.steps[4]);
+      reachable(num[4]);
     });
   });
 
@@ -451,7 +468,7 @@ describe('ドリル：化学としての検算', () => {
   });
 
   it('buffer-acetate：酸で下がり塩基で上がるが、純水よりずっと変化が小さい', () => {
-    each('buffer-acetate', ([a1, pH, pHA, pHB, pHW, a6], p, d) => {
+    each('buffer-acetate', ([a1, pH, pHA, pHB, pHW, a6], p, _d, num) => {
       const pKa = -Math.log10(p.Ka);
       near(pH, pKa + Math.log10(p.b / p.a));
       near(a1 * 1e-5, 10 ** -pH);
@@ -466,7 +483,7 @@ describe('ドリル：化学としての検算', () => {
       near((p.a + y) / (p.b - y), 10);
       expect(y).toBeGreaterThan(0);
       expect(y).toBeLessThan(p.b);
-      for (const s of d.steps.slice(1, 5)) {
+      for (const s of num.slice(1, 5)) {
         expect(s.answer).toBeGreaterThan(0);
         expect(s.answer).toBeLessThan(14);
         reachable(s);
@@ -582,7 +599,7 @@ describe('ドリル：化学としての検算', () => {
   });
 
   it('glycine-isoelectric：等電点では陽イオンと陰イオンが同じ濃度になる', () => {
-    each('glycine-isoelectric', ([pK1, pI, a3, rLo, rHi, pct], p, d) => {
+    each('glycine-isoelectric', ([pK1, pI, a3, rLo, rHi, pct], p, _d, num) => {
       const pK2 = -Math.log10(p.K2);
       near(pK1, -Math.log10(p.K1));
       near(pI, (pK1 + pK2) / 2);
@@ -597,8 +614,8 @@ describe('ドリル：化学としての検算', () => {
       expect(10 ** -p.pHhi / p.K1).toBeLessThan(1e-5);
       expect(pI).toBeGreaterThan(5.5);
       expect(pI).toBeLessThan(6.5);
-      reachable(d.steps[0]);
-      reachable(d.steps[1]);
+      reachable(num[0]);
+      reachable(num[1]);
     });
   });
 
@@ -633,6 +650,69 @@ describe('ドリル：化学としての検算', () => {
     });
   });
 
+  it('dissociation-general：数値の小問が元の解離度に戻り、Kc が濃度から直接求めた値と一致する', () => {
+    each('dissociation-general', ([alpha, kc2], p) => {
+      expect(alpha).toBeGreaterThan(0);
+      expect(alpha).toBeLessThan(1);
+      expect(Math.abs(alpha - p.alphaTrue)).toBeLessThan(0.01);
+      const A = (p.n * (1 - alpha)) / p.V;
+      const B = (2 * p.n * alpha) / p.V;
+      near(kc2 * 1e-2, (B * B) / A);
+      // 分圧の和が全圧に等しい
+      near((A + B) * R * p.T, p.P);
+    });
+  });
+
+  it('weak-acid-general：近似の電離度が厳密解に近く、うすめると pH が上がり電離度も上がる', () => {
+    each('weak-acid-general', ([a6, pH2], p, _d, num) => {
+      const exact = (c: number): number => (-p.Ka + Math.sqrt(p.Ka * p.Ka + 4 * p.Ka * c)) / (2 * c);
+      const alpha = a6 * 1e-2;
+      near(alpha, exact(p.c), 0.02);
+      expect(alpha).toBeLessThan(0.05);
+      const c2 = p.c / p.N;
+      // うすめたあとも近似が使える
+      expect(exact(c2)).toBeLessThanOrEqual(0.05);
+      expect(Math.abs(pH2 - -Math.log10(c2 * exact(c2)))).toBeLessThan(0.02);
+      // うすめる前より pH は高い（log₁₀N の半分だけ）
+      near(pH2 - -Math.log10(Math.sqrt(p.c * p.Ka)), Math.log10(p.N) / 2);
+      expect(pH2).toBeLessThan(7);
+      reachable(num[1]);
+    });
+  });
+
+  it('extraction-partition：分けて抽出するほど水層に残る量が減り、分配係数を満たす', () => {
+    each('extraction-partition', ([pct1, pct2, got], p) => {
+      // 1 回の抽出を物質収支から直接解く：水層 c、有機層 Kc
+      const once = (v: number): number => {
+        const c = 1 / (p.V1 + p.K * v);
+        near((p.K * c * v) + c * p.V1, 1);
+        return c * p.V1;
+      };
+      near(pct1 / 100, once(p.V2));
+      near(pct2 / 100, once(p.V2 / 2) ** 2);
+      near(got, p.m * (1 - once(p.V2 / 3) ** 3));
+      expect(pct2).toBeLessThan(pct1);
+      expect(100 * (1 - got / p.m)).toBeLessThan(pct2);
+      expect(got).toBeGreaterThan(0);
+      expect(got).toBeLessThan(p.m);
+      // どれだけ細かく分けても exp(−KV₂/V₁) より少なくはならない
+      expect(1 - got / p.m).toBeGreaterThan(Math.exp((-p.K * p.V2) / p.V1));
+    });
+  });
+
+  it('raoult-vapor-pressure：分子量が元の値に戻り、ラウールの法則を満たす', () => {
+    each('raoult-vapor-pressure', ([a3, n2, M], p) => {
+      const n1 = p.W / 18;
+      near(M, p.Mtrue, 0.015);
+      near(n2, p.n2True, 0.015);
+      // p = p₀ × 溶媒のモル分率
+      near(p.p0 - p.dp, (p.p0 * n1) / (n1 + n2));
+      near(a3 * 1e-2, n2 / (n1 + n2));
+      expect(a3 * 1e-2).toBeLessThan(0.04);
+      near(M * n2, p.w);
+    });
+  });
+
   it('検算のない生成器がない', () => {
     // このファイルの「化学としての検算」で扱った id
     const checked = [
@@ -641,7 +721,268 @@ describe('ドリル：化学としての検算', () => {
       'freezing-electrolyte', 'freezing-dimer', 'osmotic-polymer', 'henry-co2', 'buffer-acetate', 'two-step-neutralization',
       'redox-kmno4-h2o2', 'elemental-analysis', 'fat-saponification-iodine', 'condensation-polymer', 'vinylon-acetal',
       'starch-fermentation', 'glycine-isoelectric', 'mixed-gas-combustion', 'dumas-molar-mass',
+      'dissociation-general', 'weak-acid-general', 'extraction-partition', 'raoult-vapor-pressure',
     ];
     expect(DRILLS.map((g) => g.id).sort()).toEqual([...checked].sort());
   });
+});
+
+// ───────────────────────── 式を選ぶ小問 ─────────────────────────
+
+const SUPER: Record<string, string> = { '⁻': '-', '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9' };
+
+/**
+ * 選択肢の式を数値にする小さな計算機。
+ * 並べて書いた積（4α²P、n(1 + α)）、/、+、−、かっこ、√、²・³・ⁿ、a×10ⁿ の数を読む。
+ * 積と商は左から順に計算する（PV/(RT) は (P×V)÷(R×T)）。変数は env の名前のうち最も長く一致するもの。
+ */
+function evalExpr(src: string, env: Record<string, number>): number {
+  const names = Object.keys(env).sort((a, b) => b.length - a.length);
+  const s = src.replace(/\s+/g, '');
+  let i = 0;
+  const startsFactor = (): boolean => i < s.length && (/[0-9(√]/.test(s[i]) || names.some((n) => s.startsWith(n, i)));
+  const primary = (): number => {
+    if (s[i] === '(') {
+      i++;
+      const v = expr();
+      if (s[i] !== ')') throw new Error(`式が読めない（かっこ）: ${src}`);
+      i++;
+      return v;
+    }
+    if (s[i] === '√') {
+      i++;
+      return Math.sqrt(primary());
+    }
+    const m = /^\d+(\.\d+)?(×10[⁻⁰¹²³⁴⁵⁶⁷⁸⁹]+)?/.exec(s.slice(i));
+    if (m) {
+      i += m[0].length;
+      const [mant, ex] = m[0].split('×10');
+      return Number(mant) * (ex ? 10 ** Number(ex.split('').map((ch) => SUPER[ch]).join('')) : 1);
+    }
+    const name = names.find((n) => s.startsWith(n, i));
+    if (name === undefined) throw new Error(`式が読めない（${s.slice(i)}）: ${src}`);
+    i += name.length;
+    return env[name];
+  };
+  const postfix = (): number => {
+    let v = primary();
+    for (;;) {
+      if (s[i] === '²') v = v ** 2;
+      else if (s[i] === '³') v = v ** 3;
+      else if (s[i] === 'ⁿ') v = v ** env.n;
+      else return v;
+      i++;
+    }
+  };
+  const term = (): number => {
+    let v = postfix();
+    for (;;) {
+      if (s[i] === '/') {
+        i++;
+        v /= postfix();
+      } else if (s[i] === '×') {
+        i++;
+        v *= postfix();
+      } else if (startsFactor()) v *= postfix();
+      else return v;
+    }
+  };
+  function expr(): number {
+    let v = term();
+    for (;;) {
+      if (s[i] === '+') {
+        i++;
+        v += term();
+      } else if (s[i] === '−') {
+        i++;
+        v -= term();
+      } else return v;
+    }
+  }
+  const out = expr();
+  if (i !== s.length) throw new Error(`式が読めない（残り ${s.slice(i)}）: ${src}`);
+  return out;
+}
+
+/** 選択肢から、式でない飾り（「Kp = 」「倍」など）を外す */
+const bare = (c: string): string => c.replace(/^Kp = /, '').replace(/倍.*$/, '');
+
+interface ChoiceSpec {
+  /** 式に出てくる文字の値 */
+  env: Record<string, number>;
+  /** 式とは別の道筋で求めた値 */
+  expected: number;
+  /** 近似式のときだけ、許す相対誤差 */
+  tol?: number;
+}
+type SpecFn = (p: Record<string, number>, a: number[]) => ChoiceSpec;
+
+/** 生成器ごとに、式を選ぶ小問を出てくる順に。null は式でない（文章の）選択肢 */
+const CHOICE_SPECS: Record<string, (SpecFn | null)[]> = {
+  'n2o4-kp': [
+    // 分圧から直接：p(NO₂)² ÷ (P − p(NO₂))
+    (p, a) => ({ env: { α: a[1], P: p.P }, expected: (a[2] * 1e4) ** 2 / (p.P - a[2] * 1e4) }),
+  ],
+  'weak-acid-titration': [
+    (p, a) => ({ env: { c: p.c, Ka: p.Ka, Kw: 1e-14 }, expected: 10 ** -a[1] }),
+  ],
+  'ksp-mohr': [
+    // [Ag⁺]²[CrO₄²⁻] = Ksp を満たす値を二分法で探す
+    (p) => {
+      let lo = 0;
+      let hi = 1;
+      for (let k = 0; k < 200; k++) {
+        const mid = (lo + hi) / 2;
+        if (mid * mid * p.c2 < p.K2) lo = mid;
+        else hi = mid;
+      }
+      return { env: { Ksp: p.K2, c: p.c2 }, expected: lo, tol: 1e-9 };
+    },
+  ],
+  'lead-acid': [
+    // 電解液の減少 = 両極の増加
+    (_p, a) => ({ env: { x: a[0] }, expected: a[1] + a[2] }),
+  ],
+  'first-order-h2o2': [
+    // c = c₀e^(−kt) が c₀/2 になる t を二分法で探す
+    (p, a) => {
+      const k = a[1] * 1e-2;
+      let lo = 0;
+      let hi = 1000;
+      for (let n = 0; n < 200; n++) {
+        const mid = (lo + hi) / 2;
+        if (p.c0 * Math.exp(-k * mid) > p.c0 / 2) lo = mid;
+        else hi = mid;
+      }
+      return { env: { k, 'c₀': p.c0, 'logₑ2': Math.log(2) }, expected: lo, tol: 1e-9 };
+    },
+  ],
+  'freezing-electrolyte': [
+    // 粒子を数える：残った式量単位 (1 − α) とイオン να
+    (p, a) => ({ env: { α: a[4] }, expected: 1 - a[4] + p.nu * a[4] }),
+  ],
+  'freezing-dimer': [
+    // 凝固点降下から出した粒子の物質量
+    (p, a) => ({ env: { n: p.y / 60, β: a[3] }, expected: (a[1] * p.W) / 1000 }),
+  ],
+  'osmotic-polymer': [
+    (p, a) => ({ env: { w: p.x, R, T: p.T, Π: p.Pi, V: p.vmL / 1000 }, expected: a[1] * 1e4 }),
+  ],
+  'henry-co2': [
+    (p, a) => ({ env: { P: a[1] * 1e5, V: p.Vg, W: p.Vw, k: p.k, R, T: p.T }, expected: p.n }),
+  ],
+  'dissociation-general': (() => {
+    const env = (p: Record<string, number>, a: number[]): Record<string, number> => {
+      const A = (p.n * (1 - a[0])) / p.V;
+      const B = (2 * p.n * a[0]) / p.V;
+      return { n: p.n, α: a[0], R, T: p.T, V: p.V, P: p.P, Kc: (B * B) / A };
+    };
+    const pA = (p: Record<string, number>, a: number[]): number => ((p.n * (1 - a[0])) / p.V) * R * p.T;
+    const pB = (p: Record<string, number>, a: number[]): number => ((2 * p.n * a[0]) / p.V) * R * p.T;
+    return [
+      (p, a) => ({ env: env(p, a), expected: (p.P * p.V) / (R * p.T) }),
+      (p, a) => ({ env: env(p, a), expected: p.P }),
+      (p, a) => ({ env: env(p, a), expected: env(p, a).Kc }),
+      (p, a) => ({ env: env(p, a), expected: pB(p, a) ** 2 / pA(p, a) }),
+      (p, a) => ({ env: env(p, a), expected: pB(p, a) ** 2 / pA(p, a) }),
+    ] as SpecFn[];
+  })(),
+  'weak-acid-general': (() => {
+    const exact = (Ka: number, c: number): number => (-Ka + Math.sqrt(Ka * Ka + 4 * Ka * c)) / (2 * c);
+    return [
+      // 厳密な電離度を入れると Ka に戻る
+      (p) => ({ env: { c: p.c, α: exact(p.Ka, p.c), Ka: p.Ka }, expected: p.Ka }),
+      (p) => ({ env: { c: p.c, Ka: p.Ka }, expected: exact(p.Ka, p.c), tol: 0.02 }),
+      null,
+      (p) => ({ env: { c: p.c, Ka: p.Ka }, expected: p.c * exact(p.Ka, p.c), tol: 0.02 }),
+      (p) => ({ env: {}, expected: exact(p.Ka, p.c / p.N) / exact(p.Ka, p.c), tol: 0.03 }),
+    ] as (SpecFn | null)[];
+  })(),
+  'extraction-partition': (() => {
+    // 1 回の抽出を数値でたどる：水層の濃度 c、有機層の濃度 Kc になるまで少しずつ移す代わりに、物質収支を解く
+    const once = (K: number, V1: number, v: number): number => V1 / (V1 + K * v);
+    const many = (p: Record<string, number>, n: number): number => {
+      let left = 1;
+      for (let k = 0; k < n; k++) left *= once(p.K, p.V1, p.V2 / n);
+      return left;
+    };
+    const env = (p: Record<string, number>): Record<string, number> => ({ K: p.K, 'V₁': p.V1, 'V₂': p.V2, n: 5 });
+    return [
+      (p) => ({ env: env(p), expected: many(p, 1) }),
+      (p) => ({ env: env(p), expected: many(p, 2) }),
+      (p) => ({ env: env(p), expected: many(p, 5) }),
+    ] as SpecFn[];
+  })(),
+  'raoult-vapor-pressure': (() => {
+    const env = (p: Record<string, number>, a: number[]): Record<string, number> => ({
+      W: p.W, w: p.w, 'M₀': 18, M: a[2], 'p₀': p.p0, Δp: p.dp, 'n₁': p.W / 18, 'n₂': a[1],
+    });
+    return [
+      (p, a) => ({ env: env(p, a), expected: 1 - a[0] * 1e-2 }),
+      (p, a) => ({ env: env(p, a), expected: p.dp }),
+      (p, a) => ({ env: env(p, a), expected: a[2] }),
+    ] as SpecFn[];
+  })(),
+};
+
+describe('ドリル：式を選ぶ小問', () => {
+  it('計算機が式を正しく読む', () => {
+    const env = { α: 0.5, P: 2e5, n: 3, R: 8, T: 300, V: 4, K: 4, 'V₁': 100, 'V₂': 50, Ka: 1e-5, c: 0.1, 'c₀': 2, k: 0.5, 'logₑ2': Math.log(2) };
+    near(evalExpr('4α²P/(1 − α²)', env), (4 * 0.25 * 2e5) / 0.75);
+    near(evalExpr('n(1 + α)RT/V', env), (3 * 1.5 * 8 * 300) / 4);
+    near(evalExpr('4nα²/((1 − α)V)', env), (4 * 3 * 0.25) / (0.5 * 4));
+    near(evalExpr('PV/(RT) + αP/(1.0×10⁵)', env), (2e5 * 4) / 2400 + 1);
+    near(evalExpr('√(cKa)', env), 1e-3);
+    near(evalExpr('√(Ka/c)/2', env), 0.005);
+    near(evalExpr('(2V₁/(2V₁ + KV₂))²', env), 0.25);
+    near(evalExpr('(nV₁/(nV₁ + KV₂))ⁿ', env), 0.6 ** 3);
+    near(evalExpr('(logₑ2)/k', env), Math.log(2) / 0.5);
+    near(evalExpr('c₀/(2k)', env), 2);
+    near(evalExpr('1/2', env), 0.5);
+    expect(() => evalExpr('4α²Q', env)).toThrow();
+    expect(() => evalExpr('(1 + α', env)).toThrow();
+  });
+
+  it('式を選ぶ小問をもつ生成器が 12 以上あり、すべてに検算の定義がある', () => {
+    const withChoice = DRILLS.filter((g) => g.make(mulberry32(1)).steps.some((s) => s.choices)).map((g) => g.id);
+    expect(withChoice.length).toBeGreaterThanOrEqual(12);
+    expect([...withChoice].sort()).toEqual(Object.keys(CHOICE_SPECS).sort());
+  });
+
+  for (const id of Object.keys(CHOICE_SPECS)) {
+    it(`${id}：正しい式だけが、別の道筋で求めた値と一致する`, () => {
+      const specs = CHOICE_SPECS[id];
+      const positions = specs.map(() => new Set<number>());
+      const wording = specs.map(() => new Set<string>());
+      for (let seed = 0; seed < SEEDS; seed++) {
+        const { drill, params } = inspectDrill(id, mulberry32(seed));
+        const a = drill.steps.filter((s) => !s.choices).map((s) => s.answer);
+        const cs = drill.steps.filter((s) => s.choices);
+        expect(cs.length).toBe(specs.length);
+        cs.forEach((s, k) => {
+          const choices = s.choices as string[];
+          positions[k].add(s.answer);
+          wording[k].add([...choices].sort().join(' | '));
+          // 解説に正しい式が書いてある
+          expect(s.how).toContain(bare(choices[s.answer]).trim());
+          const spec = specs[k];
+          if (!spec) return;
+          const { env, expected, tol = 1e-9 } = spec(params, a);
+          expect(Number.isFinite(expected)).toBe(true);
+          choices.forEach((c, idx) => {
+            const v = evalExpr(bare(c), env);
+            expect(Number.isFinite(v)).toBe(true);
+            const err = Math.abs(v - expected) / Math.abs(expected);
+            if (idx === s.answer) expect(err).toBeLessThanOrEqual(tol);
+            // 間違いの選択肢は、この問題の数値でもはっきり違う値になる
+            else expect(err).toBeGreaterThan(Math.max(5 * tol, 1e-3));
+          });
+        });
+      }
+      // 正解の位置が種によって変わる
+      for (const set of positions) expect(set.size).toBeGreaterThanOrEqual(3);
+      // 選択肢の中身（並べ替える前）は、数値によらない式なら 1 通り
+      for (const set of wording) expect(set.size).toBeLessThanOrEqual(5);
+    });
+  }
 });

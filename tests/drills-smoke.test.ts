@@ -9,11 +9,11 @@ describe('連鎖計算（共通の検査）', () => {
     for (const g of DRILLS) expect(SYLLABUS.some((u) => u.id === g.unit), g.id).toBe(true);
   });
   for (const g of DRILLS) {
-    it(`${g.title}：どの乱数でも 4〜6 問で、答えが数として定まる`, () => {
+    it(`${g.title}：どの乱数でも 4〜7 問で、答えが数として定まる`, () => {
       for (let seed = 1; seed <= 200; seed++) {
         const d = g.make(mulberry32(seed));
         expect(d.steps.length).toBeGreaterThanOrEqual(4);
-        expect(d.steps.length).toBeLessThanOrEqual(6);
+        expect(d.steps.length).toBeLessThanOrEqual(7);
         expect(d.intro.length).toBeGreaterThan(10);
         for (const s of d.steps) {
           expect(Number.isFinite(s.answer), `${g.id} seed ${seed}: ${s.text}`).toBe(true);

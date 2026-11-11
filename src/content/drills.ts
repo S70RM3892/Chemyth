@@ -1,6 +1,7 @@
 /**
  * 京大型の連鎖計算ドリル。
- * 1 つの設定（リード文）に 4〜6 個の小問が続き、前の小問の結果を次で使う。
+ * 1 つの設定（リード文）に 4〜7 個の小問が続き、前の小問の結果を次で使う。
+ * 数値を答える小問のほかに、文字式を 4 つの選択肢から選ぶ小問（choices）がある。
  * 数値は乱数で毎回変わる。答えはパラメータからコードで計算する。
  */
 
@@ -17,6 +18,8 @@ export interface DrillStep {
   how: string;
   /** 相対許容誤差。省略時 0.02 */
   tol?: number;
+  /** あれば選択式（式を選ぶ小問）。answer は正しい選択肢の番号（0 から）、unit は '' */
+  choices?: string[];
 }
 
 export interface Drill {
@@ -49,6 +52,7 @@ export function mulberry32(seed: number): Rng {
 }
 
 export function checkStep(step: DrillStep, x: number): boolean {
+  if (step.choices) return x === step.answer;
   if (!Number.isFinite(x)) return false;
   const tol = step.tol ?? 0.02;
   return Math.abs(x - step.answer) <= Math.max(Math.abs(step.answer) * tol, 1e-9);
@@ -132,6 +136,20 @@ function st(text: string, answer: number, unit: string, how: string, tol?: numbe
   return s;
 }
 
+/**
+ * 式を選ぶ小問。正しい式 1 つと、ありがちな間違い 3 つを乱数で並べ替える。
+ * answer は並べ替えたあとの正しい式の番号。
+ */
+function choice(rng: Rng, text: string, correct: string, wrong: readonly [string, string, string], how: string): DrillStep {
+  const all = [correct, ...wrong];
+  const order = [0, 1, 2, 3];
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.min(i, Math.floor(rng() * (i + 1)));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return { text, answer: order.indexOf(0), unit: '', how, choices: order.map((k) => all[k]) };
+}
+
 const log10 = (x: number): number => Math.log(x) / Math.LN10;
 /** pH は小数第 2 位まで書く */
 const ph = (x: number): string => (Number.isFinite(x) ? x.toFixed(2) : String(x));
@@ -196,11 +214,14 @@ const n2o4: Def = {
           `はじめの N₂O₄ は ${f(m)} ÷ 92 = ${f(n0)} mol。平衡時は N₂O₄ が ${f(n0)}(1 − α) mol、NO₂ が 2 × ${f(n0)}α mol で、合計 ${f(n0)}(1 + α) mol。これが ${sci(nR)} mol だから 1 + α = ${f(nR / n0)}、α = ${f(alpha)}。`),
         st('NO₂ の分圧を a×10⁴ Pa と表すとき、a を求めろ。', a3, '×10⁴ Pa',
           `分圧 = 全圧 × モル分率。NO₂ のモル分率は 2α/(1 + α) = ${f((2 * aR) / (1 + aR))}。${sci(P)} × ${f((2 * aR) / (1 + aR))} = ${sci(pR)} Pa。`),
+        choice(rng, '全圧を P、解離度を α とするとき、圧平衡定数 Kp = (NO₂ の分圧)² ÷ (N₂O₄ の分圧) を表す式を選べ。',
+          '4α²P/(1 − α²)', ['4α²P/(1 − α)', '2αP/(1 − α)', 'α²P/(1 − α²)'],
+          'はじめの N₂O₄ を n mol とすると、平衡時は N₂O₄ が n(1 − α)、NO₂ が 2nα、合計 n(1 + α) mol。分圧は全圧 × モル分率なので、N₂O₄ が P(1 − α)/(1 + α)、NO₂ が 2αP/(1 + α)。Kp = {2αP/(1 + α)}² ÷ {P(1 − α)/(1 + α)} = 4α²P/{(1 − α)(1 + α)} = 4α²P/(1 − α²)。モル分率の分母 (1 + α) を落とすと 4α²P/(1 − α)、2 乗を忘れると 2αP/(1 − α)、NO₂ の係数 2 を忘れると α²P/(1 − α²) になる。'),
         st('圧平衡定数 Kp = (NO₂ の分圧)² ÷ (N₂O₄ の分圧) を a×10⁴ Pa と表すとき、a を求めろ。', a4, '×10⁴ Pa',
           `N₂O₄ の分圧は ${sci(P)} − ${sci(pR)} = ${sci(pN)} Pa。Kp = (${sci(pR)})² ÷ ${sci(pN)} = ${sci(KR)} Pa。`, 0.03),
         st(`温度を変えずに容器の容積を変え、全圧を ${sci(P2, 2)} Pa にして平衡に達させた。このときの解離度を求めろ。`, alpha2, '',
           `全圧 P、解離度 α のとき Kp = 4α²P/(1 − α²)。α² = Kp/(4P + Kp) = ${sci(KR)} ÷ (4 × ${sci(P2, 2)} + ${sci(KR)}) = ${f(alpha2 * alpha2)}。α = ${f(alpha2)}。${P2 > P ? '圧力を上げたので、分子数が減る向き（N₂O₄ 側）に平衡が移っている。' : '圧力を下げたので、分子数が増える向き（NO₂ 側）に平衡が移っている。'}`),
-        st('(5) のときの容器の容積は何 L か。', V2, 'L',
+        st('(6) のときの容器の容積は何 L か。', V2, 'L',
           `気体の全物質量は ${f(n0)} × (1 + ${f(a2R)}) = ${f(n0 * (1 + a2R))} mol。V = nRT/P = ${f(n0 * (1 + a2R))} × 8.31×10³ × ${T} ÷ ${sci(P2, 2)} = ${f(V2)} L。`),
       ],
       p: { m, T, V, P, P2, n0 },
@@ -307,6 +328,9 @@ const titration: Def = {
       steps: [
         st('中和点までに必要な NaOH 水溶液は何 mL か。', Ve, 'mL',
           `${f(c, 2)} × ${V}.0 = ${f(cb, 2)} × V より V = ${f(Ve)} mL。`),
+        choice(rng, '濃度 c [mol/L] の酢酸水溶液の [H⁺] を、c と Ka で表す式を選べ。電離度は 1 より十分小さいとする。',
+          '√(cKa)', ['√(Ka/c)', 'cKa', '√(cKw/Ka)'],
+          '電離度を α とすると [H⁺] = [CH₃COO⁻] = cα、[CH₃COOH] = c(1 − α) ≒ c。Ka = (cα)²/c = cα² より α = √(Ka/c)、[H⁺] = cα = √(cKa)。√(Ka/c) は電離度 α そのもの、cKa は平方根を取り忘れた式、√(cKw/Ka) は酢酸ナトリウム水溶液の [OH⁻] の式である。'),
         st('滴定を始める前の酢酸水溶液の pH を求めろ。', pH0, '',
           `[H⁺] = √(cKa) = √(${f(c, 2)} × ${acid.s}) = √(${sci(c * Ka)}) = ${sci(h0)} mol/L。pH = −½ log₁₀(${sci(c * Ka)}) = ${ph(pH0)}。`),
         st(`NaOH 水溶液を ${f(Ve / 2)} mL 加えたとき（中和点の半分）の pH を求めろ。`, pKa, '',
@@ -350,19 +374,22 @@ const ksp: Def = {
     const vt = (c1 * vs) / cAg;
     const mg = c1 * vs * 143.5;
     return {
-      intro: `Cl⁻ を ${f(c1, 2)} mol/L、CrO₄²⁻ を ${sci(c2, 2)} mol/L 含む水溶液に、AgNO₃ 水溶液を少しずつ加えていく。溶解度積は AgCl（白色）が ${sci(KSP_AGCL, 2)} (mol/L)²、Ag₂CrO₄（赤褐色）が ${sci(KSP_AG2CRO4, 2)} (mol/L)³ である。(1)〜(4) では、AgNO₃ 水溶液を加えても溶液の体積は変わらないとする。Ag = 108、Cl = 35.5。`,
+      intro: `Cl⁻ を ${f(c1, 2)} mol/L、CrO₄²⁻ を ${sci(c2, 2)} mol/L 含む水溶液に、AgNO₃ 水溶液を少しずつ加えていく。溶解度積は AgCl（白色）が ${sci(KSP_AGCL, 2)} (mol/L)²、Ag₂CrO₄（赤褐色）が ${sci(KSP_AG2CRO4, 2)} (mol/L)³ である。(1)〜(5) では、AgNO₃ 水溶液を加えても溶液の体積は変わらないとする。Ag = 108、Cl = 35.5。`,
       steps: [
         st('AgCl が沈殿し始めるときの [Ag⁺] を a×10⁻⁹ mol/L と表すとき、a を求めろ。', a1, '×10⁻⁹ mol/L',
           `[Ag⁺][Cl⁻] が溶解度積に達したとき。[Ag⁺] = ${sci(KSP_AGCL, 2)} ÷ ${f(c1, 2)} = ${sci(a1 * 1e-9, 2)} mol/L。`),
+        choice(rng, 'CrO₄²⁻ の濃度を c [mol/L]、Ag₂CrO₄ の溶解度積を Ksp とするとき、Ag₂CrO₄ が沈殿し始める [Ag⁺] を表す式を選べ。',
+          '√(Ksp/c)', ['Ksp/c', '√(Ksp/c)/2', 'Ksp/c²'],
+          'Ag₂CrO₄ ⇄ 2Ag⁺ + CrO₄²⁻ なので Ksp = [Ag⁺]²[CrO₄²⁻]。[Ag⁺]² × c = Ksp より [Ag⁺] = √(Ksp/c)。Ksp/c は [Ag⁺] の 2 乗を忘れた式、Ksp/c² は 2 乗をつけるイオンを取り違えた式である。溶解度積には溶液中の [Ag⁺] をそのまま入れるので、係数の 2 で割ることはしない。'),
         st('Ag₂CrO₄ が沈殿し始めるときの [Ag⁺] を a×10⁻⁵ mol/L と表すとき、a を求めろ。', a2, '×10⁻⁵ mol/L',
           `[Ag⁺]²[CrO₄²⁻] = ${sci(KSP_AG2CRO4, 2)} より [Ag⁺]² = ${sci(KSP_AG2CRO4, 2)} ÷ ${sci(c2, 2)} = ${sci(KSP_AG2CRO4 / c2, 2)}。[Ag⁺] = ${sci(ag2R, 2)} mol/L。(1) よりずっと大きいので、先に沈殿するのは AgCl。`),
         st('Ag₂CrO₄ が沈殿し始めたとき、溶液に残っている [Cl⁻] を a×10⁻⁶ mol/L と表すとき、a を求めろ。', a3, '×10⁻⁶ mol/L',
           `AgCl の沈殿と平衡にあるので [Cl⁻] = ${sci(KSP_AGCL, 2)} ÷ ${sci(ag2R, 2)} = ${sci(clR, 2)} mol/L。`),
-        st('(3) のとき、最初にあった Cl⁻ のうち溶液に残っているのは何 % か。a×10⁻³ % と表すときの a を求めろ。', a4, '×10⁻³ %',
+        st('(4) のとき、最初にあった Cl⁻ のうち溶液に残っているのは何 % か。a×10⁻³ % と表すときの a を求めろ。', a4, '×10⁻³ %',
           `${sci(clR, 2)} ÷ ${f(c1, 2)} × 100 = ${sci(a4 * 1e-3, 2)} %。Cl⁻ はほぼすべて沈殿しているので、赤褐色の沈殿が出はじめた点を Cl⁻ の滴定の終点にできる。`),
         st(`次に、同じ Cl⁻ 濃度の試料 ${vs}.0 mL に指示薬として少量の K₂CrO₄ を加え、${f(cAg, 2)} mol/L の AgNO₃ 水溶液で滴定した。赤褐色の沈殿が現れるまでに必要な AgNO₃ 水溶液は何 mL か。`, vt, 'mL',
           `Ag⁺ と Cl⁻ は 1 : 1 で反応する。${f(c1, 2)} × ${vs}.0 = ${f(cAg, 2)} × V より V = ${f(vt)} mL。`),
-        st('(5) の終点までに生じた AgCl は何 mg か。', mg, 'mg',
+        st('(6) の終点までに生じた AgCl は何 mg か。', mg, 'mg',
           `Cl⁻ は ${f(c1, 2)} × ${vs}.0 ÷ 1000 = ${sci(c1 * vs / 1000, 2)} mol。AgCl = 143.5 なので ${sci(c1 * vs / 1000, 2)} × 143.5 g = ${f(mg)} mg。`),
       ],
       p: { c1, c2, vs, cAg, K1: KSP_AGCL, K2: KSP_AG2CRO4 },
@@ -560,6 +587,9 @@ const leadAcid: Def = {
           `電子 2 mol で H₂SO₄ 2 mol、つまり電子と同じ物質量。${f(nR)} × 98 = ${f(acid)} g。`),
         st('生じた水は何 g か。', water, 'g',
           `電子 2 mol で H₂O 2 mol。${f(nR)} × 18 = ${f(water)} g。`),
+        choice(rng, '電子が x [mol] 流れたとき、電解液の質量は何 g 減るか。x を使って表した式を選べ。',
+          '80x', ['98x', '116x', '160x'],
+          '電子 x mol で H₂SO₄ が x mol（98x g）消費され、H₂O が x mol（18x g）生じて電解液に加わる。減少は 98x − 18x = 80x g。これは両極の質量の増加 48x + 32x = 80x g に等しい。98x は水が生じることを忘れた値、116x は水のぶんを足してしまった値、160x は電子 2 mol あたりの値である。'),
         st('放電後の電解液の質量パーセント濃度は何 % か。', w1, '%',
           `放電前の H₂SO₄ は ${fi(m0)} × ${f(w0)} ÷ 100 = ${f(acid0)} g。放電後は ${f(acid0)} − ${f(acidR)} = ${f(acid0 - acidR, 4)} g。電解液は ${fi(m0)} − ${f(acidR)} + ${f(waterR)} = ${f(m0 - acidR + waterR, 4)} g。${f(acid0 - acidR, 4)} ÷ ${f(m0 - acidR + waterR, 4)} × 100 = ${f(w1)} %。`),
       ],
@@ -780,13 +810,16 @@ const firstOrder: Def = {
           `(${f(c0)} − ${f(c1)}) ÷ ${f(t1, 2)} = ${sci(vR)} mol/(L·分)。`),
         st('この間の平均の速度と平均の濃度を v = k[H₂O₂] に当てはめて、速度定数 k を a×10⁻² /分 と表すとき、a を求めろ。', a2, '×10⁻² /分',
           `平均の濃度は (${f(c0)} + ${f(c1)}) ÷ 2 = ${f(cAvg)} mol/L。k = ${sci(vR)} ÷ ${f(cAvg)} = ${sci(kR)} /分。`),
-        st('H₂O₂ の濃度が半分になるまでの時間（半減期）は何分か。一次反応の半減期は logₑ2 ÷ k である。', half, '分',
+        choice(rng, 'この反応では、時刻 t での濃度は [H₂O₂] = c₀e⁻ᵏᵗ（c₀ は初濃度）と表される。濃度が c₀ の半分になるまでの時間（半減期）を表す式を選べ。',
+          '(logₑ2)/k', ['1/(2k)', 'c₀/(2k)', 'k/(logₑ2)'],
+          'c₀/2 = c₀e⁻ᵏᵗ より e⁻ᵏᵗ = 1/2、kt = logₑ2。t = (logₑ2)/k。c₀ が消えるので、一次反応の半減期は初濃度によらない。c₀/(2k) は、速度が濃度によらず一定だと考えたときの式である。'),
+        st('この反応の半減期は何分か。', half, '分',
           `0.693 ÷ ${sci(kR)} = ${f(half)} 分。一次反応の半減期は濃度によらない。`),
         st(`半減期の ${nh} 倍の時間がたったとき、H₂O₂ の濃度は何 mol/L か。`, cn, 'mol/L',
           `半減期ごとに半分になる。${f(c0)} × (1/2)${sup(nh)} = ${f(cn)} mol/L。`),
-        st('(4) の時点までに発生した O₂ は標準状態で何 mL か。', o2, 'mL',
+        st('(5) の時点までに発生した O₂ は標準状態で何 mL か。', o2, 'mL',
           `分解した H₂O₂ は (${f(c0)} − ${f(cnR)}) × ${vmL}.0 ÷ 1000 = ${sci(((c0 - cnR) * vmL) / 1000)} mol。O₂ はその半分で ${sci(((c0 - cnR) * vmL) / 2000)} mol。× 22.4 L = ${f(o2)} mL。`),
-        st('(4) の時点での H₂O₂ の分解速度を a×10⁻³ mol/(L·分) と表すとき、a を求めろ。', a6, '×10⁻³ mol/(L·分)',
+        st('(5) の時点での H₂O₂ の分解速度を a×10⁻³ mol/(L·分) と表すとき、a を求めろ。', a6, '×10⁻³ mol/(L·分)',
           `v = k[H₂O₂] = ${sci(kR)} × ${f(cnR)} = ${sci(kR * cnR)} mol/(L·分)。`),
       ],
       p: { c0, c1, t1, nh, vmL },
@@ -840,6 +873,9 @@ const fpElectrolyte: Def = {
           `${f(y)} ÷ ${f(el.M)} = ${sci(y / el.M)} mol。÷ ${f(wkg)} kg = ${f(mForm)} mol/kg。`),
         st(`実際の凝固点降下は、${el.f} が電離しないと仮定したときの何倍か。`, i, '倍',
           `電離しないなら Δt = 1.85 × ${f(mFormR)} = ${f(KF_WATER * mFormR)} K。実際は ${f(dt2)} K。${f(dt2)} ÷ ${f(KF_WATER * mFormR)} = ${f(i)} 倍。溶質粒子の総数がこれだけ増えている。`),
+        choice(rng, `${el.f} の電離度を α とするとき、溶質粒子の総数は、電離しないと仮定したときの何倍になるか。式を選べ。`,
+          el.nu === 2 ? '1 + α' : '1 + 2α', el.nu === 2 ? ['2α', '1 + 2α', '1 − α'] : ['1 + α', '3α', '1 + 3α'],
+          `${el.f} 1 mol のうち α mol が電離して ${el.ions} になる。電離せずに残るのが 1 − α mol、生じるイオンが合わせて ${el.nu}α mol。合計 1 − α + ${el.nu}α = ${el.nu === 2 ? '1 + α' : '1 + 2α'} 倍。${el.nu}α は電離しなかったぶんを数え忘れた式である。`),
         st(`${el.f} の見かけの電離度 α を求めろ。`, alpha, '',
           `${el.f} 1 個が電離すると ${el.ions} の ${el.nu} 個になる。粒子の数は 1 − α + ${el.nu}α = 1 + ${el.nu - 1}α 倍。1 + ${el.nu - 1}α = ${f(iR)} より α = ${f(alpha)}。`),
       ],
@@ -885,6 +921,9 @@ const fpDimer: Def = {
           `${f(dt2)} ÷ ${f(kfR)} = ${f(mp)} mol/kg。`),
         st('この凝固点降下から求められる酢酸の見かけの分子量を求めろ。', Mapp, '',
           `粒子は ${f(mpR)} × ${f(wkg)} = ${sci(mpR * wkg)} mol。${f(y)} ÷ ${sci(mpR * wkg)} = ${f(Mapp)}。60 より大きいのは、二量体ができて粒子の数が減っているから。`),
+        choice(rng, 'ベンゼンに溶かした酢酸 n [mol] のうち、割合 β の分子が二量体になっているとする。溶液中の溶質粒子（単量体と二量体）の総物質量を表す式を選べ。',
+          'n(1 − β/2)', ['n(1 − β)', 'n(1 + β)', 'n(1 + β/2)'],
+          '単量体のまま残るのは n(1 − β) mol。二量体になった nβ mol の分子は、2 分子で 1 粒子なので nβ/2 mol の粒子になる。合計 n(1 − β) + nβ/2 = n(1 − β/2)。n(1 − β) は二量体を数え忘れた式、n(1 + β) は電離（1 個が 2 個に分かれる）と取り違えた式である。'),
         st('酢酸分子のうち二量体になっているものの割合（会合度）β を求めろ。', beta, '',
           `はじめ n mol の酢酸のうち βn mol が二量体 βn/2 mol になる。粒子は n(1 − β) + nβ/2 = n(1 − β/2) mol。見かけの分子量 = 60 ÷ (1 − β/2) = ${f(MappR)} より 1 − β/2 = ${f(60 / MappR)}、β = ${f(beta)}。`, 0.03),
         st('この溶液中の二量体の物質量を a×10⁻³ mol と表すとき、a を求めろ。', a5, '×10⁻³ mol',
@@ -920,6 +959,9 @@ const osmotic: Def = {
     return {
       intro: `ポリビニルアルコール（繰り返し単位 –CH₂–CH(OH)–、式量 44）${f(x)} g を水に溶かして ${fi(vmL)} mL にした水溶液の浸透圧は、27 ℃ で ${fi(Pi)} Pa であった。${TXT_R}、グルコース C₆H₁₂O₆ = 180、水のモル凝固点降下 1.85 K·kg/mol。高さ 1.0 cm の水溶液の柱が底面におよぼす圧力は 98 Pa とする。`,
       steps: [
+        choice(rng, '一般に、溶質 w [g] を溶かして体積 V [L] にした水溶液の浸透圧が、温度 T [K] で Π [Pa] であった。溶質のモル質量 M [g/mol] を表す式を選べ。R は気体定数。',
+          'wRT/(ΠV)', ['ΠV/(wRT)', 'wRT/Π', 'wΠV/(RT)'],
+          'ファントホッフの法則 ΠV = nRT に n = w/M を入れると ΠV = (w/M)RT。M = wRT/(ΠV)。ΠV/(wRT) は逆数、wRT/Π は体積で割り忘れた式である。'),
         st('この水溶液のモル濃度を a×10⁻⁴ mol/L と表すとき、a を求めろ。', a1, '×10⁻⁴ mol/L',
           `Π = cRT より c = ${fi(Pi)} ÷ (8.31×10³ × 300) = ${sci(cR)} mol/L。`),
         st('このポリビニルアルコールの平均分子量を a×10⁴ と表すとき、a を求めろ。', a2, '×10⁴',
@@ -974,15 +1016,18 @@ const henry: Def = {
       steps: [
         st('仮に気体部分の圧力が 1.0×10⁵ Pa だとすると、気体部分にある CO₂ は何 mol か。a×10⁻² mol と表すときの a を求めろ。', a1, '×10⁻² mol',
           `n = PV/RT = 1.0×10⁵ × ${f(Vg)} ÷ (8.31×10³ × ${T}) = ${sci(aR)} mol。`),
+        choice(rng, '気体部分の圧力を P [Pa]、気体部分の体積を V [L]、水の体積を W [L]、温度を T [K] とし、1.0×10⁵ Pa のとき水 1 L に溶ける CO₂ を k [mol] とする。容器内の CO₂ の全物質量を表す式を選べ。',
+          'PV/(RT) + kWP/(1.0×10⁵)', ['PV/(RT) + kW', 'PV/(RT) + kWP', 'P(V + W)/(RT) + kWP/(1.0×10⁵)'],
+          '気体部分の CO₂ は状態方程式から PV/(RT) mol。水に溶けている CO₂ は、ヘンリーの法則により圧力に比例するので k × W × P/(1.0×10⁵) mol。この和 PV/(RT) + kWP/(1.0×10⁵) が、入れた CO₂ の物質量に等しい。kW は圧力に比例させ忘れた式、kWP は基準の圧力 1.0×10⁵ Pa で割り忘れた式、P(V + W)/(RT) は水の体積まで気体として数えた式である。'),
         st('平衡に達したときの気体部分の圧力を a×10⁵ Pa と表すとき、a を求めろ。', a2, '×10⁵ Pa',
           `圧力を a×10⁵ Pa とすると、気体部分に ${sci(aR)} × a mol、水中に ${sci(ht.k, 2)} × ${f(Vw)} × a = ${sci(b)} × a mol。合計が ${f(n, 2)} mol。a = ${f(n, 2)} ÷ (${sci(aR)} + ${sci(b)}) = ${f(a2)}。`),
         st('このとき水に溶けている CO₂ を a×10⁻² mol と表すとき、a を求めろ。', a3, '×10⁻² mol',
           `溶ける量は圧力に比例する。${sci(b)} × ${f(P1R)} = ${sci(a3 * 1e-2)} mol。`),
         st(`次に、温度を変えずにピストンを動かして気体部分の体積を ${f(Vg2)} L にし、ふたたび平衡に達させた。気体部分の圧力を a×10⁵ Pa と表すとき、a を求めろ。`, a4, '×10⁵ Pa',
           `1.0×10⁵ Pa あたり気体部分に入る量は ${ratio === 2 ? '2 倍' : '半分'}の ${sci(aR * ratio)} mol になる。a = ${f(n, 2)} ÷ (${sci(aR * ratio)} + ${sci(b)}) = ${f(a4)}。${ratio === 2 ? '体積を 2 倍にしても圧力は半分にはならない。水から CO₂ が出てくるからである。' : '体積を半分にしても圧力は 2 倍にはならない。CO₂ がさらに水に溶けるからである。'}`),
-        st('(4) のとき水に溶けている CO₂ は何 g か。', mass, 'g',
+        st('(5) のとき水に溶けている CO₂ は何 g か。', mass, 'g',
           `${sci(b)} × ${f(P2R)} = ${sci(b * P2R)} mol。× 44 = ${f(mass)} g。`),
-        st('(4) のとき、容器内の CO₂ 全体の何 % が水に溶けているか。', pct, '%',
+        st('(5) のとき、容器内の CO₂ 全体の何 % が水に溶けているか。', pct, '%',
           `${sci(b * P2R)} ÷ ${f(n, 2)} × 100 = ${f(pct)} %。`),
       ],
       p: { T, k: ht.k, Vw, Vg, n, Vg2 },
@@ -1525,12 +1570,210 @@ const dumas: Def = {
   },
 };
 
+// ───────────────────────── 29. 解離平衡の一般式（記号） ─────────────────────────
+
+const DISS_SETS = (() => {
+  const out: { n: number; T: number; V: number; P: number; alphaTrue: number }[] = [];
+  for (const n of [0.05, 0.06, 0.08]) {
+    for (const T of [300, 350, 400]) {
+      // V = 1.0 L は使わない（体積で割り忘れた式が同じ値になってしまう）
+      for (const V of [0.5, 2.0, 5.0]) {
+        // α = 0.5 は使わない（2 乗を忘れた式 2nα/((1 − α)V) が同じ値になってしまう）
+        for (const alphaTrue of [0.2, 0.25, 0.4, 0.55, 0.6]) {
+          const P = sig3((n * (1 + alphaTrue) * R * T) / V);
+          if (P >= 4e4 && P <= 4e5) out.push({ n, T, V, P, alphaTrue });
+        }
+      }
+    }
+  }
+  return out;
+})();
+
+const dissGeneral: Def = {
+  id: 'dissociation-general',
+  title: '気体の解離平衡 A ⇄ 2B を文字式で表す',
+  unit: 'c25',
+  level: 3,
+  build(rng, r) {
+    const { n, T, V, P, alphaTrue } = pick(rng, DISS_SETS);
+    const alpha = (P * V) / (n * R * T) - 1;
+    const aR = r(alpha);
+    const kc = (4 * n * aR * aR) / ((1 - aR) * V);
+    const a7 = kc / 1e-2;
+    return {
+      intro: `気体 A が解離して気体 B になる反応 A ⇄ 2B を考える。A だけを n [mol] とって容積 V [L] の容器に入れ、温度を T [K] に保つと、解離度 α で平衡に達した。気体は理想気体とし、気体定数を R とする。(6) と (7) では n = ${f(n, 2)} mol、V = ${f(V, 2)} L、T = ${T} K とし、このときの全圧は ${sci(P)} Pa であった。R = 8.31×10³ Pa·L/(K·mol)。`,
+      steps: [
+        choice(rng, '平衡状態での気体の全物質量を表す式を選べ。', 'n(1 + α)', ['n(1 − α)', '2nα', 'n(1 + 2α)'],
+          'A は nα mol 解離して n(1 − α) mol 残り、B は 2nα mol 生じる。合計 n(1 − α) + 2nα = n(1 + α)。n(1 − α) は A だけ、2nα は B だけを数えた式である。'),
+        choice(rng, '平衡状態での全圧を表す式を選べ。', 'n(1 + α)RT/V', ['nRT/V', '2nαRT/V', 'n(1 + α)V/(RT)'],
+          '状態方程式 PV = (全物質量) × RT に (1) を入れる。P = n(1 + α)RT/V。nRT/V は解離による分子数の増加を無視した式である。'),
+        choice(rng, '濃度平衡定数 Kc = [B]²/[A] を表す式を選べ。', '4nα²/((1 − α)V)', ['4nα²/(1 − α)', '2nα/((1 − α)V)', 'nα²/((1 − α)V)'],
+          '[A] = n(1 − α)/V、[B] = 2nα/V。Kc = (2nα/V)² ÷ (n(1 − α)/V) = 4nα²/((1 − α)V)。物質量のまま計算して体積で割り忘れると 4nα²/(1 − α)、2 乗を忘れると 2nα/((1 − α)V)、B の係数 2 を忘れると nα²/((1 − α)V) になる。'),
+        choice(rng, '圧平衡定数 Kp = (B の分圧)²/(A の分圧) を、α と全圧 P で表す式を選べ。', '4α²P/(1 − α²)', ['4α²P/(1 − α)', '2αP/(1 − α)', 'α²P/(1 − α²)'],
+          'モル分率は A が (1 − α)/(1 + α)、B が 2α/(1 + α)。Kp = {2αP/(1 + α)}² ÷ {(1 − α)P/(1 + α)} = 4α²P/{(1 − α)(1 + α)} = 4α²P/(1 − α²)。モル分率の分母 (1 + α) を落とすと 4α²P/(1 − α)、2 乗を忘れると 2αP/(1 − α)、B の係数 2 を忘れると α²P/(1 − α²) になる。'),
+        choice(rng, 'Kp と Kc の関係を表す式を選べ。', 'Kp = KcRT', ['Kp = Kc/(RT)', 'Kp = Kc(RT)²', 'Kp = Kc'],
+          '分圧 = 濃度 × RT（p = (n/V)RT）。Kp = ([B]RT)² ÷ ([A]RT) = [B]²/[A] × RT、つまり Kp = KcRT。右辺と左辺の気体分子の数の差（2 − 1 = 1）が RT の指数になる。'),
+        st('数値を入れて、解離度 α を求めろ。', alpha, '',
+          `全物質量は PV/(RT) = ${sci(P)} × ${f(V, 2)} ÷ (8.31×10³ × ${T}) = ${f((P * V) / (R * T))} mol。これが ${f(n, 2)} × (1 + α) に等しい。1 + α = ${f((P * V) / (n * R * T))}、α = ${f(alpha)}。`),
+        st('Kc を a×10⁻² mol/L と表すとき、a を求めろ。', a7, '×10⁻² mol/L',
+          `Kc = 4nα²/((1 − α)V) = 4 × ${f(n, 2)} × ${f(aR)}² ÷ (${f(1 - aR)} × ${f(V, 2)}) = ${sci(kc)} mol/L。`),
+      ],
+      p: { n, T, V, P, alphaTrue },
+    };
+  },
+};
+
+// ───────────────────────── 30. 弱酸の電離（記号） ─────────────────────────
+
+const WEAK_SETS = (() => {
+  const out: { Ka: number; c: number; N: number }[] = [];
+  for (const Ka of [1.0e-5, 1.6e-5, 2.5e-5, 4.0e-5]) {
+    for (const c of [0.1, 0.04, 0.25]) {
+      for (const N of [4, 9, 16, 25, 100]) {
+        if (Math.sqrt((Ka * N) / c) <= 0.05) out.push({ Ka, c, N });
+      }
+    }
+  }
+  return out;
+})();
+
+const weakGeneral: Def = {
+  id: 'weak-acid-general',
+  title: '弱酸の電離度と電離定数を文字式で表す',
+  unit: 'c26',
+  level: 3,
+  build(rng, r) {
+    const { Ka, c, N } = pick(rng, WEAK_SETS);
+    const root = Math.round(Math.sqrt(N));
+    const alpha = Math.sqrt(Ka / c);
+    const a6 = alpha / 1e-2;
+    const c2 = c / N;
+    const h2 = Math.sqrt(c2 * Ka);
+    const pH2 = -log10(h2);
+    return {
+      intro: `1 価の弱酸 HA の水溶液を考える（HA ⇄ H⁺ + A⁻）。HA の濃度を c [mol/L]、電離度を α、電離定数を Ka [mol/L] とする。水の電離で生じる H⁺ は無視する。(6) と (7) では Ka = ${sci(Ka, 2)} mol/L、c = ${f(c, 2)} mol/L とする。${TXT_LOG}、√10 = 3.16。pH は小数第 2 位まで求めろ。`,
+      steps: [
+        choice(rng, 'Ka を c と α で表す式を選べ。近似は使わない。', 'cα²/(1 − α)', ['cα²/(1 + α)', 'c²α²/(1 − α)', 'cα/(1 − α)'],
+          '[H⁺] = [A⁻] = cα、[HA] = c(1 − α)。Ka = [H⁺][A⁻]/[HA] = (cα)² ÷ {c(1 − α)} = cα²/(1 − α)。c を約分し忘れると c²α²/(1 − α)、分子を 2 乗し忘れると cα/(1 − α) になる。'),
+        choice(rng, 'α が 1 より十分小さいとき、α を c と Ka で表す式を選べ。', '√(Ka/c)', ['√(cKa)', 'Ka/c', '√(c/Ka)'],
+          '1 − α ≒ 1 とすると Ka = cα²。α = √(Ka/c)。√(cKa) は [H⁺] の式、Ka/c は平方根を取り忘れた式である。'),
+        choice(rng, '(2) の近似がよく成り立つのは、どのような場合か。', 'c が Ka に比べて十分大きいとき', ['c が Ka に比べて十分小さいとき', 'c が Ka とほぼ等しいとき', 'c の大きさによらずつねに成り立つ'],
+          'α = √(Ka/c) が 1 より十分小さければよいので、Ka/c ≪ 1、つまり c が Ka に比べて十分大きいとき。うすめて c が Ka に近づくと α が大きくなり、1 − α ≒ 1 とはできなくなる。'),
+        choice(rng, '(2) の近似のもとで、[H⁺] を c と Ka で表す式を選べ。', '√(cKa)', ['√(Ka/c)', 'cKa', '√(c/Ka)'],
+          '[H⁺] = cα = c × √(Ka/c) = √(cKa)。'),
+        choice(rng, `この水溶液を水でうすめて濃度を 1/${N} にすると、電離度 α は何倍になるか。(2) の近似が成り立つとする。`, `${root} 倍`, [`${N} 倍`, `1/${root} 倍`, '1 倍（変わらない）'],
+          `α = √(Ka/c) で、Ka は温度が同じなら変わらない。c が 1/${N} になると α は √${N} = ${root} 倍になる。うすめるほど電離度は大きくなる。ただし [H⁺] = √(cKa) は 1/${root} 倍に小さくなる。`),
+        st('数値を入れて、うすめる前の電離度 α を a×10⁻² と表すとき、a を求めろ。', a6, '×10⁻²',
+          `α = √(Ka/c) = √(${sci(Ka, 2)} ÷ ${f(c, 2)}) = √(${sci(Ka / c, 3)}) = ${sci(alpha)}。1 より十分小さいので、近似は成り立っている。`),
+        st(`濃度を 1/${N} にうすめた水溶液の pH を求めろ。`, pH2, '',
+          `濃度は ${f(c, 2)} ÷ ${N} = ${sci(c2, 2)} mol/L。[H⁺] = √(cKa) = √(${sci(c2, 2)} × ${sci(Ka, 2)}) = √(${sci(c2 * Ka, 3)}) = ${sci(h2)} mol/L。pH = −½ log₁₀(${sci(c2 * Ka, 3)}) = ${ph(pH2)}。このときの電離度は ${sci(Math.sqrt(Ka / c2), 2)} で、まだ近似が使える。`),
+      ],
+      p: { Ka, c, N },
+    };
+  },
+};
+
+// ───────────────────────── 31. 分配平衡と抽出（記号） ─────────────────────────
+
+const EXTRACT_VOLS: readonly (readonly [number, number])[] = [[100, 50], [200, 100], [100, 200], [200, 50], [50, 100]];
+
+const extraction: Def = {
+  id: 'extraction-partition',
+  title: '分配平衡と抽出の回数',
+  unit: 'c14',
+  level: 3,
+  build(rng, r) {
+    const K = pick(rng, [4, 5, 9, 10, 20]);
+    // KV₂ = V₁ だと「残る割合」と「移った割合」が同じ値になるので避ける
+    const [V1, V2] = pick(rng, EXTRACT_VOLS.filter(([a, b]) => K * b !== a));
+    const m = pick(rng, [100, 200, 500]);
+    const f1 = V1 / (V1 + K * V2);
+    const f2 = ((2 * V1) / (2 * V1 + K * V2)) ** 2;
+    const f3 = ((3 * V1) / (3 * V1 + K * V2)) ** 3;
+    const got = m * (1 - f3);
+    return {
+      intro: `水と混ざり合わない有機溶媒を、物質 X の水溶液に加えて振り混ぜると、X は 2 つの層に分かれて溶け、平衡状態では K = (有機層中の X の濃度) ÷ (水層中の X の濃度) が一定になる（分配平衡。K を分配係数という）。X を含む水溶液 V₁ [mL] から、有機溶媒を合計 V₂ [mL] 使って X を抽出する。X はどちらの層でも会合や電離をせず、振り混ぜても各層の体積は変わらないとする。数値を求める小問では K = ${f(K, 2)}、V₁ = ${V1} mL、V₂ = ${V2} mL とする。`,
+      steps: [
+        choice(rng, '有機溶媒 V₂ を全部使って 1 回だけ抽出したとき、X のうち水層に残る割合を表す式を選べ。', 'V₁/(V₁ + KV₂)', ['KV₂/(V₁ + KV₂)', 'V₁/(KV₁ + V₂)', 'V₁/(K(V₁ + V₂))'],
+          '水層の濃度を c とすると有機層の濃度は Kc。X の量は水層に cV₁、有機層に KcV₂。水層に残る割合は cV₁ ÷ (cV₁ + KcV₂) = V₁/(V₁ + KV₂)。KV₂/(V₁ + KV₂) は有機層に移った割合、V₁/(KV₁ + V₂) は K をかける層を取り違えた式である。'),
+        st('1 回だけ抽出したとき、水層に残る X は最初の何 % か。', f1 * 100, '%',
+          `${V1} ÷ (${V1} + ${f(K, 2)} × ${V2}) = ${f(f1)}。${f(f1 * 100)} %。`),
+        choice(rng, '有機溶媒を V₂/2 ずつ 2 回に分けて抽出する（1 回ごとに有機層を取り除く）。2 回の抽出のあと、水層に残る割合を表す式を選べ。', '(2V₁/(2V₁ + KV₂))²', ['(V₁/(V₁ + KV₂))²', '2V₁/(2V₁ + KV₂)', '(V₁/(2V₁ + KV₂))²'],
+          '1 回の抽出で残る割合は、(1) の V₂ を V₂/2 にして V₁/(V₁ + KV₂/2) = 2V₁/(2V₁ + KV₂)。2 回目は、残った X に同じ割合がもう一度かかるので、2 乗して (2V₁/(2V₁ + KV₂))² になる。(V₁/(V₁ + KV₂))² は 1 回に使う溶媒を半分にし忘れた式、2V₁/(2V₁ + KV₂) は 1 回ぶんしか数えていない式である。'),
+        st('2 回に分けて抽出したとき、水層に残る X は最初の何 % か。', f2 * 100, '%',
+          `1 回ごとに残る割合は 2 × ${V1} ÷ (2 × ${V1} + ${f(K, 2)} × ${V2}) = ${f(Math.sqrt(f2))}。2 乗して ${f(f2)}。${f(f2 * 100)} %。同じ量の溶媒でも、分けて使うほうが残りが少ない。`),
+        choice(rng, '有機溶媒を V₂/n ずつ n 回に分けて抽出したとき、水層に残る割合を表す式を選べ。', '(nV₁/(nV₁ + KV₂))ⁿ', ['(V₁/(V₁ + KV₂))ⁿ', 'nV₁/(nV₁ + KV₂)', '(V₁/(nV₁ + KV₂))ⁿ'],
+          '1 回ごとに残る割合は V₁/(V₁ + KV₂/n) = nV₁/(nV₁ + KV₂)。これが n 回かかるので、n 乗して (nV₁/(nV₁ + KV₂))ⁿ になる。'),
+        st(`はじめ水層に X が ${m} mg 含まれていたとする。有機溶媒を 3 回に等分して抽出したとき、有機層に移った X は合計で何 mg か。`, got, 'mg',
+          `1 回ごとに残る割合は 3 × ${V1} ÷ (3 × ${V1} + ${f(K, 2)} × ${V2}) = ${f(Math.cbrt(f3))}。3 乗して ${f(f3)}。有機層に移ったのは ${m} × (1 − ${f(f3)}) = ${f(got)} mg。`),
+      ],
+      p: { K, V1, V2, m },
+    };
+  },
+};
+
+// ───────────────────────── 32. ラウールの法則（記号） ─────────────────────────
+
+const RAOULT_T = [
+  { t: 25, p0: 3.17e3 },
+  { t: 40, p0: 7.38e3 },
+  { t: 60, p0: 1.99e4 },
+] as const;
+const RAOULT_SETS = (() => {
+  const out: { W: number; M: number; n2: number }[] = [];
+  for (const W of [90, 180]) {
+    for (const M of [60, 92, 180, 342]) {
+      for (const n2 of [0.1, 0.2, 0.25]) {
+        if (n2 / (W / 18) <= 0.04) out.push({ W, M, n2 });
+      }
+    }
+  }
+  return out;
+})();
+
+const raoult: Def = {
+  id: 'raoult-vapor-pressure',
+  title: 'ラウールの法則と蒸気圧降下',
+  unit: 'c15',
+  level: 3,
+  build(rng, r) {
+    const { W, M: Mtrue, n2: n2True } = pick(rng, RAOULT_SETS);
+    const { t, p0 } = pick(rng, RAOULT_T);
+    const n1 = W / 18;
+    const w = sig3(Mtrue * n2True);
+    const dp = sig3((p0 * n2True) / (n1 + n2True));
+    const a3 = dp / p0 / 1e-2;
+    const x2 = r(a3) * 1e-2;
+    const n2 = (n1 * x2) / (1 - x2);
+    const n2R = r(n2);
+    const M = w / n2R;
+    return {
+      intro: `不揮発性の物質を溶かしたうすい溶液の蒸気圧 p は、純溶媒の蒸気圧 p₀ に溶媒のモル分率をかけた値になる（ラウールの法則）。モル質量 M₀ [g/mol] の溶媒 W [g] に、モル質量 M [g/mol] の不揮発性の非電解質 w [g] を溶かした溶液を考える。数値を求める小問では、溶媒は水（M₀ = 18.0 g/mol）${f(W)} g、溶質は ${f(w)} g で、${t} ℃ での純水の蒸気圧は ${sci(p0)} Pa、溶液の蒸気圧は純水より ${f(dp)} Pa 低かったとする。`,
+      steps: [
+        choice(rng, '溶液中の溶媒のモル分率を表す式を選べ。', '(W/M₀)/(W/M₀ + w/M)', ['(w/M)/(W/M₀ + w/M)', 'W/(W + w)', '(W/M₀)/(w/M)'],
+          '溶媒は W/M₀ mol、溶質は w/M mol。溶媒のモル分率 = (W/M₀)/(W/M₀ + w/M)。(w/M)/(W/M₀ + w/M) は溶質のモル分率、W/(W + w) は質量の割合である。'),
+        choice(rng, '溶媒の物質量を n₁、溶質の物質量を n₂ とするとき、蒸気圧降下 Δp = p₀ − p を表す式を選べ。', 'p₀n₂/(n₁ + n₂)', ['p₀n₁/(n₁ + n₂)', 'p₀n₁/n₂', 'p₀(n₁ + n₂)/n₂'],
+          'p = p₀ × n₁/(n₁ + n₂)。Δp = p₀ − p = p₀ × {1 − n₁/(n₁ + n₂)} = p₀n₂/(n₁ + n₂)。蒸気圧降下は溶質のモル分率に比例する。p₀n₁/(n₁ + n₂) は溶液の蒸気圧 p そのものである。'),
+        st('数値を入れて、溶質のモル分率を a×10⁻² と表すとき、a を求めろ。', a3, '×10⁻²',
+          `(2) より 溶質のモル分率 = Δp/p₀ = ${f(dp)} ÷ ${sci(p0)} = ${sci(x2)}。`),
+        choice(rng, '溶質のモル質量 M を、w、W、M₀、p₀、Δp で表す式を選べ。', 'wM₀(p₀ − Δp)/(WΔp)', ['wM₀Δp/(W(p₀ − Δp))', 'WM₀(p₀ − Δp)/(wΔp)', 'w(p₀ − Δp)/(WM₀Δp)'],
+          'Δp/p₀ = n₂/(n₁ + n₂) より n₂(p₀ − Δp) = n₁Δp、n₂ = n₁Δp/(p₀ − Δp)。n₁ = W/M₀、n₂ = w/M を入れると w/M = WΔp/{M₀(p₀ − Δp)}。M = wM₀(p₀ − Δp)/(WΔp)。分子と分母が逆の式、w と W を取り違えた式、M₀ を分母に置いた式が間違いの例である。'),
+        st('溶質の物質量は何 mol か。', n2, 'mol',
+          `水は ${f(W)} ÷ 18.0 = ${f(n1)} mol。n₂/(${f(n1)} + n₂) = ${sci(x2)} より n₂ = ${f(n1)} × ${sci(x2)} ÷ (1 − ${sci(x2)}) = ${f(n2)} mol。`),
+        st('溶質の分子量を求めろ。', M, '',
+          `${f(w)} ÷ ${f(n2R)} = ${f(M)}。`),
+      ],
+      p: { W, Mtrue, n2True, t, p0, w, dp },
+    };
+  },
+};
+
 // ───────────────────────── 一覧 ─────────────────────────
 
 const DEFS: Def[] = [
   n2o4, vapor, titration, ksp, metal, ionic, electrolysis, leadAcid, fuelCell, thermo, bondNH3, hessCH4, firstOrder,
   fpElectrolyte, fpDimer, osmotic, henry, buffer, twoStep, redox, elemental, fat, condensation, vinylon, starch, glycine,
-  mixedCombustion, dumas,
+  mixedCombustion, dumas, dissGeneral, weakGeneral, extraction, raoult,
 ];
 
 function finish(d: Def, b: Built): Drill {

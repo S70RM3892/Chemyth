@@ -19,7 +19,7 @@ import { showRanking, submitScore } from './ui/ranking';
 import { drawToken, elementIcon } from './ui/token';
 
 type Placeable = Exclude<Kind, 'hub' | 'part'>;
-type Tool = 'pan' | 'erase' | 'area' | Placeable;
+type Tool = 'pan' | 'erase' | 'area' | 'rail' | Placeable;
 /** 範囲コピーした設計図。左上からのずれで持つ */
 interface Stamp { kind: Placeable; dx: number; dy: number; dir: Dir; recipe?: string; outOrder?: string[]; outSlot?: number[]; test?: string; sub?: string; ch?: number; role?: 'in' | 'out' }
 type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir };
@@ -27,7 +27,7 @@ const SESSION_LIMIT_MS = 25 * 60 * 1000;
 const BUILD: Placeable[] = ['belt', 'bridge', 'tunnel', 'splitter', 'analyzer', 'station', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'sampler', 'depot', 'vent'];
 /** 道具の分類。道具が多いので、棚を分けて出す */
 const GROUPS: { id: string; name: string; tools: Tool[] }[] = [
-  { id: 'move', name: '運ぶ', tools: ['pan', 'belt', 'bridge', 'tunnel', 'splitter', 'analyzer', 'station'] },
+  { id: 'move', name: '運ぶ', tools: ['pan', 'belt', 'bridge', 'tunnel', 'splitter', 'analyzer', 'station', 'rail'] },
   { id: 'make', name: '作る', tools: ['extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector'] },
   { id: 'store', name: '出し入れ', tools: ['sampler', 'depot', 'vent'] },
   { id: 'edit', name: '編集', tools: ['area', 'erase'] },
@@ -39,6 +39,7 @@ interface Clone { kind: Placeable; recipe?: string; outOrder?: string[]; outSlot
 const TOOLS: { id: Tool; glyph: string; name: string; tip: string; color?: string; need: { done?: number; chapter?: number } }[] = [
   { id: 'pan', glyph: '☝', name: '見る', need: {}, tip: 'タップで選ぶ。装置やベルトから指を引くとベルトが伸びる。何もない所を引くと地図が動く。' },
   ...BUILD.map((id) => ({ id, glyph: MACHINES[id].glyph, name: MACHINES[id].name, tip: MACHINES[id].tip, color: MACHINES[id].color, need: MACHINES[id] })),
+  { id: 'rail', glyph: '線', name: '線路', need: { done: 3 }, color: '#8a5a2c', tip: '「積む駅」から、同じ番線の「降ろす駅」まで指でなぞると、その道筋に線路が敷かれる。敷かなければ自動で引かれる。設備の上を越えるので、どこを通してもよい。' },
   { id: 'area', glyph: '▭', name: '範囲', need: {}, color: '#4a5a78', tip: '指でなぞって四角く囲む。囲んだ設備をまとめてコピーして別の場所に貼りつけたり、まとめて消したりできる。ラインを丸ごと増設するのに使う。' },
   { id: 'erase', glyph: '✕', name: '消す', need: {}, color: '#b0453f', tip: 'タップするか、なぞると消える。間違えたら右上の「元に戻す」。' },
 ];
@@ -65,6 +66,8 @@ function boot(data: HotData) {
   let blueprint: Stamp[] | null = null;
   /** 設計図を置こうとしている場所（左上のマス） */
   let ghost: [number, number] | null = null;
+  /** 敷いている途中の線路 */
+  let railDraft: { from: Ent; pts: [number, number][] } | null = null;
   /** 地図に稼働率の札を出すか */
   let overlay = store.meta().overlay === true;
   const app = $('app');
@@ -369,9 +372,10 @@ function boot(data: HotData) {
   // ---- 地図の操作 ----
   const pullsBelt = (x: number, y: number) => { const e = at(world, x, y); return !!e && e.kind !== 'hub' && e.kind !== 'vent'; };
   const input = attachInput(cv, cam, {
-    begin: () => { group = null; camTo = null; cross = null; },
-    mode: (x, y) => (tool === 'area' ? (blueprint ? 'pan' : 'stroke') : tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y)) ? 'stroke' : 'pan'),
+    begin: () => { group = null; camTo = null; cross = null; railDraft = null; },
+    mode: (x, y) => (tool === 'rail' ? (at(world, x, y)?.kind === 'station' ? 'stroke' : 'pan') : tool === 'area' ? (blueprint ? 'pan' : 'stroke') : tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y)) ? 'stroke' : 'pan'),
     tap(x, y) {
+      if (tool === 'rail') { const e = at(world, x, y); if (e?.kind === 'station') inspect(e); else toast('線路は「積む駅」から「降ろす駅」まで、指でなぞって敷く。', 2400); return; }
       if (tool === 'area') { if (blueprint) { ghost = [x, y]; sfx.tap(); } else areaA = areaB = null; paintArea(); return; }
       const e = at(world, x, y);
       if (tool === 'erase') { if (e?.kind === 'hub') toast('納品所は消せない'); else if (doErase(x, y)) sfx.erase(); else toast('ここには何もない', 1200); return; }
@@ -403,6 +407,29 @@ function boot(data: HotData) {
     },
     stroke(x, y, prev) {
       selected = null;
+      if (tool === 'rail') {
+        const e = at(world, x, y);
+        if (!railDraft) {
+          if (!prev && e?.kind === 'station' && e.role === 'in') railDraft = { from: e, pts: [[x + 0.5, y + 0.5]] };
+          else if (!prev) toast('線路は「積む駅」から引き始めろ。', 1800);
+          return;
+        }
+        const from = railDraft.from, last = railDraft.pts[railDraft.pts.length - 1];
+        if (e === from) { railDraft.pts = [[x + 0.5, y + 0.5]]; return; }
+        if (last[0] === x + 0.5 && last[1] === y + 0.5) return;
+        railDraft.pts.push([x + 0.5, y + 0.5]);
+        if (e?.kind === 'station' && e.role === 'out' && e.ch === from.ch) {
+          // 着いた：曲がり角だけを残して保存する
+          const raw = railDraft.pts, pts = raw.filter((q, i) => i === 0 || i === raw.length - 1 || !((raw[i - 1][0] === q[0] && q[0] === raw[i + 1][0]) || (raw[i - 1][1] === q[1] && q[1] === raw[i + 1][1])));
+          from.rail = pts; from.railTo = `${e.x},${e.y}`; from.tr = undefined;
+          railDraft = null;
+          toast(`線路を敷いた（長さ ${raw.length - 1} マス）。`, 2200);
+          sfx.ok();
+        } else if (e?.kind === 'station' && e !== from) {
+          toast(e.role === 'out' ? '番線が違う。同じ番線の「降ろす駅」へつなげ。' : 'そこは「積む駅」だ。「降ろす駅」へつなげ。', 2200);
+        }
+        return;
+      }
       if (tool === 'area') { if (!prev || !areaA) areaA = [x, y]; areaB = [x, y]; paintArea(); return; }
       if (tool === 'erase') { doErase(x, y); return; }
       if (prev) {
@@ -625,7 +652,7 @@ function boot(data: HotData) {
       } else input.tick(dt);
       if (selected && at(world, selected.x, selected.y) !== selected) selected = null;
       if (lastSeen !== world.seen) { lastSeen = world.seen; refreshTools(true); }
-      draw(ctx, cw, ch, world, cam, now / 1000, dt, { tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : null });
+      draw(ctx, cw, ch, world, cam, now / 1000, dt, { tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : null, rail: tool === 'rail' ? railDraft?.pts ?? null : null });
       hud();
     }
     placeAct();

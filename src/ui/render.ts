@@ -2,12 +2,12 @@ import { ZONES, hubRect, isSea, zoneAt, zoneSpots, type Zone } from '../content/
 import { ELEMENTS } from '../content/elements';
 import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { beltSpeed, currentGoal, DX, DY, fedTier, goalCount, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationTarget, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { beltSpeed, currentGoal, DX, DY, fedTier, goalCount, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, railOf, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 
 export interface Camera { x: number; y: number; z: number }
-export interface View { tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string }[] | null }
+export interface View { tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null }
 
 // 方眼ノートに描いた工場の図面。輪郭線と斜線で描き、ぼかしや発光は使わない
 let FONT_HAND = '"Klee One", sans-serif';
@@ -583,14 +583,13 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   //      線路は横に進んでから縦に曲がる。積む駅ごとに少しずらすので、同じ行き先でも重ならない ----
   for (const e of w.ents.values()) {
     if (e.kind !== 'station' || e.role !== 'in') continue;
-    const dest = (e.tr?.to ? w.ents.get(e.tr.to) : undefined) ?? stationTarget(w, e);
-    if (!dest || dest.kind !== 'station') continue;
-    const off = ((((e.x * 7 + e.y * 13) % 5) + 5) % 5 - 2) * 0.24;
-    const pts: [number, number][] = [[e.x + 1, e.y + 1 + off], [dest.x + 1 + off, e.y + 1 + off], [dest.x + 1 + off, dest.y + 1]];
+    const route = railOf(w, e);
+    if (!route) continue;
+    const pts = route.pts;
     const xs = pts.map((q) => sx(q[0])), ys = pts.map((q) => sy(q[1]));
     if (Math.max(...xs) < -50 || Math.min(...xs) > cw + 50 || Math.max(...ys) < -50 || Math.min(...ys) > ch + 50) continue;
     const col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length], lift2 = z * 0.3;
-    const path = (ox: number, oy: number) => { ctx.beginPath(); ctx.moveTo(xs[0] + ox, ys[0] + oy); ctx.lineTo(xs[1] + ox, ys[1] + oy); ctx.lineTo(xs[2] + ox, ys[2] + oy); };
+    const path = (ox: number, oy: number) => { ctx.beginPath(); xs.forEach((x, k) => (k ? ctx.lineTo(x + ox, ys[k] + oy) : ctx.moveTo(x + ox, ys[k] + oy))); };
     ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
     // 地面の影 → 枕木 → 桁 → 路線色
     ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2; path(lift2 * 0.5, lift2); ctx.stroke();
@@ -600,8 +599,11 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     // 列車：道のりに沿って進む
     const tr = e.tr;
     if (tr && z >= 10) {
-      const l1 = Math.abs(pts[1][0] - pts[0][0]), l2 = Math.abs(pts[2][1] - pts[1][1]), d = Math.max(0, Math.min(1, tr.p)) * (l1 + l2);
-      const on1 = d <= l1, f = on1 ? (l1 ? d / l1 : 0) : (l2 ? (d - l1) / l2 : 1), a = on1 ? 0 : 1;
+      // 道のりの何マス目にいるかから、どの区間のどこかを求める
+      const segs = pts.slice(1).map((q, k) => Math.abs(q[0] - pts[k][0]) + Math.abs(q[1] - pts[k][1]));
+      let d = Math.max(0, Math.min(1, tr.p)) * segs.reduce((x, y) => x + y, 0), a = 0;
+      while (a < segs.length - 1 && d > segs[a]) { d -= segs[a]; a++; }
+      const f = segs[a] ? Math.min(1, d / segs[a]) : 0;
       const tx = xs[a] + (xs[a + 1] - xs[a]) * f, ty = ys[a] + (ys[a + 1] - ys[a]) * f;
       const ang = Math.atan2(ys[a + 1] - ys[a], xs[a + 1] - xs[a]) + (tr.back ? Math.PI : 0);
       ctx.save();
@@ -639,6 +641,16 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       ctx.fillStyle = punk ? '#eef0ea' : P.ink;
       ctx.fillText(tx, bx + wd / 2, by + hh / 2 - 1);
     }
+  }
+
+  // ---- 敷いている途中の線路 ----
+  if (view.rail && view.rail.length) {
+    ctx.strokeStyle = P.hi; ctx.lineWidth = z * 0.16; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.setLineDash([z * 0.25, z * 0.2]);
+    ctx.beginPath(); view.rail.forEach((q, k) => (k ? ctx.lineTo(sx(q[0]), sy(q[1])) : ctx.moveTo(sx(q[0]), sy(q[1])))); ctx.stroke();
+    ctx.setLineDash([]);
+    const q = view.rail[view.rail.length - 1];
+    ctx.fillStyle = P.hi; ctx.beginPath(); ctx.arc(sx(q[0]), sy(q[1]), z * 0.18, 0, Math.PI * 2); ctx.fill();
   }
 
   // ---- 設計図の見本：置ける所は蛍光、ふさがっている所は赤 ----

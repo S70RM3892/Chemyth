@@ -9,7 +9,7 @@ import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
 import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
-import { LINES, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railLength, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { LINES, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { chip, equation, openConfig, type SheetActions } from './config';
 import { h } from './dom';
 import { sfx } from './sound';
@@ -311,8 +311,8 @@ export function showAnalyzer(c: PanelCtx, e: Ent, extra: HTMLElement) {
 
 export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
   const again = () => showStation(c, e, extra);
-  const role = (id: 'in' | 'out', text: string) => h('button', { class: 'ghost' + (e.role === id ? ' picked on' : ''), type: 'button', id: `st-role-${id}`, onclick: () => { e.role = id; e.buf = []; e.tr = undefined; sfx.ok(); again(); } }, text);
-  const to = e.role === 'in' ? stationTarget(c.w, e) : null;
+  const role = (id: 'in' | 'out', text: string) => h('button', { class: 'ghost' + (e.role === id ? ' picked on' : ''), type: 'button', id: `st-role-${id}`, onclick: () => { e.role = id; e.buf = []; e.tr = undefined; e.rail = undefined; e.railTo = undefined; sfx.ok(); again(); } }, text);
+  const route = e.role === 'in' ? railOf(c.w, e) : null, to = route?.dest ?? null;
   const feeders = e.role === 'out' ? [...c.w.ents.values()].filter((n) => n.kind === 'station' && n.role === 'in' && n.ch === e.ch).length : 0;
   const buf = (e.buf ?? []).map((s) => (s.startsWith('!') ? s.slice(1) : s));
   const kinds = [...new Set(buf)];
@@ -322,13 +322,15 @@ export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
     h('h3', {}, '② 路線番号'),
     h('p', { class: 'muted' }, '同じ番号の「積む駅」と「降ろす駅」が結ばれる。積む駅は、同じ番号のいちばん近い降ろす駅へ運ぶ。'),
     h('div', { class: 'chips' }, ...Array.from({ length: LINES }, (_, i) => {
-      const b = h('button', { class: 'chip plain line' + (e.ch === i + 1 ? ' on' : ''), type: 'button', id: `st-line-${i + 1}`, onclick: () => { e.ch = i + 1; e.tr = undefined; sfx.tap(); again(); } }, `${i + 1} 番線`);
+      const b = h('button', { class: 'chip plain line' + (e.ch === i + 1 ? ' on' : ''), type: 'button', id: `st-line-${i + 1}`, onclick: () => { e.ch = i + 1; e.tr = undefined; e.rail = undefined; e.railTo = undefined; sfx.tap(); again(); } }, `${i + 1} 番線`);
       b.style.setProperty('--line', LINE_COLORS[i]);
       return b;
     })),
     h('p', { class: 'status' }, e.role === 'in'
-      ? (to ? `行き先：線路 ${railLength(e, to)} マス先の降ろす駅。片道 約 ${(railLength(e, to) / trainSpeed(c.w)).toFixed(1)} 秒、1 編成 ${TRAIN_CAP} 個で、1 分あたり およそ ${Math.round((TRAIN_CAP * 60) / ((2 * railLength(e, to)) / trainSpeed(c.w) + 1))} 個まで運べる。列車は ${e.tr && (e.tr.p > 0 || e.tr.back) ? (e.tr.back ? '戻っている' : `${e.tr.cargo.length} 個を運んでいる`) : '駅で積んでいる'}。` : `${e.ch} 番線の降ろす駅がまだない。行き先に貨物駅を置き、「降ろす駅」にして同じ番号にしろ。`)
+      ? (to && route ? `行き先：線路 ${Math.round(route.len)} マス先の降ろす駅（${route.custom ? '自分で敷いた線路' : '自動で引いた線路'}）。片道 約 ${(route.len / trainSpeed(c.w)).toFixed(1)} 秒、1 編成 ${TRAIN_CAP} 個で、1 分あたり およそ ${Math.round((TRAIN_CAP * 60) / ((2 * route.len) / trainSpeed(c.w) + 1))} 個まで運べる。列車は ${e.tr && (e.tr.p > 0 || e.tr.back) ? (e.tr.back ? '戻っている' : `${e.tr.cargo.length} 個を運んでいる`) : '駅で積んでいる'}。` : `${e.ch} 番線の降ろす駅がまだない。行き先に貨物駅を置き、「降ろす駅」にして同じ番号にしろ。`)
       : `${e.ch} 番線の積む駅：${feeders} か所。届いたものは、正面の 2 つの口から出る。${(e.buf?.length ?? 0) >= STATION_CAP ? '満杯で、列車が降ろせずに待っている。出口にベルトをつなげ。' : ''}`),
+    e.role === 'in' ? h('p', { class: 'muted' }, '線路は自動で引かれる。道筋を自分で決めたいときは、道具「線路」で、この駅から降ろす駅まで指でなぞれ。') : null,
+    e.rail ? h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'st-auto', onclick: () => { e.rail = undefined; e.railTo = undefined; e.tr = undefined; sfx.tap(); again(); } }, '線路を自動に戻す')) : null,
     h('p', { class: 'muted' }, `駅にあるもの：${buf.length} / ${STATION_CAP} 個`),
     kinds.length ? h('div', { class: 'chips' }, ...kinds.map((s) => { const b = chip(s); b.disabled = true; b.append(h('span', { class: 'muted' }, `×${buf.filter((x) => x === s).length}`)); return b; })) : null,
     extra);
