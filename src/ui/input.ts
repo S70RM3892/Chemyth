@@ -9,6 +9,12 @@ export interface InputHandlers {
   stroke(tx: number, ty: number, prev: [number, number] | null): void;
   /** このマスからなぞり始めたら、地図を動かすか、なぞり書きにするか */
   mode(tx: number, ty: number): 'pan' | 'stroke';
+  /** 指を動かさずに押し続けた。true を返すと、そこからは地図を動かさず、なぞり書き（stroke）として扱う */
+  hold?(tx: number, ty: number): boolean;
+  /** なぞり書きを終えて指を離した */
+  end?(): void;
+  /** マウスが乗っているマス。外れたら null */
+  hover?(t: [number, number] | null): void;
 }
 
 export const Z_MIN = 9, Z_MAX = 110;
@@ -22,6 +28,8 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
   let last: [number, number] | null = null;
   let pinch: { d: number; cx: number; cy: number } | null = null;
   let vx = 0, vy = 0, lastMove = 0;
+  let holdTimer = 0;
+  const HOLD_MS = 260;
 
   const rect = () => cv.getBoundingClientRect();
   const toTile = (px: number, py: number): [number, number] => {
@@ -53,7 +61,20 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
       panning = false;
       last = null;
       h.begin();
+      // 押し続け：置く前の見本を出して、指で場所を選べるようにする
+      clearTimeout(holdTimer);
+      if (h.hold) {
+        const sx0 = ev.clientX, sy0 = ev.clientY;
+        holdTimer = window.setTimeout(() => {
+          if (!start || moved || pts.size !== 1) return;
+          const st = toTile(sx0, sy0);
+          if (!h.hold!(st[0], st[1])) return;
+          moved = true; panning = false; last = st;
+        }, HOLD_MS);
+      }
     } else if (pts.size === 2) {
+      clearTimeout(holdTimer);
+      if (start && moved && !panning) h.end?.();
       start = null;
       pinch = pinchState();
     }
@@ -61,7 +82,7 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
 
   cv.addEventListener('pointermove', (ev) => {
     const p = pts.get(ev.pointerId);
-    if (!p) return;
+    if (!p) { if (ev.pointerType === 'mouse' && h.hover) h.hover(toTile(ev.clientX, ev.clientY)); return; }
     const dx = ev.clientX - p.x, dy = ev.clientY - p.y;
     p.x = ev.clientX;
     p.y = ev.clientY;
@@ -77,6 +98,7 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
     if (!moved) {
       if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 8) return;
       moved = true;
+      clearTimeout(holdTimer);
       const st = toTile(start.x, start.y);
       panning = h.mode(st[0], st[1]) === 'pan';
       if (!panning) { last = st; h.stroke(st[0], st[1], null); }
@@ -102,6 +124,8 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
 
   const end = (ev: PointerEvent) => {
     if (!pts.delete(ev.pointerId)) return;
+    clearTimeout(holdTimer);
+    if (pts.size === 0 && start && moved && !panning) h.end?.();
     if (pts.size < 2) pinch = null;
     if (pts.size === 0 && start && !moved && ev.type === 'pointerup') {
       const [tx, ty] = toTile(ev.clientX, ev.clientY);
@@ -114,6 +138,8 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
   };
   cv.addEventListener('pointerup', end);
   cv.addEventListener('pointercancel', end);
+
+  cv.addEventListener('pointerleave', (ev) => { if (ev.pointerType === 'mouse') h.hover?.(null); });
 
   cv.addEventListener('wheel', (ev) => {
     ev.preventDefault();

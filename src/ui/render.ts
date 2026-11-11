@@ -2,12 +2,13 @@ import { ZONES, hubRect, isSea, zoneAt, zoneSpots, type Zone } from '../content/
 import { ELEMENTS } from '../content/elements';
 import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, railOf, stationTargets, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { FLOOR_DY, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, railOf, stationTargets, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
+import { districtsOf, type District } from '../engine/districts';
 
 export interface Camera { x: number; y: number; z: number }
-export interface View { tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null }
+export interface View { /** 見ている階（0 が 1 階） */ floor?: number; tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string; /** 出口（out）と入口の場所。d は物が流れる向き */ ports?: { x: number; y: number; d: number; out: boolean }[] }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null }
 
 // 方眼ノートに描いた工場の図面。輪郭線と斜線で描き、ぼかしや発光は使わない
 let FONT_HAND = '"Klee One", sans-serif';
@@ -293,11 +294,24 @@ function onCurve(c: ReturnType<typeof beltCurve>, p: number): [number, number] {
   return [q * q * c.ax + p * p * c.bx, q * q * c.ay + p * p * c.by];
 }
 
+/** いまの信号の状態（検知器と弁の絵に使う） */
+let SIG: number[] = [];
+/** 区画の集計は 1 秒半に 1 回でよい */
+let distCache: { w: World; tick: number; n: number; list: District[] } | null = null;
+function districts(w: World): District[] {
+  if (!distCache || distCache.w !== w || Math.abs(w.tick - distCache.tick) > 90 || distCache.n !== w.ents.size) distCache = { w, tick: w.tick, n: w.ents.size, list: districtsOf(w) };
+  return distCache.list;
+}
+
 export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: World, cam: Camera, t: number, dt: number, view: View) {
   const P = palette();
   const z = cam.z;
+  // 2 階の設備は y を FLOOR_DY だけずらして持っているので、描くときに引く。gy は地面（地形・資源地・1 階）の y
+  const off = (view.floor || 0) * FLOOR_DY;
   const sx = (x: number) => (x - cam.x) * z + cw / 2;
-  const sy = (y: number) => (y - cam.y) * z + ch / 2;
+  const gy = (y: number) => (y - cam.y) * z + ch / 2;
+  const sy = (y: number) => (y - off - cam.y) * z + ch / 2;
+  SIG = w.sig;
   spawn(w, P);
   FONT_HAND = P.font;
   FONT_SMALL = P.skin === 'punk' ? FONT_UI : P.font;
@@ -310,13 +324,32 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   // 画面の 1 マスが何ピクセルかで、地面の絵の細かさを選ぶ
   const tilePx = z * (ctx.getTransform().a || 1), lod = tilePx >= 20 ? 0 : tilePx >= 10 ? 1 : 2;
   for (let cy = Math.floor(wy0 / CH); cy <= Math.floor(wy1 / CH); cy++) for (let cx = Math.floor(wx0 / CH); cx <= Math.floor(wx1 / CH); cx++) {
-    ctx.drawImage(chunk(P, cx, cy, lod), Math.floor(sx(cx * CH)), Math.floor(sy(cy * CH)), Math.ceil(CH * z) + 1, Math.ceil(CH * z) + 1);
+    ctx.drawImage(chunk(P, cx, cy, lod), Math.floor(sx(cx * CH)), Math.floor(gy(cy * CH)), Math.ceil(CH * z) + 1, Math.ceil(CH * z) + 1);
   }
 
   const x0 = Math.floor(wx0), x1 = Math.ceil(wx1), y0 = Math.floor(wy0), y1 = Math.ceil(wy1);
-  const inView = (e: Ent) => e.x >= x0 - 2 && e.x <= x1 + 2 && e.y >= y0 - 2 && e.y <= y1 + 2;
+  const inView = (e: Ent) => e.x >= x0 - 2 && e.x <= x1 + 2 && e.y - off >= y0 - 2 && e.y - off <= y1 + 2;
+  if (off) {
+    // 2 階：地面を床板で覆い、1 階の設備を薄い影として透かす
+    ctx.fillStyle = punk ? (light ? 'rgba(196,201,206,0.82)' : 'rgba(15,18,22,0.84)') : light ? 'rgba(240,242,236,0.84)' : 'rgba(22,26,34,0.84)';
+    ctx.fillRect(0, 0, cw, ch);
+    if (z >= 12) {
+      ctx.strokeStyle = punk ? 'rgba(0,0,0,0.3)' : P.grid; ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = x0; x <= x1; x++) { ctx.moveTo(Math.round(sx(x)) + 0.5, 0); ctx.lineTo(Math.round(sx(x)) + 0.5, ch); }
+      for (let y = y0; y <= y1; y++) { ctx.moveTo(0, Math.round(gy(y)) + 0.5); ctx.lineTo(cw, Math.round(gy(y)) + 0.5); }
+      ctx.stroke();
+    }
+    for (const e of w.ents.values()) {
+      if (e.kind === 'part' || e.y >= FLOOR_DY / 2 || e.x < x0 - 2 || e.x > x1 + 2 || e.y < y0 - 2 || e.y > y1 + 2) continue;
+      const sz = sizeOf(e), thin = e.kind === 'belt' || e.kind === 'bridge' || e.kind === 'tunnel', pad = z * (thin ? 0.3 : 0.1);
+      ctx.fillStyle = e.kind === 'hub' ? 'rgba(40,46,70,0.45)' : thin ? (light ? 'rgba(60,70,84,0.22)' : 'rgba(200,210,225,0.2)') : light ? 'rgba(60,70,84,0.3)' : 'rgba(200,210,225,0.26)';
+      ctx.fillRect(sx(e.x) + pad, gy(e.y) + pad, sz * z - pad * 2, sz * z - pad * 2);
+    }
+  }
   const lw = (k: number) => Math.max(1.2, z * k);
 
+  if (!off) {
   // ---- 採取機を持っているとき、資源地のマスに印をつける ----
   if (view.tool === 'extractor' && z >= 16) {
     ctx.fillStyle = P.red;
@@ -324,7 +357,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       if (!zoneAt(x, y)) continue;
       ctx.globalAlpha = 0.45 + 0.3 * Math.sin(t * 3 + x + y);
       ctx.beginPath();
-      ctx.arc(sx(x + 0.5), sy(y + 0.5), z * 0.08, 0, Math.PI * 2);
+      ctx.arc(sx(x + 0.5), gy(y + 0.5), z * 0.08, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
@@ -342,14 +375,14 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       const w1 = ctx.measureText(zn.name).width;
       ctx.font = `700 ${fs * 0.62}px ${FONT_UI}`;
       const w2 = z >= 20 ? ctx.measureText(sub2).width : 0;
-      const bw = Math.max(w1, w2) + fs * 1.5, bh = fs * (z >= 20 ? 2.5 : 1.7), bx = sx(lx) - bw / 2, by = sy(ly) - fs * 1.15;
+      const bw = Math.max(w1, w2) + fs * 1.5, bh = fs * (z >= 20 ? 2.5 : 1.7), bx = sx(lx) - bw / 2, by = gy(ly) - fs * 1.15;
       chamfer(ctx, bx, by, bw, bh, fs * 0.35);
       ctx.fillStyle = '#0b0d10'; ctx.fill();
       ctx.strokeStyle = P.hi; ctx.lineWidth = Math.max(1.2, fs * 0.09); ctx.stroke();
       ctx.fillStyle = P.hi;
       ctx.font = `400 ${fs}px ${FONT_HAND}`;
-      ctx.fillText(zn.name, sx(lx), sy(ly));
-      if (z >= 20) { ctx.fillStyle = '#c9ced2'; ctx.font = `700 ${fs * 0.62}px ${FONT_UI}`; ctx.fillText(sub2, sx(lx), sy(ly) + fs * 0.95); }
+      ctx.fillText(zn.name, sx(lx), gy(ly));
+      if (z >= 20) { ctx.fillStyle = '#c9ced2'; ctx.font = `700 ${fs * 0.62}px ${FONT_UI}`; ctx.fillText(sub2, sx(lx), gy(ly) + fs * 0.95); }
       continue;
     }
     const fs = Math.max(12, z * 0.42);
@@ -357,16 +390,16 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.lineWidth = fs * 0.3;
     ctx.lineJoin = 'round';
     ctx.strokeStyle = P.paper;
-    ctx.strokeText(zn.name, sx(lx), sy(ly));
+    ctx.strokeText(zn.name, sx(lx), gy(ly));
     ctx.fillStyle = P.ink;
-    ctx.fillText(zn.name, sx(lx), sy(ly));
+    ctx.fillText(zn.name, sx(lx), gy(ly));
     if (z >= 20) {
       const s2 = Math.max(10, z * 0.26), tx = `${sub(zn.resource).name}・${zn.form}`;
       ctx.font = `500 ${s2}px "Zen Kaku Gothic New", sans-serif`;
       ctx.lineWidth = s2 * 0.3;
-      ctx.strokeText(tx, sx(lx), sy(ly) + s2 * 1.4);
+      ctx.strokeText(tx, sx(lx), gy(ly) + s2 * 1.4);
       ctx.fillStyle = P.soft;
-      ctx.fillText(tx, sx(lx), sy(ly) + s2 * 1.4);
+      ctx.fillText(tx, sx(lx), gy(ly) + s2 * 1.4);
     }
   }
   ctx.textBaseline = 'middle';
@@ -374,7 +407,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   // ---- いまの指令で使う資源地が画面の外にあれば、縁に道しるべを出す ----
   const gz = currentGoal(w)?.zone;
   if (gz) {
-    const zn = ZONES[gz], tx = sx(zn.at[0]), ty = sy(zn.at[1]);
+    const zn = ZONES[gz], tx = sx(zn.at[0]), ty = gy(zn.at[1]);
     if (tx < 0 || tx > cw || ty < 150 || ty > ch - 170) {
       const px = Math.min(cw - 80, Math.max(80, tx)), py = Math.min(ch - 190, Math.max(170, ty));
       const ang = Math.atan2(ty - py, tx - px);
@@ -394,6 +427,8 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(-5, -6); ctx.lineTo(-5, 6); ctx.closePath(); ctx.fill();
       ctx.restore();
     }
+  }
+
   }
 
   // ---- ベルト：輪郭線つきの管。中身の状態で太さと模様が変わる ----
@@ -580,6 +615,15 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     });
   }
 
+  // 合流の優先：優先する流れが入ってくる縁に、三角の印
+  if (!far) for (const b of belts) {
+    const q = b.e.pri;
+    if (q === undefined) continue;
+    const ux = DX[q], uy = DY[q], ex = sx(b.e.x + 0.5 - ux * 0.36), ey = sy(b.e.y + 0.5 - uy * 0.36), a0 = z * 0.2, b0 = z * 0.16;
+    ctx.beginPath(); ctx.moveTo(ex + ux * a0, ey + uy * a0); ctx.lineTo(ex - uy * b0, ey + ux * b0); ctx.lineTo(ex + uy * b0, ey - ux * b0); ctx.closePath();
+    ctx.fillStyle = P.hi; ctx.fill(); ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = lw(0.03); ctx.stroke();
+  }
+
   // ---- 装置 ----
   for (const e of w.ents.values()) {
     if (e.kind === 'belt' || e.kind === 'bridge' || e.kind === 'tunnel' || e.kind === 'hub' || e.kind === 'part' || !(inView(e) || (e.big && inView({ ...e, x: e.x + 1, y: e.y + 1 })))) continue;
@@ -621,13 +665,28 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     for (const e of w.ents.values()) if (e.busy && inView(e)) pool(e.x + sizeOf(e) / 2, e.y + sizeOf(e) / 2, 1 + sizeOf(e) * 0.5, 0.22 + 0.06 * Math.sin(t * 9 + e.x));
     ctx.globalCompositeOperation = 'source-over';
   }
+  // 1 階から見たとき、2 階の設備がある場所に薄い印をつける
+  if (!off && w.research.includes('floor2')) {
+    ctx.setLineDash([z * 0.14, z * 0.1]);
+    ctx.strokeStyle = P.hi; ctx.lineWidth = Math.max(1, z * 0.04);
+    ctx.fillStyle = punk ? `rgba(${P.glow},0.1)` : 'rgba(255,225,77,0.16)';
+    for (const e of w.ents.values()) {
+      if (e.y < FLOOR_DY / 2 || e.kind === 'part') continue;
+      const ey = e.y - FLOOR_DY;
+      if (e.x < x0 - 2 || e.x > x1 + 2 || ey < y0 - 2 || ey > y1 + 2) continue;
+      const sz = sizeOf(e) * z, pad = z * 0.12;
+      ctx.fillRect(sx(e.x) + pad, gy(ey) + pad, sz - pad * 2, sz - pad * 2);
+      ctx.strokeRect(sx(e.x) + pad, gy(ey) + pad, sz - pad * 2, sz - pad * 2);
+    }
+    ctx.setLineDash([]);
+  }
   const hr = hubRect(w.hubSize);
-  hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
+  if (!off) hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
 
   // ---- 貨物線：積む駅から降ろす駅へ、設備の上を越える高架の線路と列車。
   //      自動の線路は横に進んでから縦に曲がる。降ろす駅がいくつもあれば、それぞれへ線路が分かれる ----
   for (const e of w.ents.values()) {
-    if (e.kind !== 'station' || e.role !== 'in') continue;
+    if (off || e.kind !== 'station' || e.role !== 'in') continue;
     const own = railOf(w, e);
     if (!own) continue;
     const routes = own.custom ? [own] : stationTargets(w, e).map((d) => railOf(w, e, d)!);
@@ -692,6 +751,29 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     }
   }
 
+  // ---- 引いた視点：区画ごとに、何を毎分いくつ作っているかの札 ----
+  if (z < 22) {
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    const fs = 12.5;
+    for (const d of districts(w)) {
+      if (d.x1 < x0 || d.x0 > x1 || d.y1 - off < y0 || d.y0 - off > y1) continue;
+      const bx = sx(d.x0 - 0.5), by = sy(d.y0 - 0.5), bw = (d.x1 - d.x0 + 1) * z, bh = (d.y1 - d.y0 + 1) * z;
+      ctx.strokeStyle = P.hi; ctx.lineWidth = 2; ctx.setLineDash([7, 5]);
+      rr(ctx, bx, by, bw, bh, punk ? 0 : 8); ctx.stroke();
+      ctx.setLineDash([]);
+      const name = label(d.s), tx = `${name}　${d.perMin >= 10 ? Math.round(d.perMin) : d.perMin.toFixed(1)}/分　${d.n}台`;
+      ctx.font = `700 ${fs}px ${FONT_UI}`;
+      const tw = ctx.measureText(tx).width, pw = tw + 34, ph = 22, px = Math.max(4, Math.min(cw - pw - 4, bx + bw / 2 - pw / 2)), py = by - ph - 3;
+      ctx.fillStyle = punk ? '#0b0d10' : P.plate;
+      rr(ctx, px, py, pw, ph, punk ? 0 : 5); ctx.fill();
+      ctx.strokeStyle = d.perMin > 0 ? P.hi : P.red; ctx.lineWidth = 2; ctx.stroke();
+      token(ctx, P, px + 12, py + ph / 2, 17, d.s, true);
+      ctx.fillStyle = punk ? '#eef0ea' : P.ink;
+      ctx.fillText(tx, px + 25, py + ph / 2 + 0.5);
+    }
+    ctx.textBaseline = 'alphabetic';
+  }
+
   // ---- 敷いている途中の線路 ----
   if (view.rail && view.rail.length) {
     ctx.strokeStyle = P.hi; ctx.lineWidth = z * 0.16; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
@@ -710,7 +792,19 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       ctx.fillStyle = g.ok ? (punk ? `rgba(${P.glow},0.3)` : 'rgba(255,225,77,0.45)') : 'rgba(210,63,58,0.4)';
       ctx.fillRect(gx + 2, gy + 2, gs - 4, gs - 4);
       ctx.strokeStyle = g.ok ? P.hi : P.red; ctx.lineWidth = lw(0.05); ctx.strokeRect(gx + 2, gy + 2, gs - 4, gs - 4);
-      if (z >= 18) { ctx.fillStyle = punk ? '#f0e9dc' : P.ink; ctx.font = `700 ${Math.min(gs * 0.45, z * 0.5)}px ${FONT_SMALL}`; ctx.fillText(g.glyph, gx + gs / 2, gy + gs / 2 + 1); }
+      if (z >= 18) { ctx.fillStyle = punk ? '#f0e9dc' : P.ink; ctx.font = `700 ${Math.min(gs * 0.45, z * 0.5)}px ${FONT_SMALL}`; ctx.textBaseline = 'middle'; ctx.fillText(g.glyph, gx + gs / 2, gy + gs / 2 + 1); ctx.textBaseline = 'alphabetic'; }
+      // 出口は外向き、入口は内向きの矢印。置く前に、どこから何が出入りするかがわかる
+      for (const q of g.ports ?? []) {
+        const ux = DX[q.d], uy = DY[q.d], ex = sx(q.x + 0.5 + ux * (q.out ? 0.5 : -0.5)), ey = sy(q.y + 0.5 + uy * (q.out ? 0.5 : -0.5));
+        const a0 = z * 0.3, b0 = z * 0.2, bx = ex + ux * (q.out ? 0.04 : -0.34) * z, by = ey + uy * (q.out ? 0.04 : -0.34) * z;
+        ctx.beginPath();
+        ctx.moveTo(bx + ux * a0, by + uy * a0);
+        ctx.lineTo(bx - uy * b0, by + ux * b0);
+        ctx.lineTo(bx + uy * b0, by - ux * b0);
+        ctx.closePath();
+        ctx.fillStyle = q.out ? P.hi : punk ? '#f0e9dc' : P.paper; ctx.fill();
+        ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = lw(0.035); ctx.stroke();
+      }
     }
   }
 
@@ -975,7 +1069,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
     ctx.beginPath(); ctx.moveTo(-pu * 0.06, -pu * 0.13); ctx.lineTo(pu * 0.08, 0); ctx.lineTo(-pu * 0.06, pu * 0.13); ctx.stroke();
     ctx.restore();
   }
-  if (e.kind === 'extractor' || e.kind === 'depot' || e.kind === 'sampler') port(e.dir, P.plate);
+  if (e.kind === 'extractor' || e.kind === 'depot' || e.kind === 'sampler' || e.kind === 'sensor' || e.kind === 'gate' || (e.kind === 'lift' && e.role === 'out')) port(e.dir, P.plate);
   else if (e.kind === 'analyzer') { port(portDir(e.dir, 0), '#7fc06a', '陽'); port(portDir(e.dir, 1), P.red, '陰'); }
   else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), P.plate);
   else if (e.kind === 'station') { if (e.role === 'out') for (const i of [0, 1]) { const p = slotPort(e, i); port(p.d, P.plate, undefined, p.x + 0.5 - mx, p.y + 0.5 - my); } }
@@ -1061,7 +1155,7 @@ function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: 
       ctx.beginPath(); ctx.moveTo(-pu * 0.05, -pu * 0.09); ctx.lineTo(pu * 0.03, 0); ctx.lineTo(-pu * 0.05, pu * 0.09); ctx.stroke();
       ctx.restore();
     }
-    if (e.kind === 'extractor' || e.kind === 'depot' || e.kind === 'sampler') port(e.dir, '#eef0ea');
+    if (e.kind === 'extractor' || e.kind === 'depot' || e.kind === 'sampler' || e.kind === 'sensor' || e.kind === 'gate' || (e.kind === 'lift' && e.role === 'out')) port(e.dir, '#eef0ea');
     else if (e.kind === 'analyzer') { port(portDir(e.dir, 0), '#7fc06a', '陽'); port(portDir(e.dir, 1), P.red, '陰'); }
     else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), '#eef0ea');
     else if (e.kind === 'station') { if (e.role === 'out') for (const i of [0, 1]) { const p = slotPort(e, i); port(p.d, '#eef0ea', undefined, p.x + 0.5 - mx, p.y + 0.5 - my); } }
@@ -1281,6 +1375,38 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
       if (out) { ctx.moveTo(cx - u * 0.08, cy + u * 0.27); ctx.lineTo(cx + u * 0.08, cy + u * 0.27); ctx.lineTo(cx, cy + u * 0.36); }
       else { ctx.moveTo(cx - u * 0.08, cy - u * 0.27); ctx.lineTo(cx + u * 0.08, cy - u * 0.27); ctx.lineTo(cx, cy - u * 0.36); }
       ctx.closePath(); ctx.fill();
+      break;
+    }
+    case 'sensor': {
+      // 検知器：信号の色の灯り。点いているときは明るく、まわりに輪が出る
+      const on = (SIG[e.ch || 1] || 0) > 0, col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length];
+      rr(ctx, cx - u * 0.27, cy - u * 0.2, u * 0.54, u * 0.4, u * 0.08); inked(P.plate);
+      if (e.item) ctx.drawImage(sprite(e.item.s), cx - u * 0.02, cy - u * 0.16, u * 0.32, u * 0.32);
+      disc(cx - u * 0.13, cy, u * 0.1); inked(on ? col : mix(col, '#20242a', 0.7));
+      if (on) { ctx.strokeStyle = col; ctx.lineWidth = line * 0.8; disc(cx - u * 0.13, cy, u * (0.15 + 0.03 * Math.sin(t * 9))); ctx.stroke(); }
+      break;
+    }
+    case 'gate': {
+      // 弁：開いているときは板が開き、閉じているときは流れをふさぐ
+      const open = ((SIG[e.ch || 1] || 0) > 0) === (e.test !== 'off'), col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length];
+      disc(cx, cy, u * 0.26); inked(P.plate);
+      if (e.item) ctx.drawImage(sprite(e.item.s), cx - u * 0.17, cy - u * 0.17, u * 0.34, u * 0.34);
+      ctx.save();
+      ctx.translate(cx, cy); ctx.rotate((e.dir * Math.PI) / 2 + (open ? 0 : Math.PI / 2));
+      ctx.fillStyle = open ? col : P.red; ctx.strokeStyle = P.ink; ctx.lineWidth = line * 0.8;
+      rr(ctx, -u * 0.3, -u * 0.055, u * 0.6, u * 0.11, u * 0.03); ctx.fill(); ctx.stroke();
+      ctx.restore();
+      disc(cx, cy, u * 0.06); inked(col);
+      break;
+    }
+    case 'lift': {
+      // 昇降機：1 階の入口と 2 階の出口は上向き、その逆は下向きの矢印
+      const upFloor = e.y >= FLOOR_DY / 2, goingUp = (e.role === 'in') !== upFloor;
+      rr(ctx, cx - u * 0.25, cy - u * 0.25, u * 0.5, u * 0.5, u * 0.07); inked(info.color);
+      ctx.fillStyle = e.role === 'in' ? '#ffffff' : P.hi; ctx.strokeStyle = P.ink; ctx.lineWidth = line * 0.7;
+      const k = goingUp ? -1 : 1, bob = Math.sin(t * 4 + e.x) * u * 0.03 * (e.item ? 1 : 0);
+      ctx.beginPath(); ctx.moveTo(cx, cy + k * u * 0.17 + bob); ctx.lineTo(cx - u * 0.14, cy - k * u * 0.03 + bob); ctx.lineTo(cx - u * 0.05, cy - k * u * 0.03 + bob); ctx.lineTo(cx - u * 0.05, cy - k * u * 0.16 + bob); ctx.lineTo(cx + u * 0.05, cy - k * u * 0.16 + bob); ctx.lineTo(cx + u * 0.05, cy - k * u * 0.03 + bob); ctx.lineTo(cx + u * 0.14, cy - k * u * 0.03 + bob); ctx.closePath();
+      ctx.fill(); ctx.stroke();
       break;
     }
     case 'vent': {

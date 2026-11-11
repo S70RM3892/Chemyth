@@ -9,7 +9,8 @@ import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
 import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
-import { LINES, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { RESEARCH, SIGNALS, signalOn, doResearch, has, researchBlock, tierNeed, LINES, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { researchById } from '../content/research';
 import { chip, equation, openConfig, type SheetActions } from './config';
 import { h } from './dom';
 import { sfx } from './sound';
@@ -44,6 +45,22 @@ export function showUpgrades(c: PanelCtx) {
           h('span', { class: 'pips' }, ...UPGRADE_COST.map((_, i) => h('i', { class: i < lv ? 'on' : '' })))),
         btn);
     })),
+    h('h3', {}, `研究　${w.research.length} / ${RESEARCH.length}`),
+    h('p', { class: 'muted' }, '工場づくりの道具と能力を開く。強化と同じく、研究点を払って計算問題を 1 問解く。「どちらか一方」の組は、工場の形に合うほうを選べ。あとで切り替えるには、もう一度払う。'),
+    ...[1, 2, 3].map((tier) => h('div', { class: 'rs-tier' },
+      h('div', { class: 'rs-head' }, h('b', {}, `第 ${tier} 段`), h('span', { class: 'muted' }, tierNeed(tier) ? (w.research.length >= tierNeed(tier) ? '開いている' : `研究を ${tierNeed(tier)} 個終えると開く（いま ${w.research.length} 個）`) : '最初から開いている')),
+      h('div', { class: 'rs-grid' }, ...RESEARCH.filter((r) => r.tier === tier).map((r) => {
+        const done = has(w, r.id), block = researchBlock(w, r);
+        const rival = r.group ? RESEARCH.find((x) => x.group === r.group && x.id !== r.id && has(w, x.id)) : undefined;
+        const btn = done ? h('span', { class: 'pill ok' }, '研究済み')
+          : h('button', { class: 'primary', type: 'button', id: `rs-${r.id}`, disabled: !!block, onclick: () => askQuestion(c, `r:${r.id}`) }, rival ? `${r.cost} 点で切り替える` : `${r.cost} 点で研究`);
+        return h('div', { class: 'rs-card' + (done ? ' done' : block && !done ? ' locked' : '') },
+          h('div', { class: 'row' }, h('b', {}, r.name), r.group ? h('span', { class: 'pill' }, 'どちらか一方') : null),
+          h('p', {}, r.text),
+          rival ? h('p', { class: 'muted' }, `いまは「${rival.name}」を選んでいる。切り替えると、そちらは取り消される。`) : null,
+          block && !done && !block.startsWith('研究点') ? h('p', { class: 'muted' }, block) : null,
+          btn);
+      })))),
   );
 }
 
@@ -53,7 +70,7 @@ function pickQuestion(w: World): Question {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-function askQuestion(c: PanelCtx, key: UpgradeKey, q = pickQuestion(c.w)) {
+function askQuestion(c: PanelCtx, key: UpgradeKey | `r:${string}`, q = pickQuestion(c.w)) {
   const { w } = c;
   let text = '';
   const display = h('div', { class: 'slot on numslot', id: 'q-display' }, '');
@@ -75,12 +92,18 @@ function askQuestion(c: PanelCtx, key: UpgradeKey, q = pickQuestion(c.w)) {
     const x = parseFloat(text);
     if (Number.isNaN(x)) return;
     if (isCorrect(q, x)) {
-      const cost = UPGRADE_COST[w.up[key]];
-      w.points -= cost;
-      w.up[key]++;
+      if (key.startsWith('r:')) {
+        const r = researchById(key.slice(2));
+        if (!doResearch(w, key.slice(2))) { c.toast('研究できなかった。研究点か、先に要る研究を確かめろ。', 2600); showUpgrades(c); return; }
+        c.toast(`正解。「${r?.name}」を研究した。`, 3200);
+      } else {
+        const k = key as UpgradeKey, cost = UPGRADE_COST[w.up[k]];
+        w.points -= cost;
+        w.up[k]++;
+        c.toast('正解。強化した。', 2600);
+      }
       if (!w.solved.includes(q.id)) w.solved.push(q.id);
       sfx.goal();
-      c.toast('正解。強化した。', 2600);
       showUpgrades(c);
       return;
     }
@@ -303,6 +326,37 @@ export function showAnalyzer(c: PanelCtx, e: Ent, extra: HTMLElement) {
       h('div', { class: 'menu' }, ...TESTS.filter((t) => t.group === g).map((t) =>
         h('button', { class: 'ghost' + (e.test === t.id ? ' picked' : ''), type: 'button', id: `test-${t.id}`, onclick: () => { e.test = t.id; sfx.ok(); showAnalyzer(c, e, extra); } }, t.name))),
     ]),
+    extra);
+}
+
+// ---------------- 検知器・弁 ----------------
+
+export function showSignal(c: PanelCtx, e: Ent, extra: HTMLElement) {
+  const again = () => showSignal(c, e, extra);
+  const sensor = e.kind === 'sensor', on = signalOn(c.w, e.ch);
+  const users = [...c.w.ents.values()].filter((n) => (n.kind === 'sensor' || n.kind === 'gate') && n.ch === e.ch);
+  const mode = (id: string, text: string) => h('button', { class: 'ghost' + (e.test === id ? ' picked on' : ''), type: 'button', id: `sg-${id}`, onclick: () => { e.test = id; sfx.ok(); again(); } }, text);
+  c.show(h('header', {}, h('h2', {}, sensor ? '検知器' : '弁'), closeBtn(c)),
+    h('p', { class: 'status' }, `${e.ch} 番の信号は、いま${on ? '点いている' : '消えている'}。同じ番号の検知器 ${users.filter((n) => n.kind === 'sensor').length} 個、弁 ${users.filter((n) => n.kind === 'gate').length} 個。`),
+    h('h3', {}, '① 信号の番号'),
+    h('p', { class: 'muted' }, sensor ? 'この検知器が点ける信号。同じ番号の弁が、どれだけ離れていても動く。' : 'この弁を動かす信号。同じ番号の検知器が点ける。'),
+    h('div', { class: 'chips' }, ...Array.from({ length: SIGNALS }, (_, i) => {
+      const b = h('button', { class: 'chip plain line' + (e.ch === i + 1 ? ' on' : ''), type: 'button', id: `sg-ch-${i + 1}`, onclick: () => { e.ch = i + 1; sfx.tap(); again(); } }, `${i + 1} 番`);
+      b.style.setProperty('--line', LINE_COLORS[i]);
+      return b;
+    })),
+    h('h3', {}, sensor ? '② 何を見張るか' : '② いつ通すか'),
+    ...(sensor ? [
+      h('div', { class: 'row' }, mode('jam', '詰まり（先が詰まって止まっている間、点く）')),
+      h('p', { class: 'muted' }, 'または、決めた物質が通ったら 3 秒間点く：'),
+      h('div', { class: 'chips' }, ...c.w.discovered.filter((x) => x !== 'e' && !sub(x).mask && !x.startsWith('jar-')).map((x) => {
+        const b = chip(x, e.test === `is:${x}` ? 'on' : '');
+        b.id = `sg-is-${x}`;
+        b.onclick = () => { e.test = `is:${x}`; sfx.ok(); again(); };
+        return b;
+      })),
+    ] : [h('div', { class: 'row' }, mode('on', '信号が来ている間だけ通す'), mode('off', '信号が来ていない間だけ通す'))]),
+    h('p', { class: 'muted' }, '使い方の例：主製品のベルトに検知器（詰まり）を置き、副生成物の捨て口の手前に同じ番号の弁（来ている間だけ通す）を置く。ふだんは全部を製品にし、あふれたときだけ捨てる。'),
     extra);
 }
 

@@ -1091,3 +1091,207 @@ describe('工場の動作', () => {
     expect(at(w, 12, 11)!.item?.s ?? at(w, 12, 10)!.item?.s).toBe('N2');
   });
 });
+
+describe('置く手ざわり：複数本引きと合流', () => {
+  it('平行なベルトの道筋：角で内側は早く、外側は遅く曲がり、重ならない', async () => {
+    const { lanePaths } = await import('../src/engine/lanes');
+    // 右へ 4 マス進んでから下へ 3 マス（右に曲がる）。2 本目は右手（下側）にずれるので内側になる
+    const center: [number, number][] = [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [4, 1], [4, 2], [4, 3]];
+    const [a, b, c] = lanePaths(center, 3);
+    expect(a.map((q) => [q.x, q.y])).toEqual(center);
+    expect(b[0]).toMatchObject({ x: 0, y: 1, dir: 0 });
+    expect(b.map((q) => [q.x, q.y])).toEqual([[0, 1], [1, 1], [2, 1], [3, 1], [3, 2], [3, 3]]);
+    expect(b[3]).toMatchObject({ dir: 1, straight: false }); // 角
+    expect(c.map((q) => [q.x, q.y])).toEqual([[0, 2], [1, 2], [2, 2], [2, 3]]);
+    const all = [...a, ...b, ...c].map((q) => `${q.x},${q.y}`);
+    expect(new Set(all).size).toBe(all.length);
+    // 左に曲がる（右へ進んでから上へ）：2 本目は外側になり、1 マス先で曲がる
+    const [, l2] = lanePaths([[0, 0], [1, 0], [2, 0], [2, -1], [2, -2]], 2);
+    expect(l2.map((q) => [q.x, q.y])).toEqual([[0, 1], [1, 1], [2, 1], [3, 1], [3, 0], [3, -1], [3, -2]]);
+    // 1 マスだけ：向きは引数で決まる
+    expect(lanePaths([[5, 5]], 2, 1).map((l) => [l[0].x, l[0].y, l[0].dir])).toEqual([[5, 5, 1], [4, 5, 1]]);
+  });
+
+  it('合流点は交互に通し、優先を決めるとその流れを先に通す', () => {
+    const run2 = (pri?: 0 | 1 | 2 | 3) => {
+      const w = newWorld();
+      // 本線：左から右へ。支線：上から本線の (22, 20) へ合流
+      for (let x = 18; x <= 26; x++) place(w, 'belt', x, 20, 0);
+      for (let y = 16; y <= 19; y++) place(w, 'belt', 22, y, 1);
+      place(w, 'vent', 27, 20, 0);
+      const m = at(w, 22, 20)!;
+      let a = 0, b = 0;
+      for (let i = 0; i < 60 * 40; i++) {
+        // 両方の流れを切らさない
+        const p = at(w, 18, 20)!, q = at(w, 22, 16)!;
+        if (!p.item) p.item = { s: 'N2', p: 0, m: w.tick };
+        if (!q.item) q.item = { s: 'O2', p: 0, m: w.tick };
+        if (i === 300 && pri !== undefined) m.pri = pri;
+        const before = m.item;
+        step(w, 1 / 60);
+        if (m.item && m.item !== before && i > 600) { if (m.item.s === 'N2') a++; else b++; }
+      }
+      return [a, b];
+    };
+    const [a0, b0] = run2();
+    expect(a0).toBeGreaterThan(20);
+    expect(Math.abs(a0 - b0)).toBeLessThanOrEqual(2);       // 交互
+    const [a1, b1] = run2(0);                                // 本線（右向きの流れ）を優先
+    expect(b1).toBe(0);
+    expect(a1).toBeGreaterThan(a0 * 1.6);
+    const [a2, b2] = run2(1);                                // 支線（下向きの流れ）を優先
+    expect(a2).toBe(0);
+    expect(b2).toBeGreaterThan(b0 * 1.6);
+  });
+});
+
+describe('研究・信号・2 階・設計図の共有・区画', () => {
+  it('研究：段の条件、先に要る研究、二者択一の切り替え', async () => {
+    const { RESEARCH, doResearch, has, researchBlock, maxLanes, tunnelRange, trainCap, trainSpeed: ts2 } = await import('../src/engine/world');
+    expect(new Set(RESEARCH.map((r) => r.id)).size).toBe(RESEARCH.length);
+    for (const r of RESEARCH) for (const n of r.needs ?? []) expect(RESEARCH.some((x) => x.id === n)).toBe(true);
+    const w = newWorld();
+    const R = (id: string) => RESEARCH.find((r) => r.id === id)!;
+    expect(doResearch(w, 'lanes3')).toBe(false);            // 研究点が足りない
+    w.points = 1000;
+    expect(maxLanes(w)).toBe(2);
+    expect(researchBlock(w, R('lanes4'))).toMatch(/2 個/);  // 第 2 段はまだ開かない
+    expect(doResearch(w, 'lanes3')).toBe(true);
+    expect(w.points).toBe(1000 - R('lanes3').cost);
+    expect(maxLanes(w)).toBe(3);
+    expect(doResearch(w, 'lanes3')).toBe(false);            // 二重には取れない
+    expect(tunnelRange(w)).toBe(TUNNEL_RANGE);
+    expect(doResearch(w, 'tunnel')).toBe(true);
+    expect(tunnelRange(w)).toBe(12);
+    // 二者択一：急行にしてから重連へ切り替えると、急行は取り消される
+    const v0 = ts2(w);
+    expect(doResearch(w, 'express')).toBe(true);
+    expect(ts2(w)).toBeCloseTo(v0 * 1.5);
+    expect(doResearch(w, 'heavy')).toBe(true);
+    expect(has(w, 'express')).toBe(false);
+    expect(ts2(w)).toBeCloseTo(v0);
+    expect(trainCap(w)).toBe(40);
+    // 保存して読み直しても残る。知らない id は捨てる
+    const j = JSON.parse(serialize(w)); j.research.push('nonsense');
+    expect(deserialize(JSON.stringify(j))!.research.sort()).toEqual([...w.research].sort());
+    expect(toolUnlocked(w, MACHINES.sensor)).toBe(false);
+    doResearch(w, 'logic');
+    expect(toolUnlocked(w, MACHINES.sensor)).toBe(true);
+  });
+
+  it('検知器と弁：主製品のラインが詰まったときだけ、捨て口が開く', async () => {
+    const { signalOn } = await import('../src/engine/world');
+    const w = newWorld();
+    // 本線：(10,10) から右へ。(13,10) の分配器で、正面は検知器 → 行き止まりのベルト、右手（下）は弁 → 廃棄口
+    for (const x of [10, 11, 12]) place(w, 'belt', x, 10, 0);
+    place(w, 'splitter', 13, 10, 0);
+    place(w, 'sensor', 14, 10, 0);
+    for (const x of [15, 16, 17]) place(w, 'belt', x, 10, 0);
+    place(w, 'gate', 13, 11, 1);
+    place(w, 'vent', 13, 12, 1);
+    place(w, 'belt', 13, 9, 3); place(w, 'vent', 13, 8, 3); // 分配器の左手は、いつでも流れる別の捨て口
+    const feed = () => { const b = at(w, 10, 10)!; if (!b.item) b.item = { s: 'N2', p: 0, m: w.tick }; };
+    for (let i = 0; i < 60 * 3; i++) { feed(); step(w, 1 / 60); }
+    // 本線の先は行き止まりなので、じきに詰まって信号が点き、弁が開く
+    for (let i = 0; i < 60 * 12; i++) { feed(); step(w, 1 / 60); }
+    expect(signalOn(w, 1)).toBe(true);
+    const vented = w.vented.N2 || 0;
+    expect(vented).toBeGreaterThan(3);
+    // 番号の違う弁は開かない
+    at(w, 13, 11)!.ch = 2;
+    for (let i = 0; i < 60 * 3; i++) { feed(); step(w, 1 / 60); }
+    expect(at(w, 13, 11)!.item).not.toBeNull();
+    // 「来ていない間だけ通す」にすると流れる
+    at(w, 13, 11)!.test = 'off';
+    const before = w.vented.N2 || 0;
+    for (let i = 0; i < 60 * 3; i++) { feed(); step(w, 1 / 60); }
+    expect(w.vented.N2).toBeGreaterThan(before);
+    // 物質の検知：O2 が通ったら 3 秒間だけ点く
+    const w2 = newWorld();
+    for (const x of [10, 11]) place(w2, 'belt', x, 10, 0);
+    place(w2, 'sensor', 12, 10, 0); place(w2, 'vent', 13, 10, 0);
+    Object.assign(at(w2, 12, 10)!, { test: 'is:O2', ch: 5 });
+    at(w2, 10, 10)!.item = { s: 'N2', p: 0, m: 0 };
+    for (let i = 0; i < 120; i++) step(w2, 1 / 60);
+    expect(signalOn(w2, 5)).toBe(false);
+    at(w2, 10, 10)!.item = { s: 'O2', p: 0, m: 0 };
+    for (let i = 0; i < 120; i++) step(w2, 1 / 60);
+    expect(signalOn(w2, 5)).toBe(true);
+    for (let i = 0; i < 60 * 4; i++) step(w2, 1 / 60);
+    expect(signalOn(w2, 5)).toBe(false);
+  });
+
+  it('2 階：昇降機で上がり、2 階のベルトを通って、降りてくる', async () => {
+    const { FLOOR_DY, floorOf, groundY, liftPartner } = await import('../src/engine/world');
+    const w = newWorld(), U = FLOOR_DY;
+    // 1 階：ベルト → 昇降機（上りの入口）。2 階：出口 → ベルト → 昇降機（下りの入口）。1 階：出口 → 廃棄口
+    place(w, 'belt', 10, 10, 0);
+    expect(place(w, 'lift', 11, 10, 0)).toBeNull();
+    const up = at(w, 11, 10)!, upOut = liftPartner(w, up)!;
+    expect([up.role, upOut.role, floorOf(upOut.y), groundY(upOut.y)]).toEqual(['in', 'out', 1, 10]);
+    for (const x of [12, 13, 14]) place(w, 'belt', x, 10 + U, 0);
+    // 1 階の同じ場所には装置を置ける（2 階のベルトの下）
+    expect(place(w, 'reactor', 12, 10, 0)).toBeNull();
+    expect(place(w, 'lift', 15, 10 + U, 0)).toBeNull();     // 2 階に置いた側が入口
+    const down = at(w, 15, 10 + U)!;
+    expect(liftPartner(w, down)!.y).toBe(10);
+    place(w, 'vent', 16, 10, 0);
+    expect(place(w, 'extractor', 20, 10 + U, 0)).toMatch(/1 階/);
+    expect(place(w, 'lift', 12, 10 + U, 0)).not.toBeNull(); // ふさがっている
+    for (let i = 0; i < 60 * 8; i++) { const b = at(w, 10, 10)!; if (!b.item) b.item = { s: 'N2', p: 0, m: w.tick }; step(w, 1 / 60); }
+    expect(w.vented.N2).toBeGreaterThan(5);
+    // 保存して読み直しても、階と組が残る
+    const w2 = deserialize(serialize(w))!;
+    expect(liftPartner(w2, at(w2, 11, 10)!)!.role).toBe('out');
+    // 片方を消すと、もう片方も消える
+    remove(w, 11, 10);
+    expect(at(w, 11, 10 + U)).toBeUndefined();
+    // 2 階でも、置く向きは納品所の方角になる
+    expect(autoDir(w, 'belt', HUB_TILES[0][0] - 10, HUB_TILES[0][1] + U)).toBe(0);
+  });
+
+  it('設計図は文字列にして渡せる。壊れた文字列や知らない設定は受けつけない', async () => {
+    const { encodeBlueprint, decodeBlueprint } = await import('../src/engine/blueprint');
+    const stamps = [
+      { kind: 'reactor' as const, dx: 0, dy: 0, dir: 1 as const, recipe: 'haber-bosch', outOrder: ['NH3'], outSlot: [2] },
+      { kind: 'belt' as const, dx: 2, dy: 0, dir: 0 as const },
+      { kind: 'station' as const, dx: 0, dy: 3, dir: 0 as const, ch: 4, role: 'out' as const },
+      { kind: 'analyzer' as const, dx: 3, dy: 3, dir: 2 as const, test: 'is:NH3' },
+    ];
+    const text = encodeBlueprint('アンモニアの列', stamps);
+    expect(text.startsWith('CHEMYTH-BP1:')).toBe(true);
+    const back = decodeBlueprint('  ' + text.slice(0, 40) + '\n' + text.slice(40) + ' ')!;   // 改行や空白が混ざってもよい
+    expect(back.name).toBe('アンモニアの列');
+    expect(back.stamps).toEqual(stamps);
+    expect(decodeBlueprint('hello')).toBeNull();
+    expect(decodeBlueprint(text.slice(0, -9))).toBeNull();
+    const forge = (o: unknown) => 'CHEMYTH-BP1:' + btoa(JSON.stringify(o));
+    expect(decodeBlueprint(forge({ n: 'x', s: [['hub', 0, 0, 0]] }))).toBeNull();          // 置けない種類
+    expect(decodeBlueprint(forge({ n: 'x', s: [['belt', -1, 0, 0]] }))).toBeNull();
+    expect(decodeBlueprint(forge({ n: 'x', s: [['belt', 0, 0, 7]] }))).toBeNull();
+    expect(decodeBlueprint(forge({ n: 'x', s: [] }))).toBeNull();
+    // 知らない反応は設定だけ外して、設備は残す
+    const loose = decodeBlueprint(forge({ n: '', s: [['reactor', 0, 0, 0, 'no-such-recipe', ['NH3']]] }))!;
+    expect(loose.stamps[0].recipe).toBeUndefined();
+    expect(loose.name).toBe('受け取った設計図');
+    // 大きい設計図でも往復できる
+    const many = Array.from({ length: 1500 }, (_, i) => ({ kind: 'belt' as const, dx: i % 200, dy: Math.floor(i / 200), dir: (i % 4) as 0 | 1 | 2 | 3 }));
+    expect(decodeBlueprint(encodeBlueprint('大', many))!.stamps.length).toBe(1500);
+  });
+
+  it('区画：近くの装置をまとめ、いちばん多く作っている物質と速さを出す', async () => {
+    const { districtsOf } = await import('../src/engine/districts');
+    const w = newWorld();
+    // 区画 A：アンモニアの反応器 3 台。区画 B：離れた場所に水の電解槽 1 台
+    for (const [x, y] of [[10, 10], [13, 10], [10, 13]]) { place(w, 'reactor', x, y, 0); configure(at(w, x, y)!, rec('haber-bosch'), ['NH3']); }
+    place(w, 'electrolyzer', 60, 60, 0); configure(at(w, 60, 60)!, rec('water-electrolysis'), ['H2', 'O2'], ['c', 'a']);
+    place(w, 'reactor', 30, 30, 0); // 設定していない装置は数えない
+    for (let i = 0; i < 60 * 30; i++) { for (const [x, y] of [[10, 10], [13, 10]]) at(w, x, y)!.inBuf = { N2: 4, H2: 12 }; at(w, 10, 10)!.outBuf = [0]; at(w, 13, 10)!.outBuf = [0]; step(w, 1 / 60); }
+    const ds = districtsOf(w);
+    expect(ds.length).toBe(2);
+    const a = ds.find((d) => d.s === 'NH3')!, b = ds.find((d) => d.s === 'H2')!;
+    expect([a.n, a.x0, a.y0, a.x1, a.y1]).toEqual([3, 10, 10, 15, 15]);
+    expect(a.perMin).toBeGreaterThan(reactionsPerMin(w, at(w, 10, 10)!, rec('haber-bosch')) * 2 * 2 * 0.5); // 2 台が動いている
+    expect([b.n, b.perMin]).toEqual([1, 0]);
+  });
+});

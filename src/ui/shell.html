@@ -8,7 +8,8 @@
     <p id="goal-hint"></p>
   </section>
   <div id="topbtns">
-    <button type="button" id="b-undo">↶ 元に戻す</button>
+    <button type="button" id="b-undo" aria-label="元に戻す">↶<span class="wide"> 元に戻す</span></button>
+    <button type="button" id="b-floor" hidden>1 階</button>
     <button type="button" id="b-fit">全体</button>
     <button type="button" id="b-speed">▶ ×1</button>
     <button type="button" id="b-review">復習 <span id="due"></span></button>
@@ -36,8 +37,11 @@
   <div id="toast" role="status" hidden></div>
   <div id="stamp" hidden></div>
   <div id="dock">
-    <p id="tip"></p>
-    <nav id="tools" aria-label="道具"></nav>
+    <p id="tip" hidden></p>
+    <div id="bar">
+      <nav id="tools" aria-label="道具"></nav>
+      <div id="opts" hidden></div>
+    </div>
   </div>
   <div id="modal" hidden><div id="sheet" role="dialog" aria-modal="true"></div></div>
   <div id="title" hidden>

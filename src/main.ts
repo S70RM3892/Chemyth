@@ -3,14 +3,16 @@ import { HUB_CENTER, LAND, ZONES, hubRect, resourceAt, zoneAt } from './content/
 import { ELEMENTS } from './content/elements';
 import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
-import { BIG, FEED_TIERS, at, autoDir, beltSpeed, configure, currentGoal, extractInterval, fedTier, flowStats, goalRate, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { BIG, FEED_TIERS, FLOOR_DY, floorOf, groundY, has, liftPartner, footprint, inDoors, maxLanes, mergeDirs, slotCount, slotPort, at, autoDir, beltSpeed, configure, currentGoal, extractInterval, fedTier, flowStats, goalRate, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
 import { recipeById } from './content/recipes';
 import { about, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
-import { attachInput, Z_MIN } from './ui/input';
-import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showStation, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
+import { attachInput, Z_MIN, type InputHandlers } from './ui/input';
+import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showSignal, showStation, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
 import { showDrills, showEssays, showStructure } from './ui/practice';
 import { draw, type Camera } from './ui/render';
+import { lanePaths, type LaneTile } from './engine/lanes';
+import { decodeBlueprint, encodeBlueprint, type Stamp } from './engine/blueprint';
 import { showStats, type StatsCtx } from './ui/stats';
 import { setSound, sfx, soundOn } from './ui/sound';
 import { initTitle, skinButtons, slotName, store, themeButtons } from './ui/title';
@@ -21,13 +23,12 @@ import { drawToken, elementIcon } from './ui/token';
 type Placeable = Exclude<Kind, 'hub' | 'part'>;
 type Tool = 'pan' | 'erase' | 'area' | 'rail' | Placeable;
 /** 範囲コピーした設計図。左上からのずれで持つ */
-interface Stamp { kind: Placeable; dx: number; dy: number; dir: Dir; recipe?: string; outOrder?: string[]; outSlot?: number[]; test?: string; sub?: string; ch?: number; role?: 'in' | 'out' }
 type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir };
 const SESSION_LIMIT_MS = 25 * 60 * 1000;
-const BUILD: Placeable[] = ['belt', 'bridge', 'tunnel', 'splitter', 'analyzer', 'station', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'sampler', 'depot', 'vent'];
+const BUILD: Placeable[] = ['belt', 'bridge', 'tunnel', 'lift', 'splitter', 'analyzer', 'sensor', 'gate', 'station', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'sampler', 'depot', 'vent'];
 /** 道具の分類。道具が多いので、棚を分けて出す */
 const GROUPS: { id: string; name: string; tools: Tool[] }[] = [
-  { id: 'move', name: '運ぶ', tools: ['pan', 'belt', 'bridge', 'tunnel', 'splitter', 'analyzer', 'station', 'rail'] },
+  { id: 'move', name: '運ぶ', tools: ['pan', 'belt', 'bridge', 'tunnel', 'lift', 'splitter', 'analyzer', 'sensor', 'gate', 'station', 'rail'] },
   { id: 'make', name: '作る', tools: ['extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector'] },
   { id: 'store', name: '出し入れ', tools: ['sampler', 'depot', 'vent'] },
   { id: 'edit', name: '編集', tools: ['area', 'erase'] },
@@ -36,7 +37,7 @@ const SPEEDS = [1, 2, 4, 0];
 /** 複製：同じ設定の装置を続けて置く */
 interface Clone { kind: Placeable; recipe?: string; outOrder?: string[]; outSlot?: number[]; big?: boolean; test?: string; sub?: string }
 
-const TOOLS: { id: Tool; glyph: string; name: string; tip: string; color?: string; need: { done?: number; chapter?: number } }[] = [
+const TOOLS: { id: Tool; glyph: string; name: string; tip: string; color?: string; need: { done?: number; chapter?: number; research?: string } }[] = [
   { id: 'pan', glyph: '☝', name: '見る', need: {}, tip: 'タップで選ぶ。装置やベルトから指を引くとベルトが伸びる。何もない所を引くと地図が動く。' },
   ...BUILD.map((id) => ({ id, glyph: MACHINES[id].glyph, name: MACHINES[id].name, tip: MACHINES[id].tip, color: MACHINES[id].color, need: MACHINES[id] })),
   { id: 'rail', glyph: '線', name: '線路', need: { done: 3 }, color: '#8a5a2c', tip: '「積む駅」から、同じ番線の「降ろす駅」まで指でなぞると、その道筋に線路が敷かれる。敷かなければ自動で引かれる。設備の上を越えるので、どこを通してもよい。' },
@@ -67,6 +68,15 @@ function boot(data: HotData) {
   /** 範囲選択の 2 つの角と、コピーした設計図 */
   let areaA: [number, number] | null = null, areaB: [number, number] | null = null;
   let blueprint: Stamp[] | null = null;
+  /** いま見ている階（0 が 1 階、1 が 2 階）。2 階のマスは、y を FLOOR_DY だけずらして持つ */
+  let floor = 0;
+  /** 置く前の見本を出すマス（マウスが乗っているか、指で押し続けている所）。holding は、押し続けて場所を選んでいる最中 */
+  let hover: [number, number] | null = null, holding = false;
+  /** 置くときの向き。null は自動（流れ込みに合わせるか、納品所の方角） */
+  let placeDir: Dir | null = null;
+  /** ベルトをまとめて引く本数と、いまのなぞり書きの道筋・敷いたマス */
+  let lanes = 1, lanePath: [number, number][] = [];
+  const laneLaid = new Set<string>();
   /** 設計図を置こうとしている場所（左上のマス） */
   let ghost: [number, number] | null = null;
   /** 敷いている途中の線路 */
@@ -99,7 +109,7 @@ function boot(data: HotData) {
   const fitView = (): Camera => {
     const hr = hubRect(world.hubSize);
     let x0 = hr.x, y0 = hr.y, x1 = hr.x + hr.s, y1 = hr.y + hr.s;
-    for (const e of world.ents.values()) { x0 = Math.min(x0, e.x); y0 = Math.min(y0, e.y); x1 = Math.max(x1, e.x + 1); y1 = Math.max(y1, e.y + 1); }
+    for (const e of world.ents.values()) { const gy = groundY(e.y); x0 = Math.min(x0, e.x); y0 = Math.min(y0, gy); x1 = Math.max(x1, e.x + 1); y1 = Math.max(y1, gy + 1); }
     const w0 = Math.max(60, x1 - x0 + 16), h0 = Math.max(40, y1 - y0 + 16);
     return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 + 2, z: Math.max(Z_MIN, Math.min(nearZoom(), cw / w0, (ch - 150) / h0)) };
   };
@@ -143,6 +153,8 @@ function boot(data: HotData) {
     if (!e || e.kind === 'hub') return false;
     if (selected === e) selected = null;
     record({ t: 'del', ent: e });
+    // 昇降機は 2 つで 1 組。元に戻すときに両方とも戻るよう、相方も記録する
+    if (e.kind === 'lift') { const p = liftPartner(world, e); if (p) record({ t: 'del', ent: p }); }
     return remove(world, x, y);
   };
   const doTurn = (e: Ent, dir: Dir) => {
@@ -185,7 +197,7 @@ function boot(data: HotData) {
     overlay: () => overlay,
     setOverlay: (on) => { overlay = on; store.setMeta({ overlay }); paintOverlay(); },
     // 統計の行から、その装置の場所へ移って選ぶ
-    focus: (e) => { closeModal(); camTo = { x: e.x + sizeOf(e) / 2, y: e.y + sizeOf(e) / 2 + 1, z: nearZoom() }; selected = e; },
+    focus: (e) => { closeModal(); setFloor(floorOf(e.y)); camTo = { x: e.x + sizeOf(e) / 2, y: groundY(e.y) + sizeOf(e) / 2 + 1, z: nearZoom() }; selected = e; },
   });
   statsBtn.onclick = () => showStats(statsCtx());
   paintOverlay();
@@ -225,10 +237,19 @@ function boot(data: HotData) {
     if (kind === 'sampler') { showSampler(panel(), e, extra()); return; }
     if (kind === 'analyzer') { showAnalyzer(panel(), e, extra()); return; }
     if (kind === 'station') { showStation(panel(), e, extra()); return; }
+    if (kind === 'sensor' || kind === 'gate') { showSignal(panel(), e, extra()); return; }
     showSheet(h('header', {}, h('h2', {}, MACHINES[kind].name), closeBtn()),
       kind === 'extractor' ? h('p', { class: 'eq' }, `ここで採れるもの：${sub(resourceAt(e.x, e.y)).name}`) : null,
+      kind === 'lift' ? h('div', { class: 'row' }, h('span', { class: 'status' }, `${floorOf(e.y) + 1} 階の${e.role === 'in' ? '入口。ここに入った物は、もう一方の階の同じ場所から出る。' : '出口。もう一方の階の入口から入った物が、ここから正面へ出る。'}`),
+        h('button', { class: 'ghost', type: 'button', id: 'lift-other', onclick: () => { closeModal(); setFloor(1 - floorOf(e.y)); } }, `${2 - floorOf(e.y)} 階を見る`)) : null,
       kind === 'extractor' ? h('p', { class: 'status' }, `能力：1 台で毎分 ${Math.round(60 / extractInterval(world))} 個。「強化」で増える。足りなければ台数を増やして合流させろ。`) : null,
       kind === 'belt' || kind === 'bridge' || kind === 'tunnel' ? h('p', { class: 'status' }, `能力：1 本で毎分 ${Math.round(beltSpeed(world) * 60)} 個まで運べる。それ以上流すと詰まるので、2 本に分けろ。`) : null,
+      kind === 'belt' && mergeDirs(e).length >= 2 ? h('div', {},
+        h('h3', {}, '合流の優先'),
+        h('p', { class: 'muted' }, 'ここは合流点だ。ふだんは交互に通す。片方を優先にすると、その流れが来ている間、ほかの流れは待つ。主製品を止めたくないときに使う。'),
+        h('div', { class: 'row' },
+          h('button', { class: 'chip' + (e.pri === undefined ? ' on' : ''), type: 'button', id: 'pri-none', onclick: () => { e.pri = undefined; inspect(e); } }, '交互'),
+          ...mergeDirs(e).map((q) => h('button', { class: 'chip' + (e.pri === q ? ' on' : ''), type: 'button', id: `pri-${q}`, onclick: () => { e.pri = q; inspect(e); } }, `${ARROWS[q]} 向きの流れを優先`)))) : null,
       h('div', { class: 'split' }, about(kind), sideOf(e)));
   };
 
@@ -310,6 +331,27 @@ function boot(data: HotData) {
     const t = TOOLS.find((x) => x.id === id)!;
     for (const [k, el] of buttons) { el.classList.toggle('on', k === tool); el.setAttribute('aria-pressed', String(k === tool)); }
     tip.replaceChildren(h('b', {}, clone ? `${t.name}をコピー中` : t.name), clone ? 'タップした場所に、同じ設定のものを貼りつける。ほかの道具を選ぶとやめる。' : t.tip);
+    // 説明は選んだ直後だけ出して、じきに消す（出しっぱなしだと下側が地図をふさぐ）
+    tip.hidden = false;
+    clearTimeout(tipTimer);
+    tipTimer = window.setTimeout(() => { tip.hidden = true; }, clone ? 9000 : 5200);
+    paintOpts();
+  };
+  let tipTimer = 0;
+  /** 道具ごとの切り替え（棚の右端）：ベルトは引く本数、設備は置く向き */
+  const optsEl = $('opts');
+  const ARROWS = ['→', '↓', '←', '↑'];
+  const isBuild = (t: Tool): t is Placeable => t !== 'pan' && t !== 'erase' && t !== 'area' && t !== 'rail';
+  const paintOpts = () => {
+    const nodes: HTMLElement[] = [];
+    if (tool === 'belt') {
+      lanes = Math.min(lanes, maxLanes(world));
+      nodes.push(h('button', { type: 'button', id: 'opt-lanes', class: lanes > 1 ? 'on' : '', ariaLabel: 'まとめて引く本数', onclick: () => { lanes = (lanes % maxLanes(world)) + 1; sfx.tap(); paintOpts(); toast(lanes > 1 ? `ベルトを ${lanes} 本まとめて引く。なぞった線の右手に並ぶ。` : 'ベルトを 1 本ずつ引く。', 1800); } }, '本数', h('b', {}, String(lanes))));
+    } else if (isBuild(tool) && tool !== 'bridge' && tool !== 'vent') {
+      nodes.push(h('button', { type: 'button', id: 'opt-dir', class: placeDir !== null ? 'on' : '', ariaLabel: '置く向き', onclick: () => { placeDir = placeDir === null ? 0 : placeDir === 3 ? null : (((placeDir + 1) % 4) as Dir); sfx.tap(); paintOpts(); } }, '向き', h('b', {}, placeDir === null ? '自動' : ARROWS[placeDir])));
+    }
+    optsEl.replaceChildren(...nodes);
+    optsEl.hidden = !nodes.length;
   };
   for (const t of TOOLS) {
     const b = h('button', { type: 'button', id: `tool-${t.id}`, class: 'tool' }, h('span', { class: 'g' }, t.glyph), h('span', { class: 'l' }, t.name));
@@ -355,16 +397,16 @@ function boot(data: HotData) {
   actTurn.onclick = () => { if (selected) sheetActions.rotate(selected); };
   actErase.onclick = () => { if (selected) sheetActions.erase(selected); };
   const placeAct = () => {
-    if (!selected || !modal.hidden || !slot) { act.hidden = true; return; }
+    if (!selected || !modal.hidden || !slot || floorOf(selected.y) !== floor) { act.hidden = true; return; }
     const hub = selected.kind === 'hub';
-    actOpen.textContent = isMachine(selected.kind) || selected.kind === 'station' ? '設定' : selected.kind === 'depot' || selected.kind === 'sampler' ? '選ぶ' : selected.kind === 'analyzer' ? '検査' : '説明';
+    actOpen.textContent = isMachine(selected.kind) || selected.kind === 'station' || selected.kind === 'sensor' || selected.kind === 'gate' ? '設定' : selected.kind === 'depot' || selected.kind === 'sampler' ? '選ぶ' : selected.kind === 'analyzer' ? '検査' : '説明';
     actTurn.hidden = actErase.hidden = hub;
     actCopy.hidden = !copyable(selected);
     act.hidden = false;
     const hr = hubRect(world.hubSize);
     const ax = ((hub ? hr.x + hr.s / 2 : selected.x + sizeOf(selected) / 2) - cam.x) * cam.z + cw / 2;
     // 稼働率の札を出しているときは、札の上に出す
-    const ay = ((hub ? hr.y : selected.y) - cam.y) * cam.z + ch / 2 - 14 - (overlay && !hub ? 26 : 0);
+    const ay = ((hub ? hr.y : groundY(selected.y)) - cam.y) * cam.z + ch / 2 - 14 - (overlay && !hub ? 26 : 0);
     act.style.transform = `translate(${Math.round(Math.min(cw - 110, Math.max(110, ax)))}px, ${Math.round(Math.max(64, ay))}px) translate(-50%, -100%)`;
   };
 
@@ -376,12 +418,92 @@ function boot(data: HotData) {
   };
 
   // ---- 地図の操作 ----
+  /** いまの道具で (x, y) に置く。2×2 の装置は、そのマスを含む空き場所に置く */
+  const placeSpot = (x: number, y: number): { px: number; py: number; dir: Dir } => {
+    const t = tool as Placeable;
+    const [px, py] = (BIG.includes(t) ? fitAnchor(world, x, y) : null) ?? [x, y];
+    return { px, py, dir: t === 'belt' ? beltDir : placeDir ?? autoDir(world, t, px, py) };
+  };
+  const placeAt = (x: number, y: number) => {
+    if (!isBuild(tool)) return;
+    const { px, py, dir } = placeSpot(x, y);
+    const err = doPlace(tool, px, py, dir);
+    if (err) { toast(err); sfx.bad(); return; }
+    sfx.place();
+    const placed = at(world, px, py)!;
+    if (clone && clone.kind === tool) {
+      // 複製：設定を写す
+      const r = recipeById(clone.recipe);
+      if (r && clone.outOrder) {
+        configure(placed, r, clone.outOrder.filter((s) => s !== 'e'));
+        if (r.machine === 'electrolyzer') placed.outOrder = [...clone.outOrder];
+        if (clone.big === placed.big && clone.outSlot) placed.outSlot = [...clone.outSlot];
+      }
+      placed.test = clone.test;
+      placed.sub = clone.sub;
+      return;
+    }
+    if (isMachine(tool) || tool === 'depot' || tool === 'sampler' || tool === 'analyzer' || tool === 'station' || tool === 'sensor' || tool === 'gate') inspect(placed);
+  };
+  /** 置く前の見本：占めるマス、置けるかどうか、向き、出口（外向きの矢印）と入口（内向きの矢印） */
+  const toolGhost = () => {
+    if (!hover || !isBuild(tool) || tool === 'belt' || !modal.hidden) return null;
+    if (at(world, hover[0], hover[1]) && !holding) return null;
+    const big = BIG.includes(tool), { px, py, dir } = placeSpot(hover[0], hover[1]);
+    const ok = footprint(px, py, big ? 2 : 1).every(([fx, fy]) => !at(world, fx, fy));
+    const fake: Ent = { kind: tool, x: px, y: py, dir, big: big || undefined };
+    const ports: { x: number; y: number; d: number; out: boolean }[] = [];
+    const outs = isMachine(tool) ? slotCount(fake) : tool === 'splitter' ? 3 : tool === 'analyzer' ? 2 : tool === 'station' ? 2 : tool === 'vent' || tool === 'bridge' ? 0 : 1;
+    for (let i = 0; i < outs; i++) { const q = slotPort(fake, i); ports.push({ x: q.x, y: q.y, d: q.d, out: true }); }
+    for (const q of inDoors(fake)) if (tool !== 'station') ports.push({ x: q.x, y: q.y, d: q.d, out: false });
+    return [{ x: px, y: py, size: big ? 2 : 1, ok, dir, glyph: MACHINES[tool].glyph, ports }];
+  };
+  /** ベルトを何本かまとめて引く。なぞった道筋から平行な道筋を作り直し、要らなくなったマスは片づける */
+  const laneStroke = (x: number, y: number, prev: [number, number] | null) => {
+    const n = lanePath.length;
+    if (!prev || !n) lanePath = [[x, y]];
+    else if (n >= 2 && lanePath[n - 2][0] === x && lanePath[n - 2][1] === y) lanePath.pop(); // 引き返したら 1 マス戻す
+    else lanePath.push([x, y]);
+    const m = lanePath.length;
+    if (m >= 2) { const a = lanePath[m - 2], b = lanePath[m - 1]; beltDir = (b[0] > a[0] ? 0 : b[0] < a[0] ? 2 : b[1] > a[1] ? 1 : 3) as Dir; }
+    const want = new Map<string, LaneTile>();
+    for (const lane of lanePaths(lanePath, lanes, beltDir)) for (const q of lane) want.set(`${q.x},${q.y}`, q);
+    for (const k of [...laneLaid]) {
+      if (want.has(k)) continue;
+      const [qx, qy] = k.split(',').map(Number);
+      if (at(world, qx, qy)?.kind === 'belt') doErase(qx, qy);
+      laneLaid.delete(k);
+    }
+    for (const [k, q] of want) {
+      const e = at(world, q.x, q.y);
+      if (!e) { if (!doPlace('belt', q.x, q.y, q.dir)) laneLaid.add(k); }
+      else if (e.kind === 'belt') {
+        if (laneLaid.has(k) || e.dir % 2 === q.dir % 2) doTurn(e, q.dir);
+        // もとからあるベルトをまっすぐ横切るなら、立体交差にする
+        else if (q.straight) { doErase(q.x, q.y); doPlace('bridge', q.x, q.y, 0); }
+      }
+    }
+  };
   const pullsBelt = (x: number, y: number) => { const e = at(world, x, y); return !!e && e.kind !== 'hub' && e.kind !== 'vent'; };
-  const input = attachInput(cv, cam, {
-    begin: () => { group = null; camTo = null; cross = null; railDraft = null; },
+  const H: Required<InputHandlers> = {
+    begin: () => { group = null; camTo = null; cross = null; railDraft = null; tip.hidden = true; lanePath = []; laneLaid.clear(); holding = false; },
+    // 設備の道具で空いたマスを押し続けると、見本が出て、指で場所を選べる。離すと置く
+    hold(x, y) {
+      if (!isBuild(tool) || tool === 'belt' || at(world, x, y)) return false;
+      holding = true; hover = [x, y]; sfx.tap();
+      return true;
+    },
+    end() {
+      if (!holding) return;
+      holding = false;
+      const hv = hover;
+      hover = null;
+      if (hv && !at(world, hv[0], hv[1])) placeAt(hv[0], hv[1]);
+    },
+    hover(t) { if (!holding) hover = t; },
     mode: (x, y) => (tool === 'rail' ? (at(world, x, y)?.kind === 'station' ? 'stroke' : 'pan') : tool === 'area' ? (blueprint ? 'pan' : 'stroke') : tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y)) ? 'stroke' : 'pan'),
     tap(x, y) {
-      if (tool === 'rail') { const e = at(world, x, y); if (e?.kind === 'station') inspect(e); else toast('線路は「積む駅」から「降ろす駅」まで、指でなぞって敷く。', 2400); return; }
+      if (tool === 'rail') { const e = at(world, x, y); if (e?.kind === 'station') inspect(e); else toast(floor ? '線路は 1 階にしか敷けない。' : '線路は「積む駅」から「降ろす駅」まで、指でなぞって敷く。', 2400); return; }
       if (tool === 'area') { if (blueprint) { ghost = [x, y]; sfx.tap(); } else areaA = areaB = null; paintArea(); return; }
       const e = at(world, x, y);
       if (tool === 'erase') { if (e?.kind === 'hub') toast('納品所は消せない'); else if (doErase(x, y)) sfx.erase(); else toast('ここには何もない', 1200); return; }
@@ -390,29 +512,12 @@ function boot(data: HotData) {
         else { selected = e; sfx.tap(); }
         return;
       }
-      if (tool === 'pan') { if (selected) selected = null; else showZone(x, y); return; }
-      // 2×2 の装置は、タップしたマスを含む空き場所に置く
-      const [px, py] = (BIG.includes(tool) ? fitAnchor(world, x, y) : null) ?? [x, y];
-      const err = doPlace(tool, px, py, tool === 'belt' ? beltDir : autoDir(world, tool, px, py));
-      if (err) { toast(err); sfx.bad(); return; }
-      sfx.place();
-      const placed = at(world, px, py)!;
-      if (clone && clone.kind === tool) {
-        // 複製：設定を写す
-        const r = recipeById(clone.recipe);
-        if (r && clone.outOrder) {
-          configure(placed, r, clone.outOrder.filter((s) => s !== 'e'));
-          if (r.machine === 'electrolyzer') placed.outOrder = [...clone.outOrder];
-          if (clone.big === placed.big && clone.outSlot) placed.outSlot = [...clone.outSlot];
-        }
-        placed.test = clone.test;
-        placed.sub = clone.sub;
-        return;
-      }
-      if (isMachine(tool) || tool === 'depot' || tool === 'sampler' || tool === 'analyzer' || tool === 'station') inspect(placed);
+      if (tool === 'pan') { if (selected) selected = null; else if (!floor) showZone(x, y); return; }
+      placeAt(x, y);
     },
     stroke(x, y, prev) {
       selected = null;
+      if (holding) { hover = [x, y]; return; }
       if (tool === 'rail') {
         const e = at(world, x, y);
         if (!railDraft) {
@@ -438,6 +543,7 @@ function boot(data: HotData) {
       }
       if (tool === 'area') { if (!prev || !areaA) areaA = [x, y]; areaB = [x, y]; paintArea(); return; }
       if (tool === 'erase') { doErase(x, y); return; }
+      if (tool === 'belt' && lanes > 1) { laneStroke(x, y, prev); return; }
       if (prev) {
         const nd = (x > prev[0] ? 0 : x < prev[0] ? 2 : y > prev[1] ? 1 : 3) as Dir;
         const p = at(world, prev[0], prev[1]);
@@ -456,7 +562,32 @@ function boot(data: HotData) {
         else doTurn(e, beltDir);
       }
     },
+  };
+  // 画面のマスに、いま見ている階のずれを足してから渡す
+  const F = (y: number) => y + floor * FLOOR_DY;
+  const input = attachInput(cv, cam, {
+    begin: H.begin, end: H.end,
+    mode: (x, y) => H.mode(x, F(y)),
+    tap: (x, y) => H.tap(x, F(y)),
+    stroke: (x, y, prev) => H.stroke(x, F(y), prev && [prev[0], F(prev[1])]),
+    hold: (x, y) => H.hold(x, F(y)),
+    hover: (t) => H.hover(t && [t[0], F(t[1])]),
   });
+  // ---- 階の切り替え ----
+  const floorBtn = $<HTMLButtonElement>('b-floor');
+  const paintFloor = () => {
+    floorBtn.hidden = !has(world, 'floor2');
+    floorBtn.textContent = `${floor + 1} 階`;
+    floorBtn.classList.toggle('hot', floor === 1);
+    app.classList.toggle('upstairs', floor === 1);
+  };
+  function setFloor(f: number) {
+    if (f === floor) return;
+    floor = f;
+    selected = null; hover = null; areaA = areaB = null; ghost = null;
+    paintFloor(); paintArea();
+  }
+  floorBtn.onclick = () => { setFloor(1 - floor); sfx.tap(); toast(floor ? '2 階。1 階の設備は薄く見える。「昇降機」で上下をつなげ。' : '1 階。', 2400); };
 
   // ---- 範囲：まとめてコピー・貼りつけ・消去。設計図は回せて、保存できる ----
   const areaAct = $('area-act');
@@ -483,7 +614,7 @@ function boot(data: HotData) {
     $('area-copy').hidden = $('area-del').hidden = bp || n === 0;
     $('area-rot').hidden = $('area-save').hidden = $('area-put').hidden = !bp;
     ($('area-put') as HTMLButtonElement).disabled = !ghost;
-    $('area-lib').hidden = bp || !library().length;
+    $('area-lib').hidden = bp;
     $('area-cancel').hidden = !bp && !areaRect();
   }
   const toStamps = (r: [number, number, number, number], es: Ent[]): Stamp[] => es.map((e) => ({ kind: e.kind as Placeable, dx: e.x - r[0], dy: e.y - r[1], dir: e.dir, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, test: e.test, sub: e.sub, ch: e.ch, role: e.role }));
@@ -523,19 +654,41 @@ function boot(data: HotData) {
     sfx.ok();
     paintArea();
   };
-  const showLibrary = () => {
+  const showLibrary = (io?: { mode: 'out' | 'in'; text?: string; note?: string }) => {
     const l = library();
+    // 文字列での受け渡し：書き出した文字列を貼りつければ、ほかの端末や人の設計図を使える
+    let ioBox: HTMLElement | null = null;
+    if (io?.mode === 'out') {
+      const area = h('textarea', { id: 'bp-io', readOnly: true, value: io.text ?? '', rows: 4 });
+      const note = h('span', { class: 'muted' }, io.note ?? '');
+      ioBox = h('div', { class: 'stack' }, h('b', {}, '設計図の書き出し'), h('p', { class: 'muted' }, 'この文字列を渡せば、相手は「文字列から読み込む」で同じ設計図を使える。反応の設定も入っている。'), area,
+        h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'bp-io-copy', onclick: () => { navigator.clipboard.writeText(area.value).then(() => { note.textContent = 'コピーした。'; }, () => { area.select(); note.textContent = 'コピーできなかった。選択された文字列を自分でコピーしろ。'; }); } }, 'コピー'), note));
+    } else if (io?.mode === 'in') {
+      const area = h('textarea', { id: 'bp-io', rows: 4, placeholder: '書き出した文字列をここに貼りつける' });
+      const note = h('span', { class: 'muted' }, io.note ?? '');
+      ioBox = h('div', { class: 'stack' }, h('b', {}, '文字列から読み込む'), area,
+        h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'bp-io-ok', onclick: () => {
+          const bp = decodeBlueprint(area.value);
+          if (!bp) { note.textContent = '読めない。書き出した文字列を最初から最後まで貼りつけろ。'; return; }
+          l.unshift(bp); saveLibrary(l); sfx.ok();
+          showLibrary();
+          toast(`設計図「${bp.name}」を読み込んだ（${bp.stamps.length} 個）。`, 3000);
+        } }, '読み込む'), note));
+    }
     showSheet(h('header', {}, h('h2', {}, '設計図'), closeBtn()),
-      h('p', { class: 'muted' }, '「範囲」で囲んでコピーし、「保存」したもの。この端末に残り、どのノートからも使える。名前はタップして書き換えられる。'),
+      h('p', { class: 'muted' }, '「範囲」で囲んでコピーし、「保存」したもの。この端末に残り、どのノートからも使える。名前はタップして書き換えられる。文字列にして人に渡すこともできる。'),
+      h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'bp-import', onclick: () => showLibrary({ mode: 'in' }) }, '文字列から読み込む')),
+      ioBox,
       l.length ? h('div', { class: 'menu' }, ...l.map((bp, i) => {
         const n = (f: (b: Stamp) => boolean) => bp.stamps.filter(f).length;
         return h('div', { class: 'row bp' },
           h('span', { class: 'stack' }, (() => { const inp = h('input', { class: 'bp-name', type: 'text', id: `bp-name-${i}`, value: bp.name, maxLength: 30, ariaLabel: '設計図の名前' }); inp.onchange = () => { bp.name = inp.value.trim().slice(0, 30) || bp.name; saveLibrary(l); }; return inp; })(), h('span', { class: 'muted' }, `装置 ${n((b) => BIG.includes(b.kind))}・ベルト類 ${n((b) => b.kind === 'belt' || b.kind === 'bridge' || b.kind === 'tunnel')}・ほか ${n((b) => !BIG.includes(b.kind) && b.kind !== 'belt' && b.kind !== 'bridge' && b.kind !== 'tunnel')}`)),
           h('button', { class: 'primary', type: 'button', id: `bp-use-${i}`, onclick: () => { blueprint = bp.stamps.map((b) => ({ ...b })); ghost = null; areaA = areaB = null; closeModal(); pick('area', true); } }, '使う'),
+          h('button', { class: 'ghost', type: 'button', id: `bp-out-${i}`, onclick: () => showLibrary({ mode: 'out', text: encodeBlueprint(bp.name, bp.stamps) }) }, '書き出す'),
           h('button', { class: 'ghost warn', type: 'button', id: `bp-del-${i}`, onclick: () => { l.splice(i, 1); saveLibrary(l); showLibrary(); } }, '消す'));
       })) : h('p', {}, 'まだ保存した設計図はない。'));
   };
-  $('area-lib').onclick = showLibrary;
+  $('area-lib').onclick = () => showLibrary();
   $('area-cancel').onclick = () => { blueprint = null; ghost = null; areaA = areaB = null; paintArea(); };
   $('area-put').onclick = () => { if (ghost) pasteAt(ghost[0], ghost[1]); };
   function pasteAt(x: number, y: number) {
@@ -605,7 +758,7 @@ function boot(data: HotData) {
       app.classList.remove('in-title');
       for (const b of buttons.values()) b.hidden = false;
       refreshTools(false);
-      lastSeen = world.seen;
+      lastSeen = world.seen; lastRes = world.research.length; floor = 0; paintFloor();
       pick('pan');
       began = performance.now(); warned = false;
       save();
@@ -615,7 +768,7 @@ function boot(data: HotData) {
   const toTitle = () => { save(); slot = 0; selected = null; app.classList.add('in-title'); title.show(); };
 
   // ---- ループ ----
-  let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1;
+  let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0;
   const STEP = 1 / 60;
   const frame = (now: number) => {
     const dt = Math.min(0.1, (now - prev) / 1000);
@@ -664,8 +817,9 @@ function boot(data: HotData) {
       } else input.tick(dt);
       if (selected && at(world, selected.x, selected.y) !== selected) selected = null;
       if (lastSeen !== world.seen) { lastSeen = world.seen; refreshTools(true); }
+      if (lastRes !== world.research.length) { lastRes = world.research.length; refreshTools(true); paintOpts(); paintFloor(); }
       const d0 = PERF ? performance.now() : 0;
-      draw(ctx, cw, ch, world, cam, now / 1000, dt, { tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : null, rail: tool === 'rail' ? railDraft?.pts ?? null : null });
+      draw(ctx, cw, ch, world, cam, now / 1000, dt, { floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : toolGhost(), rail: tool === 'rail' ? railDraft?.pts ?? null : null });
       if (PERF) { PERF.draw.push(performance.now() - d0); if (PERF.draw.length > 600) { PERF.draw.shift(); PERF.step.shift(); } }
       hud();
     }

@@ -5,6 +5,7 @@ import { hasSub, label, sub } from '../content/substances';
 import { isBalanced, parseFormula } from '../chem/formula';
 import { ELEMENTS } from '../content/elements';
 import { isPositive, setById } from '../content/samples';
+import { RESEARCH, researchById, type Research } from '../content/research';
 
 /** 0:右 1:下 2:左 3:上 */
 export type Dir = 0 | 1 | 2 | 3;
@@ -12,7 +13,14 @@ export const DX = [1, 0, -1, 0];
 export const DY = [0, 1, 0, -1];
 
 /** 'part' は 2×2 の装置が占める残りのマス。ref が本体の位置を指す */
-export type Kind = 'belt' | 'extractor' | 'vent' | 'hub' | 'splitter' | 'bridge' | 'tunnel' | 'station' | 'depot' | 'sampler' | 'analyzer' | 'part' | MachineKind;
+export type Kind = 'belt' | 'extractor' | 'vent' | 'hub' | 'splitter' | 'bridge' | 'tunnel' | 'station' | 'depot' | 'sampler' | 'analyzer' | 'sensor' | 'gate' | 'lift' | 'part' | MachineKind;
+/** 2 階は、同じ x のまま y をこれだけずらした場所として持つ。隣り合うマスの計算は 1 階と同じになる */
+export const FLOOR_DY = 100000;
+export const floorOf = (y: number) => (y >= FLOOR_DY / 2 ? 1 : 0);
+/** 階を外した y（地図の上での位置） */
+export const groundY = (y: number) => y - floorOf(y) * FLOOR_DY;
+/** 信号の数（1〜8 番） */
+export const SIGNALS = 8;
 /** 2×2 マスを占める装置。出口が 6 か所あり、奥の面が入口の目安になる */
 export const BIG: Kind[] = ['separator', 'reactor', 'electrolyzer', 'battery', 'station'];
 /** 地下ベルトが届く距離（入口から出口までのマス数） */
@@ -79,6 +87,14 @@ export interface Ent {
   /** 積む駅：自分で敷いた線路。曲がり角の座標（マスの中心）と、行き先の駅のキー。なければ自動で引く */
   rail?: [number, number][];
   railTo?: string;
+  /** 検知器・弁：ch が信号の番号。検知器の test は 'jam'（詰まっている間）か 'is:物質'（その物質が通ったあと 3 秒）。
+   *  弁の test は 'on'（信号が来ている間だけ通す）か 'off'（来ていない間だけ通す）。
+   *  昇降機：role が 'in' なら入口（もう一方の階へ送る）、'out' なら出口 */
+  /** ベルト：これまでに物が入ってきた向き（ビットの並び）と、最後に入ってきた向き。2 方向以上から入るベルトが合流点になる */
+  ins?: number;
+  li?: Dir;
+  /** 合流点のベルト：優先して通す流れの向き。なければ交互に通す */
+  pri?: Dir;
   /** 積む駅：走らせる編成の数（1〜3）と、2 編成目以降の列車 */
   cars?: number;
   xtr?: { p: number; back: boolean; cargo: string[]; wait: number; to?: string }[];
@@ -142,6 +158,8 @@ export interface World {
   /** 研究点。強化に使う */
   points: number;
   up: Record<UpgradeKey, number>;
+  /** 終えた研究（src/content/research.ts の id） */
+  research: string[];
   /** 正解した計算問題 */
   solved: string[];
   /** 演習（連鎖計算・構造決定）の型ごとの成績。tries：解いた回数、clean：全問正解した回数 */
@@ -159,6 +177,8 @@ export interface World {
   /** 量産の指令：指令の物質を納めた時刻（playMs）と、求められた速さを保てている秒数。保存しない */
   rateWin: number[];
   hold: number;
+  /** 信号：番号ごとの、点いていられる残り秒数。保存しない */
+  sig: number[];
   /** 複数の物質を同時に求める指令で、物質ごとに納めた数 */
   multi: Record<string, number>;
   /** そのまま捨てた有毒な気体の数（物質ごとの累計） */
@@ -174,12 +194,41 @@ export interface World {
 }
 
 export const beltSpeed = (w: World) => 2 * (1 + 0.35 * w.up.belt);
-export const extractInterval = (w: World) => 1 / (1 + 0.5 * w.up.extract);
-export const machineRate = (w: World) => 1 + 0.4 * w.up.machine;
+/** 研究を終えているか */
+export const has = (w: World, id: string) => w.research.includes(id);
+export const extractInterval = (w: World) => 1 / ((1 + 0.5 * w.up.extract) * (has(w, 'intake') ? 1.5 : 1));
+export const machineRate = (w: World) => (1 + 0.4 * w.up.machine) * (has(w, 'overclock') ? 1.25 : 1);
+/** いちどに引けるベルトの本数 */
+export const maxLanes = (w: World) => (has(w, 'lanes4') ? 4 : has(w, 'lanes3') ? 3 : 2);
+export const tunnelRange = (w: World) => (has(w, 'tunnel') ? 12 : TUNNEL_RANGE);
+export const stationCap = (w: World) => (has(w, 'yard') ? 120 : STATION_CAP);
+export const trainCap = (w: World) => (has(w, 'heavy') ? 40 : TRAIN_CAP);
+export const maxCars = (w: World) => (has(w, 'yard') ? 5 : MAX_CARS);
+/** 研究の段を開くのに要る、終えた研究の数 */
+export const tierNeed = (tier: number) => (tier - 1) * 2;
+/** いまこの研究を始められない理由。始められるなら null */
+export function researchBlock(w: World, r: Research): string | null {
+  if (has(w, r.id)) return '研究済み';
+  if (w.research.length < tierNeed(r.tier)) return `研究を ${tierNeed(r.tier)} 個終えると開く`;
+  const miss = (r.needs ?? []).filter((id) => !has(w, id));
+  if (miss.length) return `先に「${miss.map((id) => researchById(id)?.name ?? id).join('」「')}」が要る`;
+  if (w.points < r.cost) return `研究点が足りない（${r.cost} 点）`;
+  return null;
+}
+/** 研究を終える。同じ組の研究は取り消す（二者択一）。できたら true */
+export function doResearch(w: World, id: string): boolean {
+  const r = researchById(id);
+  if (!r || researchBlock(w, r)) return false;
+  w.points -= r.cost;
+  if (r.group) w.research = w.research.filter((x) => researchById(x)?.group !== r.group);
+  w.research.push(id);
+  return true;
+}
+export { RESEARCH };
 /** 装置 1 台が、原料が切れず出口も詰まらないときに、毎分こなせる反応の回数 */
 export const reactionsPerMin = (w: World, e: Ent, r: Recipe) => (60 * machineRate(w) * ((e.pw || 0) > 0 ? 2 : 1)) / r.time;
 /** 列車の速さ（マス/秒）。ベルトの強化で一緒に速くなる */
-export const trainSpeed = (w: World) => 14 * (1 + 0.35 * w.up.belt);
+export const trainSpeed = (w: World) => 14 * (1 + 0.35 * w.up.belt) * (has(w, 'express') ? 1.5 : 1);
 /** 線路の長さ：横に進んでから縦に進む、直角の道のり（マス） */
 export const railLength = (a: Ent, b: Ent) => Math.max(1, Math.abs(b.x - a.x) + Math.abs(b.y - a.y));
 export const pathLength = (pts: [number, number][]) => Math.max(1, pts.slice(1).reduce((a, q, i) => a + Math.abs(q[0] - pts[i][0]) + Math.abs(q[1] - pts[i][1]), 0));
@@ -239,14 +288,15 @@ export function setChapter(w: World, i: number) {
   w.seen = Math.max(w.seen, w.chapter);
 }
 /** 道具が使えるか */
-export const toolUnlocked = (w: World, need: { done?: number; chapter?: number }) =>
-  (need.done === undefined && need.chapter === undefined) || (need.done !== undefined && doneCount(w) >= need.done) || (need.chapter !== undefined && w.seen >= need.chapter);
+export const toolUnlocked = (w: World, need: { done?: number; chapter?: number; research?: string }) =>
+  need.research !== undefined ? has(w, need.research)
+    : (need.done === undefined && need.chapter === undefined) || (need.done !== undefined && doneCount(w) >= need.done) || (need.chapter !== undefined && w.seen >= need.chapter);
 
 export function newWorld(): World {
   const w: World = {
     ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
-    up: { extract: 0, belt: 0, machine: 0 }, solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, buckets: [], playMs: 0, tick: 0, events: [], fx: [],
+    up: { extract: 0, belt: 0, machine: 0 }, research: [], solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, sig: [], buckets: [], playMs: 0, tick: 0, events: [], fx: [],
   };
   for (const [x, y] of hubTiles(2)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
   return w;
@@ -286,7 +336,17 @@ export function discover(w: World, s: string) {
 export function place(w: World, kind: Kind, x: number, y: number, dir: Dir): string | null {
   const big = BIG.includes(kind);
   if (footprint(x, y, big ? 2 : 1).some(([fx, fy]) => w.ents.has(key(fx, fy)))) return big ? 'この装置は 2×2 マスを使う。空いた場所に置け' : 'そこはもう埋まっている';
+  if (floorOf(y) === 1 && (kind === 'extractor' || kind === 'station')) return kind === 'extractor' ? '採取機は 1 階にしか置けない。採ったものを昇降機で上げろ' : '貨物駅は 1 階にしか置けない';
   const e: Ent = { kind, x, y, dir };
+  if (kind === 'lift') {
+    // 昇降機は 2 つで 1 組：置いた側が入口、もう一方の階の同じ場所が出口
+    const oy = y + (floorOf(y) ? -FLOOR_DY : FLOOR_DY);
+    if (w.ents.has(key(x, oy))) return 'もう一方の階の同じ場所がふさがっている';
+    e.item = null; e.role = 'in';
+    w.ents.set(key(x, oy), { kind: 'lift', x, y: oy, dir, item: null, role: 'out' });
+  }
+  if (kind === 'sensor') { e.item = null; e.ch = 1; e.test = 'jam'; }
+  if (kind === 'gate') { e.item = null; e.ch = 1; e.test = 'on'; }
   if (big) e.big = true;
   if (kind === 'belt' || kind === 'splitter' || kind === 'analyzer') e.item = null;
   if (kind === 'splitter') e.rr = 0;
@@ -303,8 +363,16 @@ export function remove(w: World, x: number, y: number): boolean {
   const e = at(w, x, y);
   if (!e || e.kind === 'hub') return false;
   for (const [fx, fy] of footprint(e.x, e.y, sizeOf(e))) w.ents.delete(key(fx, fy));
+  if (e.kind === 'lift') { const p = liftPartner(w, e); if (p) w.ents.delete(key(p.x, p.y)); }
   return true;
 }
+/** 昇降機の相方（もう一方の階の同じ場所） */
+export function liftPartner(w: World, e: Ent): Ent | undefined {
+  const p = w.ents.get(key(e.x, e.y + (floorOf(e.y) ? -FLOOR_DY : FLOOR_DY)));
+  return p?.kind === 'lift' ? p : undefined;
+}
+/** 信号 ch が点いているか */
+export const signalOn = (w: World, ch: number | undefined) => (w.sig[ch || 1] || 0) > 0;
 
 export function clearRecipe(e: Ent) {
   e.ts = undefined; e.n = 0; e.u = 0;
@@ -533,7 +601,8 @@ export function moveOutput(e: Ent, i: number, slot: number) {
 /** n が、マス (x, y) へ向き d で物を送り出すか */
 function emits(w: World, n: Ent, x: number, y: number, d: Dir, depth = 0): boolean {
   switch (n.kind) {
-    case 'belt': case 'extractor': case 'depot': case 'sampler': return n.dir === d;
+    case 'belt': case 'extractor': case 'depot': case 'sampler': case 'sensor': case 'gate': return n.dir === d;
+    case 'lift': return n.role === 'out' && n.dir === d;
     case 'analyzer': return [0, 1].some((i) => portDir(n.dir, i) === d);
     case 'splitter': return [0, 1, 2].some((i) => portDir(n.dir, i) === d);
     case 'bridge': return through(w, n, d, depth + 1);
@@ -546,7 +615,7 @@ function emits(w: World, n: Ent, x: number, y: number, d: Dir, depth = 0): boole
 
 /** 地下ベルトの入口 e から見た出口：同じ向きの、いちばん近い地下ベルト */
 export function tunnelPair(w: World, e: Ent): Ent | null {
-  for (let k = 1; k <= TUNNEL_RANGE; k++) {
+  for (let k = 1, R = tunnelRange(w); k <= R; k++) {
     const n = at(w, e.x + DX[e.dir] * k, e.y + DY[e.dir] * k);
     if (n && n.kind === 'tunnel' && n.dir === e.dir) return n;
   }
@@ -587,7 +656,7 @@ export function autoDir(w: World, kind: Kind, x: number, y: number): Dir {
     }
   } else {
     // 地下ベルトの 2 つ目は、手前にある入口と同じ向きにそろえる
-    if (kind === 'tunnel') for (const d of [0, 1, 2, 3] as Dir[]) for (let k = 1; k <= TUNNEL_RANGE; k++) {
+    if (kind === 'tunnel') for (const d of [0, 1, 2, 3] as Dir[]) for (let k = 1, R = tunnelRange(w); k <= R; k++) {
       const n = at(w, x - DX[d] * k, y - DY[d] * k);
       if (n && n.kind === 'tunnel' && n.dir === d) return d;
     }
@@ -596,7 +665,7 @@ export function autoDir(w: World, kind: Kind, x: number, y: number): Dir {
       if (d !== null) return d;
     }
   }
-  const dx = HUB_CENTER[0] - (x + 0.5), dy = HUB_CENTER[1] - (y + 0.5);
+  const dx = HUB_CENTER[0] - (x + 0.5), dy = HUB_CENTER[1] - (groundY(y) + 0.5);
   return (Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 0 : 2) : dy >= 0 ? 1 : 3) as Dir;
 }
 
@@ -689,6 +758,31 @@ function finishGoal(w: World, g: Goal, ch: number) {
   }
 }
 
+/** ベルト t の手前（向き q で流れ込む側）に、じきに入ってくる物があるか。near は、どこまで進んでいれば数えるか（0〜1） */
+function waiting(w: World, t: Ent, q: Dir, near: number): boolean {
+  const n = at(w, t.x - DX[q], t.y - DY[q]);
+  if (!n) return false;
+  switch (n.kind) {
+    case 'belt': case 'sensor': case 'gate': return n.dir === q && !!n.item && n.item.p >= near;
+    case 'tunnel': return n.dir === q && !!n.item && n.item.p >= near && !tunnelPair(w, n);
+    case 'bridge': return !!n.items?.some((it, a) => !!it && it.p >= near && (it.d ?? a) === q);
+    case 'splitter': case 'analyzer': return !!n.item && n.item.p >= near;
+    default: return false;
+  }
+}
+/** 合流点 t に向き d で入ろうとしている物が、ほかの流れに道をゆずるべきか */
+function yields(w: World, t: Ent, d: Dir): boolean {
+  const live = (q: number) => ((t.ins! >> q) & 1) === 1 && t.dir !== (q + 2) % 4;
+  // 優先：優先する流れの手前のマスに物があるうちは、ほかは待つ（流れているベルトは、詰まっていても 1 マスごとにわずかな間が空くので、着く前でも数える）
+  if (t.pri !== undefined && live(t.pri)) return t.pri !== d && waiting(w, t, t.pri, 0);
+  // 交互：続けて同じ向きから入ろうとしていて、ほかの流れがすぐそこまで来ていれば、ゆずる
+  if (t.li !== d) return false;
+  for (const q of [0, 1, 2, 3] as Dir[]) if (q !== d && live(q) && waiting(w, t, q, 0.5)) return true;
+  return false;
+}
+/** 合流点のベルトに流れ込んでいる向き */
+export const mergeDirs = (e: Ent): Dir[] => ([0, 1, 2, 3] as Dir[]).filter((q) => ((e.ins || 0) >> q) & 1 && e.dir !== (q + 2) % 4);
+
 /** (x,y) のマスへ、向き d で物質 s を押し込む */
 function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): boolean {
   const t = at(w, x, y);
@@ -696,6 +790,9 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): 
   switch (t.kind) {
     case 'belt':
       if (t.item || t.dir === (d + 2) % 4) return false;
+      // 合流点（2 方向以上から入るベルト）：交互に通すか、決めた向きを優先して通す
+      if (t.ins && t.ins & (t.ins - 1) && yields(w, t, d)) return false;
+      t.ins = (t.ins || 0) | (1 << d); t.li = d;
       t.item = { s, p: 0, m: w.tick, rc };
       t.st = s === 'e' ? 'gas' : sub(s).state;
       return true;
@@ -704,12 +801,21 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): 
       if (t.item) return false;
       t.item = { s, p: 0, m: w.tick, rc };
       return true;
+    case 'sensor':
+    case 'gate':
+      if (t.item || t.dir === (d + 2) % 4) return false;
+      t.item = { s, p: 0, m: w.tick, rc };
+      return true;
+    case 'lift':
+      if (t.role !== 'in' || t.item || t.dir === (d + 2) % 4) return false;
+      t.item = { s, p: 0, m: w.tick, rc };
+      return true;
     case 'tunnel':
       if (t.item || d !== t.dir) return false;
       t.item = { s, p: 0, m: w.tick, rc };
       return true;
     case 'station':
-      if (t.role !== 'in' || (t.buf ??= []).length >= STATION_CAP) return false;
+      if (t.role !== 'in' || (t.buf ??= []).length >= stationCap(w)) return false;
       t.buf.push(rc ? '!' + s : s);
       return true;
     case 'bridge': {
@@ -764,6 +870,7 @@ export function step(w: World, dt: number) {
     if (w.hold >= rg.n) finishGoal(w, rg, w.chapter);
   }
   if (currentGoal(w)) { const gk = `${w.chapter}:${w.progress[w.chapter]}`; w.goalMs[gk] = (w.goalMs[gk] || 0) + dt * 1000; }
+  for (let i = 1; i <= SIGNALS; i++) if (w.sig[i] > 0) w.sig[i] = Math.max(0, w.sig[i] - dt);
   const speed = beltSpeed(w), every = extractInterval(w), rate = machineRate(w), kU = 1 - Math.exp(-dt / UTIL_TAU);
   for (const e of w.ents.values()) {
     switch (e.kind) {
@@ -793,6 +900,39 @@ export function step(w: World, dt: number) {
         // 'is:物質' は選別：その物質だけを正面へ通す
         const d = portDir(e.dir, (e.test.startsWith('is:') ? it.s === e.test.slice(3) : isPositive(it.s, e.test)) ? 0 : 1);
         if (push(w, e.x + DX[d], e.y + DY[d], d, it.s, it.rc)) e.item = null;
+        break;
+      }
+      case 'sensor': {
+        // 検知器：ベルトのように正面へ流しながら、様子を信号にする
+        const it = e.item;
+        if (!it) { e.stuck = 0; break; }
+        it.p = Math.min(1, it.p + speed * dt);
+        if (it.p < 1 || it.m === w.tick) break;
+        if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc)) {
+          if (e.test === `is:${it.s}`) w.sig[e.ch || 1] = Math.max(w.sig[e.ch || 1] || 0, 3);
+          e.item = null; e.stuck = 0;
+        } else {
+          e.stuck = (e.stuck || 0) + dt;
+          if (e.test === 'jam' && e.stuck > 0.6) w.sig[e.ch || 1] = Math.max(w.sig[e.ch || 1] || 0, 0.5);
+        }
+        break;
+      }
+      case 'gate': {
+        // 弁：信号が来ている間だけ（または来ていない間だけ）通す
+        const it = e.item;
+        if (!it) break;
+        it.p = Math.min(1, it.p + speed * dt);
+        if (it.p < 1 || it.m === w.tick) break;
+        if (signalOn(w, e.ch) === (e.test !== 'off') && push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc)) e.item = null;
+        break;
+      }
+      case 'lift': {
+        const it = e.item;
+        if (!it) break;
+        it.p = Math.min(1, it.p + speed * dt);
+        if (it.p < 1 || it.m === w.tick) break;
+        if (e.role === 'in') { const p = liftPartner(w, e); if (p && !p.item) { p.item = { s: it.s, p: 0, m: w.tick, rc: it.rc }; e.item = null; } }
+        else if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc)) e.item = null;
         break;
       }
       case 'sampler': {
@@ -854,15 +994,15 @@ export function step(w: World, dt: number) {
         }
         // 積む駅：列車を走らせる。編成は 3 つまで増やせる。降ろす駅がいくつもあれば、順番に配る（分岐）
         const trains = [(e.tr ??= { p: 0, back: false, cargo: [], wait: 0 }), ...(e.xtr ??= [])];
-        while (trains.length < Math.min(MAX_CARS, e.cars || 1)) { const t2 = { p: 0, back: false, cargo: [], wait: 0 }; e.xtr.push(t2); trains.push(t2); }
+        while (trains.length < Math.min(maxCars(w), e.cars || 1)) { const t2 = { p: 0, back: false, cargo: [], wait: 0 }; e.xtr.push(t2); trains.push(t2); }
         // 減らしたときは、駅に戻っている空の編成から外す
-        while (e.xtr.length > Math.max(0, Math.min(MAX_CARS, e.cars || 1) - 1)) { const k = e.xtr.findIndex((t2) => t2.p <= 0 && !t2.back && !t2.cargo.length); if (k < 0) break; e.xtr.splice(k, 1); }
+        while (e.xtr.length > Math.max(0, Math.min(maxCars(w), e.cars || 1) - 1)) { const k = e.xtr.findIndex((t2) => t2.p <= 0 && !t2.back && !t2.cargo.length); if (k < 0) break; e.xtr.splice(k, 1); }
         for (const tr of [e.tr, ...e.xtr]) {
           if (tr.p <= 0 && !tr.back) {
-            while (tr.cargo.length < TRAIN_CAP && buf.length) tr.cargo.push(buf.shift()!);
+            while (tr.cargo.length < trainCap(w) && buf.length) tr.cargo.push(buf.shift()!);
             tr.wait += dt;
             // 満載か、少し待っても増えなければ発車する
-            if (tr.cargo.length && (tr.cargo.length >= TRAIN_CAP || tr.wait > 2.5)) {
+            if (tr.cargo.length && (tr.cargo.length >= trainCap(w) || tr.wait > 2.5)) {
               const own = railOf(w, e), ts = own?.custom ? [own.dest] : stationTargets(w, e);
               if (ts.length) { e.rr = ((e.rr || 0) + 1) % ts.length; const to = ts[e.rr]; tr.to = key(to.x, to.y); tr.p = 1e-6; tr.wait = 0; }
             }
@@ -876,7 +1016,7 @@ export function step(w: World, dt: number) {
             tr.p = Math.min(1, tr.p + v);
             if (tr.p >= 1) {
               const db = (dest!.buf ??= []);
-              while (tr.cargo.length && db.length < STATION_CAP) db.push(tr.cargo.shift()!);
+              while (tr.cargo.length && db.length < stationCap(w)) db.push(tr.cargo.shift()!);
               if (!tr.cargo.length) { tr.back = true; e.n = (e.n || 0) + 1; }
             }
           } else {
@@ -941,7 +1081,7 @@ export function serialize(w: World): string {
   return JSON.stringify({
     v: SAVE_VERSION, ents: [...w.ents.values()].filter((e) => e.kind !== 'part'), chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
     hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
-    discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
+    discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, research: w.research, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
     playMs: Math.round(w.playMs), savedAt: Date.now(),
   });
 }
@@ -992,6 +1132,7 @@ export function deserialize(json: string): World | null {
     w.points = d.points | 0;
     w.up = { extract: d.up?.extract | 0, belt: d.up?.belt | 0, machine: d.up?.machine | 0 };
     w.solved = d.solved || [];
+    w.research = (Array.isArray(d.research) ? d.research : []).filter((id: string) => RESEARCH.some((r) => r.id === id));
     w.practice = d.practice || {};
     w.made = d.made || {};
     w.vented = d.vented || {};
