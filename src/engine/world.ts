@@ -59,7 +59,22 @@ export interface Ent {
   /** この反応で使わない物質が入口に来て、受け取れずにいる。bad：その物質、badT：最後に断った tick */
   bad?: string;
   badT?: number;
+  /** 電解槽：電池の e⁻ で加速していられる残り秒数 */
+  pw?: number;
 }
+
+/** そのまま捨ててはいけない有毒な気体と、その処理の手がかり */
+export const TOXIC: Record<string, string> = {
+  Cl2: '水酸化ナトリウム水溶液に吸収させる', SO2: '水酸化ナトリウム水溶液か石灰（Ca(OH)₂）に吸収させる', NO2: '水酸化ナトリウム水溶液に吸収させる',
+  H2S: '水酸化ナトリウム水溶液に吸収させる', HCl: '水酸化ナトリウムで中和する', HF: '水酸化カルシウムで中和する', NH3: '硫酸に吸収させて肥料（硫安）にする',
+  CO: '燃やして二酸化炭素にする', NO: '酸素で NO₂ にしてから吸収させる', Br2: '捨てずに製品として使う', O3: '捨てずに使う', HCN: '捨てずに原料として使う',
+};
+/** 有毒な気体を何個捨てるごとに、研究点を 1 点失うか */
+export const TOXIC_PER_POINT = 5;
+/** 電池の e⁻ 1 個で、電解槽が加速する秒数と、ためておける上限 */
+const POWER_SEC = 2.5, POWER_MAX = 20;
+/** 操業評価：指令を終えた時点の、直近 1 分の納品の速さ（個/分）で決まる */
+export const GRADES: { g: 'S' | 'A' | 'B' | 'C'; min: number; bonus: number }[] = [{ g: 'S', min: 30, bonus: 30 }, { g: 'A', min: 15, bonus: 15 }, { g: 'B', min: 6, bonus: 5 }, { g: 'C', min: 0, bonus: 0 }];
 
 /** 直近の稼働率をならす時間（秒） */
 const UTIL_TAU = 20;
@@ -120,6 +135,12 @@ export interface World {
   made: Record<string, number>;
   vented: Record<string, number>;
   spilled: Record<string, number>;
+  /** そのまま捨てた有毒な気体の数（物質ごとの累計） */
+  emitted: Record<string, number>;
+  /** 指令ごとの操業評価（いちばん良かったもの）。キーは '章:番号' */
+  grades: Record<string, string>;
+  /** いま終えた指令の評価。UI に知らせたら消す。保存しない */
+  lastGrade?: { g: string; rate: number; bonus: number };
   /** 直近の流れ。10 秒ごとの区切りで 5 分ぶん。保存しない */
   buckets: Bucket[];
   /** 画面効果のきっかけ。保存しない */
@@ -177,7 +198,7 @@ export function newWorld(): World {
   const w: World = {
     ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
-    up: { extract: 0, belt: 0, machine: 0 }, solved: [], practice: {}, made: {}, vented: {}, spilled: {}, buckets: [], playMs: 0, tick: 0, events: [], fx: [],
+    up: { extract: 0, belt: 0, machine: 0 }, solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, buckets: [], playMs: 0, tick: 0, events: [], fx: [],
   };
   for (const [x, y] of hubTiles(2)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
   return w;
@@ -519,6 +540,14 @@ function deliver(w: World, s: string, x: number, y: number, rc?: boolean) {
   bucket(w).goal++;
   w.points++;
   if (w.counts[ch] >= requiredOf(w, g)) {
+    // 操業評価：仕分けの指令は速さを競うものではないので付けない
+    if (!g.strict) {
+      const rate = flowStats(w).goalPerMin, gr = GRADES.find((x) => rate >= x.min)!, gk = `${ch}:${w.progress[ch]}`;
+      const rank = (x?: string) => (x ? 'SABC'.indexOf(x) : 9);
+      if (rank(gr.g) < rank(w.grades[gk])) w.grades[gk] = gr.g;
+      w.points += gr.bonus;
+      w.lastGrade = { g: gr.g, rate, bonus: gr.bonus };
+    } else w.lastGrade = undefined;
     for (const b of w.buckets) b.goal = 0; // 指令が変わるので、指令ぶんの速さは数え直す
     w.progress[ch]++;
     w.counts[ch] = 0;
@@ -560,6 +589,13 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): 
     case 'vent':
       bump(w.vented, s);
       bucket(w).vent++;
+      if (TOXIC[s]) {
+        // 有毒な気体をそのまま捨てると、研究点を失う
+        bump(w.emitted, s);
+        const total = Object.values(w.emitted).reduce((a2, n) => a2 + n, 0);
+        if (total % TOXIC_PER_POINT === 0) w.points = Math.max(0, w.points - 1);
+        w.events.push(`toxic:${s}`);
+      }
       return true;
     case 'extractor':
     case 'depot':
@@ -568,6 +604,12 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean): 
     default: {
       const r = recipeById(t.recipe);
       if (!r || !t.inBuf) return false;
+      // 電解槽は、電池の e⁻ を受け取ると、そのあいだ 2 倍の速さで動く
+      if (s === 'e' && r.machine === 'electrolyzer') {
+        if ((t.pw || 0) > POWER_MAX - POWER_SEC) return false;
+        t.pw = (t.pw || 0) + POWER_SEC;
+        return true;
+      }
       const need = r.inputs.find(([id]) => id === s)?.[1];
       // 使わない物質は受け取らない。ベルトはそこで止まるので、理由がわかるように印をつける
       if (!need) { t.bad = s; t.badT = w.tick; return false; }
@@ -663,7 +705,8 @@ export function step(w: World, dt: number) {
             e.prog = 0;
           }
         } else {
-          e.prog = (e.prog || 0) + (dt * rate) / r.time;
+          e.prog = (e.prog || 0) + (dt * rate * ((e.pw || 0) > 0 ? 2 : 1)) / r.time;
+          if (e.pw) e.pw = Math.max(0, e.pw - dt);
           if (e.prog >= 1) {
             e.busy = false;
             e.prog = 0;
@@ -699,7 +742,7 @@ export function serialize(w: World): string {
   return JSON.stringify({
     v: SAVE_VERSION, ents: [...w.ents.values()].filter((e) => e.kind !== 'part'), chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
     hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
-    discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled,
+    discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades,
     playMs: Math.round(w.playMs), savedAt: Date.now(),
   });
 }
@@ -754,6 +797,8 @@ export function deserialize(json: string): World | null {
     w.made = d.made || {};
     w.vented = d.vented || {};
     w.spilled = d.spilled || {};
+    w.emitted = d.emitted || {};
+    w.grades = d.grades || {};
     w.playMs = d.playMs || 0;
     return w;
   } catch {

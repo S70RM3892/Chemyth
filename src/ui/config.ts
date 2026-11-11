@@ -33,7 +33,8 @@ export function utilText(e: Ent): string {
   const ts = e.ts ?? [0, 0, 0], total = ts[0] + ts[1] + ts[2];
   if (total < 1) return '稼働率：まだ記録がない。';
   const p = (x: number) => Math.round((x / total) * 100);
-  return `直近の稼働率 ${Math.round((e.u || 0) * 100)} %。置いてからの内訳：稼働 ${p(ts[0])} %・原料待ち ${p(ts[1])} %・出口詰まり ${p(ts[2])} %。反応 ${e.n || 0} 回。`;
+  return `直近の稼働率 ${Math.round((e.u || 0) * 100)} %。置いてからの内訳：稼働 ${p(ts[0])} %・原料待ち ${p(ts[1])} %・出口詰まり ${p(ts[2])} %。反応 ${e.n || 0} 回。`
+    + (e.kind === 'electrolyzer' ? ((e.pw || 0) > 0 ? ` 電池の電力で 2 倍速（残り ${Math.ceil(e.pw!)} 秒ぶん）。` : ' 電池の e⁻ を流し込むと 2 倍速になる。') : '');
 }
 
 /** 復習のとき：装置に結びつけず、指定した反応を何も見ずに再現させる */

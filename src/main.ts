@@ -2,7 +2,7 @@ import { CHAPTERS, TOTAL_GOALS } from './content/goals';
 import { HUB_CENTER, LAND, ZONES, hubRect, resourceAt, zoneAt } from './content/map';
 import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
-import { BIG, at, autoDir, configure, currentGoal, flowStats, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { BIG, TOXIC, at, autoDir, configure, currentGoal, flowStats, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
 import { recipeById } from './content/recipes';
 import { about, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
@@ -48,7 +48,7 @@ function boot(data: HotData) {
   let clone: Clone | null = null;
   /** なぞり書きで、いま乗っている「横切るかもしれない」ベルト */
   let cross: [number, number] | null = null;
-  let lastWrong = 0;
+  let lastWrong = 0, lastToxic = -1e9;
   /** 地図に稼働率の札を出すか */
   let overlay = store.meta().overlay === true;
   const app = $('app');
@@ -447,7 +447,22 @@ function boot(data: HotData) {
         if (acc > STEP * 4) acc = 0;
       }
       for (const ev of world.events.splice(0)) {
-        if (ev === 'goal-done') { stamp('納品済'); toast('納品完了。研究点 +30。次の指令が出た。', 3500); sfx.goal(); refreshTools(true); }
+        if (ev === 'goal-done' || ev === 'chapter-done') {
+          // 操業評価：指令を終えた時点の納品の速さ
+          const gr = world.lastGrade;
+          world.lastGrade = undefined;
+          if (ev === 'goal-done') {
+            stamp(gr ? `評価 ${gr.g}` : '納品済');
+            toast(gr ? `納品完了。研究点 +30。操業評価 ${gr.g}（毎分 ${gr.rate.toFixed(1)} 個）${gr.bonus ? `で +${gr.bonus}` : '。毎分 6 個以上で B、15 個で A、30 個で S'}。` : '納品完了。研究点 +30。次の指令が出た。', 4500);
+            sfx.goal(); refreshTools(true);
+          }
+        }
+        if (ev.startsWith('toxic:') && now - lastToxic > 20000) {
+          lastToxic = now;
+          const s2 = ev.slice(6);
+          toast(`有毒な ${label(s2)} をそのまま捨てている。5 個ごとに研究点 −1。${TOXIC[s2]}。`, 6000);
+          sfx.bad();
+        }
         if (ev === 'hub-grow') { toast(`納品所が ${world.hubSize}×${world.hubSize} に広がった。重なった設備は撤去され、求められる数も増える。`, 6000); selected = null; }
         if (ev === 'goal-done' || ev === 'chapter-done' || ev === 'all-done') void submitScore(world);
         if (ev === 'chapter-done') { stamp('修了'); toast(`章を終えた。${CHAPTERS[world.chapter].name} へ進む。`, 5000); sfx.goal(); refreshTools(true); }

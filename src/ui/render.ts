@@ -397,6 +397,20 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   const DASH = { solid: [0.04, 0.21], liquid: [0.18, 0.32], gas: [0.03, 0.22], none: [0.1, 0.4] };
   const st = (b: (typeof belts)[number]) => b.e.st ?? 'none';
   const edge = lw(0.045) * 2;
+  // 厚み：ベルトと配管を地面から浮かせる。まず地面に落ちる影、次に手前の側面を描き、そのあと上面を描く
+  const lift = z * 0.1;
+  ctx.lineCap = 'round';
+  ctx.save();
+  ctx.translate(lift * 0.7, lift * 1.7);
+  ctx.strokeStyle = punk ? `rgba(0,0,0,${light ? 0.2 : 0.42})` : P.shadow;
+  for (const b of belts) { ctx.lineWidth = z * WIDTH[st(b)] + edge; trace(b); ctx.stroke(); }
+  ctx.restore();
+  ctx.save();
+  ctx.translate(0, lift);
+  ctx.strokeStyle = punk ? '#0b0d10' : P.ink;
+  for (const b of belts) { ctx.lineWidth = z * WIDTH[st(b)] + edge; trace(b); ctx.stroke(); }
+  for (const b of belts) { ctx.strokeStyle = mix(P.line[st(b)], punk ? '#0b0d10' : P.ink, punk ? 0.6 : 0.42); ctx.lineWidth = z * WIDTH[st(b)]; trace(b); ctx.stroke(); }
+  ctx.restore();
   if (punk) {
     // 工業：固体はゴムのベルトに鋼の側板、液体と気体は継ぎ手のある配管
     const PW = { solid: 0.62, liquid: 0.44, gas: 0.3, none: 0.5 };
@@ -489,6 +503,12 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     const pop = age < 0.24 ? 0.7 + 0.3 * (1 - Math.pow(1 - age / 0.24, 3)) + 0.1 * Math.sin((age / 0.24) * Math.PI) : 1;
     const sz = sizeOf(e);
     machine(ctx, P, sx(e.x + sz / 2), sy(e.y + sz / 2), z * pop * sz, z, e, t);
+    // 稼働中の装置は、蒸気や火花を出す
+    if (e.busy && z >= 20 && particles.length < 260 && Math.random() < dt * (e.kind === 'electrolyzer' || e.kind === 'battery' ? 5 : 3)) {
+      const r1 = Math.random(), r2 = Math.random();
+      if (e.kind === 'electrolyzer' || e.kind === 'battery') particles.push({ x: e.x + sz / 2 + (r1 - 0.5) * 0.9, y: e.y + sz / 2 + (r2 - 0.5) * 0.5, vx: (r2 - 0.5) * 1.6, vy: -0.6 - r1 * 0.9, age: 0, life: 0.28 + r1 * 0.2, color: 'spark', r: 0.05 });
+      else particles.push({ x: e.x + sz * 0.3 + r1 * sz * 0.4, y: e.y + 0.25, vx: 0.1 + r2 * 0.14, vy: -0.42 - r1 * 0.25, age: 0, life: 1.3 + r2 * 0.7, color: 'smoke', r: 0.1 + r1 * 0.07 });
+    }
   }
 
   // 闇の炉：稼働中の装置と納品所は、暗がりに光をこぼす
@@ -568,7 +588,16 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     p.y += p.vy * dt;
     const k = 1 - p.age / p.life;
     ctx.globalAlpha = k;
-    if (p.text) {
+    if (p.color === 'smoke') {
+      // 蒸気：上がりながら広がって薄れる
+      ctx.globalAlpha = k * (punk ? (light ? 0.5 : 0.3) : 0.32);
+      ctx.fillStyle = punk ? (light ? '#ffffff' : '#aeb7bf') : P.soft;
+      ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y), z * p.r * (2.6 - k * 1.6), 0, Math.PI * 2); ctx.fill();
+    } else if (p.color === 'spark') {
+      ctx.strokeStyle = punk && !light ? P.hi : P.red;
+      ctx.lineWidth = lw(0.035);
+      ctx.beginPath(); ctx.moveTo(sx(p.x), sy(p.y)); ctx.lineTo(sx(p.x - p.vx * 0.12), sy(p.y - p.vy * 0.12)); ctx.stroke();
+    } else if (p.text) {
       ctx.fillStyle = p.color;
       ctx.font = `600 ${z * 0.4}px ${FONT_HAND}`;
       ctx.fillText(p.text, sx(p.x), sy(p.y));
@@ -673,7 +702,10 @@ function ambient(ctx: CanvasRenderingContext2D, P: Palette, cw: number, ch: numb
 
 function token(ctx: CanvasRenderingContext2D, P: Palette, x: number, y: number, z: number, s: string) {
   const d = z * 0.78;
-  ctx.drawImage(sprite(s), x - d / 2, y - d / 2 - d * 0.035, d, d);
+  // 物質はベルトの上に乗っている：下に影を落とし、少し持ち上げて描く
+  ctx.fillStyle = P.skin === 'punk' ? 'rgba(0,0,0,0.38)' : 'rgba(20,30,50,0.2)';
+  ctx.beginPath(); ctx.ellipse(x + d * 0.05, y + d * 0.36, d * 0.3, d * 0.1, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.drawImage(sprite(s), x - d / 2, y - d / 2 - d * 0.09, d, d);
   if (z >= 52) {
     const su = sub(s), tx = label(s);
     ctx.font = `600 ${z * 0.13}px ${su.formula && !su.mask ? FONT_MONO : FONT_HAND}`;
@@ -715,9 +747,13 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
     }
   } else {
   // 台：紙に貼った札。影はずらしたベタ
+  // 厚み：地面の影 → 機種の色の側面 → 上面
+  const th = (u / sizeOf(e)) * 0.13;
   ctx.fillStyle = P.shadow;
-  rr(ctx, cx - u * 0.42 + u * 0.05, cy - u * 0.42 + u * 0.06, u * 0.84, u * 0.84, u * 0.12);
+  rr(ctx, cx - u * 0.42 + th * 0.8, cy - u * 0.42 + th * 1.9, u * 0.84, u * 0.84, u * 0.12);
   ctx.fill();
+  rr(ctx, cx - u * 0.42, cy - u * 0.42 + th, u * 0.84, u * 0.84, u * 0.12);
+  inked(mix(info.color, P.ink, 0.25));
   rr(ctx, cx - u * 0.42, cy - u * 0.42, u * 0.84, u * 0.84, u * 0.12);
   inked(P.plate);
   }
@@ -773,6 +809,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
   else if (e.outOrder) e.outOrder.forEach((s2, i) => { const p = outPort(e, i); port(p.d, sub(s2).color, label(s2), p.x + 0.5 - mx, p.y + 0.5 - my, s2); });
   else if (unset) { const p = slotPort(e, 0); port(p.d, P.plate, undefined, p.x + 0.5 - mx, p.y + 0.5 - my); }
   if (e.kind === 'electrolyzer' && e.big) poleMarks(ctx, P, e, cx, cy, pu, line);
+  if ((e.pw || 0) > 0) powerMark(ctx, P, cx, cy, u, t);
 
   // 赤ペンの印：設定が要る「？」、詰まっている「！」
   const jam = (e.stuck || 0) > 2.5 || !!e.bad;
@@ -859,8 +896,18 @@ function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: 
   };
 
   // 影と筐体
-  ctx.fillStyle = P.shadow;
-  chamfer(ctx, cx - a + u * 0.06, cy - a + u * 0.09, a * 2, a * 2, c); ctx.fill();
+  // 厚み：地面に落ちる影と、筐体の手前の側面
+  const th = pu * 0.15;
+  ctx.fillStyle = `rgba(0,0,0,${light ? 0.26 : 0.5})`;
+  chamfer(ctx, cx - a + th * 0.9, cy - a + th * 2.1, a * 2, a * 2, c); ctx.fill();
+  chamfer(ctx, cx - a, cy - a + th, a * 2, a * 2, c);
+  ctx.fillStyle = mix(info.color, '#0b0d10', light ? 0.55 : 0.72); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = line; ctx.stroke();
+  // 側面のリブ
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = line * 0.6;
+  ctx.beginPath();
+  for (let k = 1; k < 4 * sz; k++) { const rx = cx - a + c + ((a * 2 - c * 2) * k) / (4 * sz); ctx.moveTo(rx, cy + a + line * 0.5); ctx.lineTo(rx, cy + a + th - line * 0.5); }
+  ctx.stroke();
   chamfer(ctx, cx - a, cy - a, a * 2, a * 2, c);
   ctx.fillStyle = mix(info.color, '#0b0d10', light ? 0.1 : 0.42); ctx.fill();
   ctx.strokeStyle = INK; ctx.lineWidth = line; ctx.stroke();
@@ -906,6 +953,7 @@ function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: 
   }
   for (const m of marks) m();
   if (e.kind === 'electrolyzer' && e.big) poleMarks(ctx, P, e, cx, cy, pu, line);
+  if ((e.pw || 0) > 0) powerMark(ctx, P, cx, cy, u, t);
   // 状態ランプ：緑＝稼働、橙＝待機、赤の点滅＝設定待ち・詰まり
   const lamp = needs || jam ? (Math.sin(t * 10) > 0 ? P.red : '#3a1410') : busy ? '#58e06a' : e.recipe || e.test || e.sub || e.kind === 'extractor' ? '#ffb020' : '#3b4048';
   ctx.beginPath(); ctx.arc(cx + a - u * 0.14, cy - a + u * 0.07, u * 0.045, 0, Math.PI * 2);
@@ -1064,8 +1112,13 @@ function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, 
   const punk = P.skin === 'punk', light = P.name === 'light';
   ctx.lineJoin = 'round';
   ctx.fillStyle = P.shadow;
-  if (punk) chamfer(ctx, px + m + z * 0.08, py + m + z * 0.11, s - 2 * m, s - 2 * m, z * 0.3); else rr(ctx, px + m + z * 0.07, py + m + z * 0.09, s - 2 * m, s - 2 * m, z * 0.12);
+  if (punk) chamfer(ctx, px + m + z * 0.14, py + m + z * 0.34, s - 2 * m, s - 2 * m, z * 0.3); else rr(ctx, px + m + z * 0.12, py + m + z * 0.3, s - 2 * m, s - 2 * m, z * 0.12);
   ctx.fill();
+  // 厚み：納品所はほかの装置より背が高い
+  ctx.fillStyle = punk ? '#14181d' : mix(P.hi, P.ink, 0.45);
+  ctx.strokeStyle = punk ? '#000' : P.ink; ctx.lineWidth = line;
+  if (punk) chamfer(ctx, px + m, py + m + z * 0.2, s - 2 * m, s - 2 * m, z * 0.3); else rr(ctx, px + m, py + m + z * 0.2, s - 2 * m, s - 2 * m, z * 0.12);
+  ctx.fill(); ctx.stroke();
   let ink = P.ink;
   if (punk) {
     // 危険表示の縞で縁どった搬入口
@@ -1142,6 +1195,21 @@ function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, 
 }
 
 /** 角を落とした四角 */
+/** 電池の電力で加速しているしるし：中央に稲妻 */
+function powerMark(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, t: number) {
+  const r = u * 0.13, k = 0.75 + 0.25 * Math.sin(t * 14);
+  ctx.save();
+  ctx.translate(cx, cy - u * 0.36);
+  ctx.beginPath(); ctx.arc(0, 0, r * 1.25, 0, Math.PI * 2);
+  ctx.fillStyle = '#0b0d10'; ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(r * 0.25, -r); ctx.lineTo(-r * 0.55, r * 0.15); ctx.lineTo(-r * 0.05, r * 0.15); ctx.lineTo(-r * 0.25, r); ctx.lineTo(r * 0.55, -r * 0.2); ctx.lineTo(r * 0.05, -r * 0.2);
+  ctx.closePath();
+  ctx.globalAlpha = k;
+  ctx.fillStyle = P.hi; ctx.fill();
+  ctx.restore();
+}
+
 /** 電解槽：左半分が陰極（−）、右半分が陽極（＋） */
 function poleMarks(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy: number, pu: number, line: number) {
   const f = e.dir as number, l = (f + 3) % 4, r = (f + 1) % 4;

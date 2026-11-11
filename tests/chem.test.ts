@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
-import { fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
+import { TOXIC, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
@@ -640,6 +640,54 @@ describe('工場の動作', () => {
     configure(old, rec('brine-electrolysis'), ['H2', 'NaOH', 'Cl2'], ['c', 'c', 'a']);
     expect(old.outOrder).toEqual(['H2', 'Cl2', 'NaOH']);
     expect(old.outSlot).toBeUndefined();
+  });
+
+  it('電池の e⁻ で電解槽が加速し、有毒な気体を捨てると研究点を失い、指令に操業評価がつく', () => {
+    // 電力
+    const run2 = (boost: boolean) => {
+      const w = newWorld();
+      place(w, 'electrolyzer', 10, 10, 0);
+      const c = at(w, 10, 10)!;
+      configure(c, rec('water-electrolysis'), ['H2', 'O2'], ['c', 'a']);
+      place(w, 'vent', 11, 9, 0); place(w, 'vent', 11, 12, 0);
+      place(w, 'belt', 9, 10, 0);
+      for (let i = 0; i < 20 * 60; i++) { c.inBuf = { H2O: 8 }; if (boost && i % 60 === 0) at(w, 9, 10)!.item = { s: 'e', p: 1, m: 0 }; step(w, 1 / 60); }
+      return c.n!;
+    };
+    const slow = run2(false), fast = run2(true);
+    expect(fast).toBeGreaterThan(slow * 1.6);
+    // 排出：塩素を 10 個捨てると 2 点失う。水素や酸素は失わない
+    const w = newWorld();
+    w.points = 10;
+    place(w, 'vent', 20, 20, 0);
+    place(w, 'belt', 19, 20, 0);
+    for (let i = 0; i < 10; i++) { at(w, 19, 20)!.item = { s: 'Cl2', p: 1, m: 0 }; run(w, 0.1); }
+    expect(w.emitted.Cl2).toBe(10);
+    expect(w.points).toBe(8);
+    expect(w.events.some((e) => e === 'toxic:Cl2')).toBe(true);
+    for (let i = 0; i < 10; i++) { at(w, 19, 20)!.item = { s: 'O2', p: 1, m: 0 }; run(w, 0.1); }
+    expect(w.points).toBe(8);
+    expect(w.emitted.O2).toBeUndefined();
+    // 有毒な気体には、処理の反応が用意されている
+    for (const g of ['Cl2', 'SO2', 'NO2', 'H2S', 'HCl', 'NH3', 'CO']) {
+      expect(TOXIC[g], g).toBeTruthy();
+      expect(RECIPES.some((r) => r.machine === 'reactor' && r.inputs.some(([s]) => s === g) && r.outputs.every(([s]) => !TOXIC[s])), `${g} の処理`).toBe(true);
+    }
+    // 操業評価：速く納めると S、ゆっくりだと C
+    const grade = (gap: number) => {
+      const g = newWorld();
+      place(g, 'belt', hx - 1, hy, 0);
+      for (let i = 0; i < 10; i++) { at(g, hx - 1, hy)!.item = { s: 'N2', p: 1, m: 0 }; run(g, gap); }
+      return g.lastGrade;
+    };
+    expect(grade(0.5)!.g).toBe('S');
+    expect(grade(0.5)!.bonus).toBe(30);
+    expect(grade(15)!.g).toBe('C');
+    const g2 = newWorld();
+    place(g2, 'belt', hx - 1, hy, 0);
+    for (let i = 0; i < 10; i++) { at(g2, hx - 1, hy)!.item = { s: 'N2', p: 1, m: 0 }; run(g2, 0.5); }
+    expect(g2.grades['0:0']).toBe('S');
+    expect(deserialize(serialize(g2))!.grades['0:0']).toBe('S');
   });
 
   it('1 マスだった頃の装置は、そのまま 3 つの出口で動く', () => {

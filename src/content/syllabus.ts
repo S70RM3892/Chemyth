@@ -55,7 +55,7 @@ export const SYLLABUS: Unit[] = [
   { id: 'b32', subject: '化学基礎', section: B3, title: '化学反応式', points: '化学反応式の係数、反応の量的関係、過不足のある反応',
     questions: ['化学反応式と量', '工業と量'], recipes: ['haber-bosch', 'ostwald-1', 'ostwald-3', 'blast-furnace', 'copper-matte', 'lab-no'] },
   { id: 'b33', subject: '化学基礎', section: B3, title: '酸・塩基と中和', points: '酸・塩基の定義と強弱、電離度、pH、中和と塩、中和滴定と指示薬、塩の水溶液の性質',
-    questions: ['中和', '中和滴定', 'pH'], knowledge: ['指示薬', '酸と塩基'], sets: ['T'], recipes: ['neutralize-acetate', 'slaking', 'phenoxide'] },
+    questions: ['中和', '中和滴定', 'pH'], knowledge: ['指示薬', '酸と塩基'], sets: ['T'], recipes: ['neutralize-acetate', 'slaking', 'phenoxide', 'scrub-hcl'] },
   { id: 'b34', subject: '化学基礎', section: B3, title: '酸化と還元', points: '酸化数、酸化剤と還元剤、金属のイオン化傾向、ダニエル電池、金属の製錬',
     questions: ['酸化還元'], sets: ['S'], recipes: ['酸化と還元', '金属の製錬', 'daniell', 'cl-br', 'thermite'], knowledge: ['酸化と還元', 'イオンの色'] },
   { id: 'b35', subject: '化学基礎', section: B3, title: '化学が拓く世界', points: '洗剤・食品保存・水の浄化・金属の利用など、化学基礎で学んだことの利用',

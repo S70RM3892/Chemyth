@@ -133,6 +133,7 @@ export const SUBSTANCES: Substance[] = [
   F('CaF2', 'フッ化カルシウム（蛍石）', 'solid'), F('HF', 'フッ化水素', 'gas'), F('H2SiF6', 'ヘキサフルオロケイ酸', 'liquid'),
   F('HClO', '次亜塩素酸', 'liquid'), F('CaCl(ClO)', 'さらし粉', 'solid'),
   F('KBr', '臭化カリウム', 'solid'), F('KI', 'ヨウ化カリウム', 'solid'), F('KOH', '水酸化カリウム', 'solid'), F('CuCl2', '塩化銅(II)', 'solid'),
+  F('NaClO', '次亜塩素酸ナトリウム', 'solid'), F('Na2S', '硫化ナトリウム', 'solid'), F('CaSO3', '亜硫酸カルシウム', 'solid'), F('(NH4)2SO4', '硫酸アンモニウム', 'solid'),
   F('KMnO4', '過マンガン酸カリウム', 'solid'), F('MnSO4', '硫酸マンガン(II)', 'solid'), F('K2SO4', '硫酸カリウム', 'solid'), F('(COOH)2', 'シュウ酸', 'solid'),
   F('Sn', 'スズ', 'solid'), F('SnCl4', '塩化スズ(IV)', 'liquid'), F('Na2S2O3', 'チオ硫酸ナトリウム', 'solid'), F('NaI', 'ヨウ化ナトリウム', 'solid'), F('Na2S4O6', 'テトラチオン酸ナトリウム', 'solid'), F('ZnCl2', '塩化亜鉛', 'solid'), F('Br2', '臭素', 'liquid'), F('F2', 'フッ素', 'gas'), F('O3', 'オゾン', 'gas'),
   F('NaAl(OH)4', 'テトラヒドロキシドアルミン酸ナトリウム', 'solid'), F('Na2Zn(OH)4', 'テトラヒドロキシド亜鉛(II)酸ナトリウム', 'solid'),
