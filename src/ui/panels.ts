@@ -9,9 +9,10 @@ import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
 import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
-import { RESEARCH, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, SIGNALS, signalOn, doResearch, has, researchBlock, tierNeed, LINES, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { TANK_CAP, RESEARCH, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, SIGNALS, signalOn, doResearch, has, researchBlock, tierNeed, LINES, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { researchById } from '../content/research';
 import { appearance, lookOf } from '../content/looks';
+import { AGENTS, ION_LABEL, ION_ORDER, MIXES, agentById, refusal, settleable, type Agent } from '../content/ions';
 import { chip, equation, openConfig, type SheetActions } from './config';
 import { h } from './dom';
 import { sfx } from './sound';
@@ -301,6 +302,9 @@ export function showSampler(c: PanelCtx, e: Ent, extra: HTMLElement) {
         h('b', {}, set.name), h('span', { class: 'muted' }, `　${set.about}`));
       return b;
     })),
+    h('h3', {}, '金属イオンの混合溶液（沈殿槽で系統分離する）'),
+    h('div', { class: 'menu' }, ...MIXES.map((m, i) => h('button', { class: 'ghost' + (e.sub === m.id ? ' picked' : ''), type: 'button', id: `mix-${i}`, onclick: () => pick(m.id) },
+      h('b', {}, m.name), h('span', { class: 'muted' }, `　${m.ions.map((k) => ION_LABEL[k]).join('・')}`)))),
     h('h3', {}, '実験室の試薬'),
     h('div', { class: 'chips' }, ...REAGENTS.map((r) => { const b = chip(r, e.sub === r ? 'on' : ''); b.id = `reagent-${r}`; b.title = sub(r).name; b.onclick = () => pick(r); return b; })),
     h('p', { class: 'muted' }, '試薬棚から出したものを、そのまま納品所へ運んでも指令には数えない。反応させてできたものは数える。'),
@@ -330,6 +334,73 @@ export function showAnalyzer(c: PanelCtx, e: Ent, extra: HTMLElement) {
       h('div', { class: 'menu' }, ...TESTS.filter((t) => t.group === g).map((t) =>
         h('button', { class: 'ghost' + (e.test === t.id ? ' picked' : ''), type: 'button', id: `test-${t.id}`, onclick: () => { e.test = t.id; sfx.ok(); showAnalyzer(c, e, extra); } }, t.name))),
     ]),
+    extra);
+}
+
+// ---------------- 沈殿槽（金属イオンの系統分離）----------------
+
+export function showSettler(c: PanelCtx, e: Ent, extra: HTMLElement) {
+  const { w } = c, again = () => showSettler(c, e, extra);
+  const a = agentById(e.test);
+  const waiting = [...(e.buf ?? []), ...(e.buf2 ?? [])];
+  const why = e.bad ? (a && settleable(e.bad) ? refusal(e.bad, a) : null) ?? `${label(e.bad)} は受け取れない。沈殿槽に入れられるのは、金属イオンの混合溶液と、まじりの沈殿だけだ。` : '';
+  const state = !a ? '試薬が決まっていない。下から選べ。' : e.bad ? why : e.busy ? `${label(e.item!.s)} に ${a.name} を加えている。` : waiting.length ? `出口が詰まっている（${waiting.map((x) => label(x)).join('、')}）。ろ液は正面、沈殿は右手から出る。` : '溶液を待っている。';
+  const choose = (ag: Agent) => {
+    if (w.agents.includes(ag.id)) { e.test = ag.id; e.bad = undefined; sfx.ok(); again(); return; }
+    askAgent(c, e, ag, extra);
+  };
+  c.show(h('header', {}, h('h2', {}, '沈殿槽'), closeBtn(c)),
+    a ? h('p', { class: 'eq' }, `試薬：${a.name}` + (a.group ? `　（第 ${a.group} 属を沈殿させる）` : '')) : null,
+    h('p', { class: 'status', id: 'settler-status' }, state),
+    a ? h('p', { class: 'note' }, a.note) : null,
+    a ? h('div', { class: 'chips' }, ...ION_ORDER.filter((k) => a.ppt[k]).map((k) => { const b = chip(a.ppt[k]!); b.disabled = true; b.append(h('span', { class: 'muted' }, `${ION_LABEL[k]} → ${appearance(a.ppt[k]!)}`)); return b; })) : null,
+    h('h3', {}, '加える試薬'),
+    h('p', { class: 'muted' }, '1 台に 1 つ。初めて使う試薬は、何が沈殿するかを答えてから使える。試薬を正しい順に並べれば、イオンは 1 種類ずつ取り出せる。'),
+    h('div', { class: 'menu' }, ...AGENTS.map((ag) => h('button', { class: 'ghost' + (e.test === ag.id ? ' picked on' : ''), type: 'button', id: `agent-${ag.id}`, onclick: () => choose(ag) },
+      h('b', {}, ag.name), h('span', { class: 'muted' }, `　${ag.group ? `第 ${ag.group} 属` : ag.dissolve && !Object.keys(ag.ppt).length ? '溶かし分け' : ag.dissolve ? '溶かし分けにも使う' : '確認'}${w.agents.includes(ag.id) ? '' : '　（まだ使ったことがない）'}`)))),
+    h('p', { class: 'muted' }, 'ろ液は正面（左）の出口、沈殿は右手（手前）の出口から出る。沈殿槽を一列に並べると、ろ液がまっすぐ次の槽へ流れ、沈殿が横へ出ていく。'),
+    extra);
+}
+
+function askAgent(c: PanelCtx, e: Ent, ag: Agent, extra: HTMLElement, fails = 0, picked = new Set<string>(), msg = '') {
+  const { w } = c;
+  const redo = (m: string, f = fails) => askAgent(c, e, ag, extra, f, picked, m);
+  const submit = () => {
+    const ok = picked.size === ag.quiz.answer.length && ag.quiz.answer.every((x) => picked.has(x));
+    if (!ok) {
+      w.mistakes.push({ machine: 'analysis', recipe: `sep:${ag.id}`, part: 'quiz', t: Date.now() });
+      sfx.bad();
+      redo(fails >= 1 ? '違う。下の解説を読んでから、もう一度選べ。' : '違う。多すぎるか、足りない。沈殿する理由を 1 つずつ考えろ。', fails + 1);
+      return;
+    }
+    w.agents.push(ag.id);
+    w.points += fails === 0 ? 12 : 6;
+    e.test = ag.id; e.bad = undefined;
+    sfx.ok();
+    c.toast(`正解。${ag.name} が使えるようになった。研究点 +${fails === 0 ? 12 : 6}。`, 3200);
+    showSettler(c, e, extra);
+  };
+  c.show(h('header', {}, h('h2', {}, ag.name), h('button', { class: 'ghost', type: 'button', id: 'agent-back', onclick: () => showSettler(c, e, extra) }, '戻る')),
+    h('p', { class: 'qtext' }, ag.quiz.text),
+    h('div', { class: 'chips' }, ...ag.quiz.pool.map((x, i) => h('button', { class: 'chip plain' + (picked.has(x) ? ' on' : ''), type: 'button', id: `agent-opt-${i}`, onclick: () => { if (picked.has(x)) picked.delete(x); else picked.add(x); sfx.tap(); redo(''); } }, x))),
+    msg ? h('p', { class: 'feedback', id: 'agent-msg' }, msg) : null,
+    fails >= 2 ? h('p', { class: 'note' }, ag.note) : null,
+    h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'agent-ok', onclick: submit }, '答える')));
+}
+
+// ---------------- 貯蔵タンク ----------------
+
+export function showTank(c: PanelCtx, e: Ent, extra: HTMLElement) {
+  const again = () => showTank(c, e, extra);
+  const n = (e.cnt || 0) + (e.rcn || 0), held = e.test === 'hold';
+  c.show(h('header', {}, h('h2', {}, '貯蔵タンク'), closeBtn(c)),
+    n && e.sub ? h('p', { class: 'eq' }, tokenIcon(e.sub, 26), ` ${sub(e.sub).name}　${n} / ${TANK_CAP} 個`) : h('p', { class: 'eq' }, `空（${TANK_CAP} 個まで入る）`),
+    h('p', { class: 'status', id: 'tank-status' }, e.bad && n ? `${label(e.bad)} が来ているが、中身が ${label(e.sub!)} なので受け取れない。空にするか、別のタンクへ送れ。` : n >= TANK_CAP ? '満杯。これ以上は受け取れない。' : held ? '出口を閉じている。ためるだけで、出さない。' : n ? '正面の 2 つの口から出している。' : '最初に入ってきた物質が、このタンクの中身になる。'),
+    h('div', { class: 'row' },
+      h('button', { class: 'ghost' + (!held ? ' picked on' : ''), type: 'button', id: 'tank-open', onclick: () => { e.test = undefined; sfx.tap(); again(); } }, '出口を開く'),
+      h('button', { class: 'ghost' + (held ? ' picked on' : ''), type: 'button', id: 'tank-hold', onclick: () => { e.test = 'hold'; sfx.tap(); again(); } }, '出口を閉じる（ためるだけ）')),
+    n ? h('div', { class: 'row' }, h('button', { class: 'ghost warn', type: 'button', id: 'tank-empty', onclick: () => { e.cnt = 0; e.rcn = 0; e.sub = undefined; e.bad = undefined; sfx.erase(); again(); } }, '中身を捨てて空にする')) : null,
+    h('p', { class: 'muted' }, '上流が速く下流が遅いときの緩衝や、あとで使う中間生成物の置き場に使う。「弁」と「検知器」を組み合わせれば、決めたときだけ流すこともできる。'),
     extra);
 }
 

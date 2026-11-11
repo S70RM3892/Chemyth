@@ -239,6 +239,14 @@ CHAPTERS.push(
     { s: 'HNO3', rate: 15, n: 20, hint: 'オストワルト法は 3 段。最後の段で NO が戻ってくるので、捨てずに 2 段目へ回せば原料が減らせる。' },
     { s: 'C2H5OH', rate: 15, n: 20, hint: 'ナフサの分解でできるエチレンは 3 個に 1 個。原油の採取から逆算しろ。', zone: 'oil' },
   ] },
+  { name: '第22章 金属イオンの系統分離', goals: [
+    { s: 'AgCl', also: ['CuS'], n: 5, hint: '試薬棚の「混合溶液 ア」（Ag⁺・Cu²⁺）を、「沈殿槽」2 台で分けろ。試薬の順を誤ると混ざる。' },
+    { s: 'CuS', also: ['Fe(OH)3', 'ZnS'], n: 5, hint: '混合溶液 イ（Cu²⁺・Fe³⁺・Zn²⁺）。硫化水素は 2 回使う。酸性と塩基性で、沈殿するイオンが違う。' },
+    { s: 'AgCl', also: ['PbCrO4'], n: 5, hint: '混合溶液 ウ（Ag⁺・Pb²⁺）。希塩酸では両方が沈殿する。まじった沈殿を、次の沈殿槽で溶かし分けろ。' },
+    { s: 'Fe(OH)3', also: ['CaCO3'], n: 5, hint: '混合溶液 エ（Fe³⁺・Al³⁺・Ca²⁺）。Fe(OH)₃ と Al(OH)₃ がまじる。両性の方だけを溶かす試薬は何か。' },
+    { s: 'AgCl', also: ['CuS', 'Fe(OH)3', 'ZnS', 'CaCO3', 'ions:Na'], n: 5, hint: '混合溶液 オ。6 種を第 1 属から順に取り出せ。最後に残るろ液（Na⁺、炎色反応は黄色）も納めろ。' },
+    { s: 'AgCl', also: ['PbCrO4', 'CuS', 'Fe(OH)3', 'ZnS', 'CaCO3'], n: 4, hint: '混合溶液 カ。8 種すべて。まじりの沈殿が 2 回出る。溶かし分けの槽を枝に付けろ。' },
+  ] },
 );
 
 export const GOALS: Goal[] = CHAPTERS.flatMap((c) => c.goals);

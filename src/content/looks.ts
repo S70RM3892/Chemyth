@@ -54,6 +54,17 @@ export const LOOKS: Record<string, Look> = {
   CaCO3: L('#f2f1ec', '白色'),
   CaSO4: L('#f2f1ec', '白色'),
   H2SiO3: L('#eef0f0', '白色（ゲル状）'),
+  // ---- 系統分離の沈殿 ----
+  PbCl2: L('#f4f4f1', '白色'),
+  Ag2S: L('#222226', '黒色'),
+  CuS: L('#222226', '黒色'),
+  'Fe(OH)3': L('#9a4a26', '赤褐色'),
+  'Al(OH)3': L('#f2f2ee', '白色'),
+  'Pb(OH)2': L('#f2f2ee', '白色'),
+  Ag2O: L('#6a4a32', '褐色'),
+  'Cu(OH)2': L('#a9cfe2', '青白色'),
+  PbCrO4: L('#e8c62a', '黄色'),
+  Ag2CrO4: L('#8f3a26', '赤褐色'),
   // ---- 水溶液に色がつくもの（金属イオン・酸化剤）----
   CuSO4: L('#3b82d6', '青色', { aq: true }),
   CuCl2: L('#3aa0c8', '青色', { aq: true }),

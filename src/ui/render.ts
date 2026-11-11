@@ -2,12 +2,13 @@ import { ZONES, hubRect, isSea, resourceAt, zoneAt, zoneSpots, type Zone } from 
 import { ELEMENTS } from '../content/elements';
 import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { FLOOR_DY, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { FLOOR_DY, TANK_CAP, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 import { districtsOf, type District } from '../engine/districts';
 import { equationOf, hexOf, reactionLookById } from '../content/looks';
 import { recipeById } from '../content/recipes';
+import { agentById, ionsOf, settle } from '../content/ions';
 
 export interface Camera { x: number; y: number; z: number }
 export interface View { /** 見ている階（0 が 1 階） */ floor?: number; tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string; /** 出口（out）と入口の場所。d は物が流れる向き */ ports?: { x: number; y: number; d: number; out: boolean }[] }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null }
@@ -648,7 +649,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       const info = MACHINES[e.kind as keyof typeof MACHINES], px0 = sx(e.x) + z * 0.08, py0 = sy(e.y) + z * 0.08, ps = sz * z - z * 0.16;
       ctx.fillStyle = info.color; ctx.fillRect(px0, py0, ps, ps);
       ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = Math.max(1, z * 0.07); ctx.strokeRect(px0, py0, ps, ps);
-      const needs = (isMachine(e.kind) && !e.recipe) || (e.kind === 'analyzer' && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
+      const needs = (isMachine(e.kind) && !e.recipe) || ((e.kind === 'analyzer' || e.kind === 'settler') && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
       const jam = (e.stuck || 0) > 2.5 || !!e.bad;
       if (needs || jam || e.busy) { ctx.fillStyle = needs || jam ? P.red : '#58e06a'; ctx.fillRect(px0 + ps * 0.3, py0 + ps * 0.3, ps * 0.4, ps * 0.4); }
       continue;
@@ -1169,6 +1170,8 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
   else if (e.kind === 'analyzer') { port(portDir(e.dir, 0), '#7fc06a', '陽'); port(portDir(e.dir, 1), P.red, '陰'); }
   else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), P.plate);
   else if (e.kind === 'station') { if (e.role === 'out') for (const i of [0, 1]) { const p = slotPort(e, i); port(p.d, P.plate, undefined, p.x + 0.5 - mx, p.y + 0.5 - my); } }
+  else if (e.kind === 'tank') for (const i of [0, 1]) { const p = slotPort(e, i); port(p.d, P.plate, undefined, p.x + 0.5 - mx, p.y + 0.5 - my); }
+  else if (e.kind === 'settler') { if (e.test) for (const [i, tx] of [[0, 'ろ液'], [2, '沈殿']] as [number, string][]) { const p = slotPort(e, i); port(p.d, i ? '#c9b27a' : '#9fd0e6', tx, p.x + 0.5 - mx, p.y + 0.5 - my); } }
   else if (e.outOrder) e.outOrder.forEach((s2, i) => { const p = outPort(e, i); port(p.d, sub(s2).color, label(s2), p.x + 0.5 - mx, p.y + 0.5 - my, s2); });
   else if (unset) { const p = slotPort(e, 0); port(p.d, P.plate, undefined, p.x + 0.5 - mx, p.y + 0.5 - my); }
   if (e.kind === 'electrolyzer' && e.big) poleMarks(ctx, P, e, cx, cy, pu, line);
@@ -1176,7 +1179,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
 
   // 赤ペンの印：設定が要る「？」、詰まっている「！」
   const jam = (e.stuck || 0) > 2.5 || !!e.bad || (e.kind === 'station' && e.role === 'out' && (e.buf?.length ?? 0) >= STATION_CAP);
-  const needs = unset || (e.kind === 'analyzer' && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
+  const needs = unset || ((e.kind === 'analyzer' || e.kind === 'settler') && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
   if (needs || jam) {
     if (needs) {
       ctx.strokeStyle = P.red; ctx.lineWidth = line * 1.2;
@@ -1203,7 +1206,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
 function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, z: number, e: Ent, t: number) {
   const info = MACHINES[e.kind as keyof typeof MACHINES], light = P.name === 'light';
   const unset = isMachine(e.kind) && !e.recipe;
-  const needs = unset || (e.kind === 'analyzer' && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
+  const needs = unset || ((e.kind === 'analyzer' || e.kind === 'settler') && !e.test) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
   const jam = (e.stuck || 0) > 2.5 || !!e.bad || (e.kind === 'station' && e.role === 'out' && (e.buf?.length ?? 0) >= STATION_CAP), busy = !!e.busy;
   const line = Math.max(1.5, u * 0.05), a = u * 0.46, c = u * 0.14, INK = '#0b0d10';
   ctx.lineJoin = 'miter';
@@ -1255,6 +1258,8 @@ function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: 
     else if (e.kind === 'analyzer') { port(portDir(e.dir, 0), '#7fc06a', '陽'); port(portDir(e.dir, 1), P.red, '陰'); }
     else if (e.kind === 'splitter') for (let i = 0; i < 3; i++) port(portDir(e.dir, i), '#eef0ea');
     else if (e.kind === 'station') { if (e.role === 'out') for (const i of [0, 1]) { const p = slotPort(e, i); port(p.d, '#eef0ea', undefined, p.x + 0.5 - mx, p.y + 0.5 - my); } }
+    else if (e.kind === 'tank') for (const i of [0, 1]) { const p = slotPort(e, i); port(p.d, '#eef0ea', undefined, p.x + 0.5 - mx, p.y + 0.5 - my); }
+    else if (e.kind === 'settler') { if (e.test) for (const [i, tx] of [[0, 'ろ液'], [2, '沈殿']] as [number, string][]) { const p = slotPort(e, i); port(p.d, i ? '#c9b27a' : '#9fd0e6', tx, p.x + 0.5 - mx, p.y + 0.5 - my); } }
     else if (e.outOrder) e.outOrder.forEach((s2, i) => { const p = outPort(e, i); port(p.d, sub(s2).color, label(s2), p.x + 0.5 - mx, p.y + 0.5 - my, s2); });
     else if (unset) { const p = slotPort(e, 0); port(p.d, '#eef0ea', undefined, p.x + 0.5 - mx, p.y + 0.5 - my); }
   };
@@ -1473,6 +1478,65 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
       if (out) { ctx.moveTo(cx - u * 0.08, cy + u * 0.27); ctx.lineTo(cx + u * 0.08, cy + u * 0.27); ctx.lineTo(cx, cy + u * 0.36); }
       else { ctx.moveTo(cx - u * 0.08, cy - u * 0.27); ctx.lineTo(cx + u * 0.08, cy - u * 0.27); ctx.lineTo(cx, cy - u * 0.36); }
       ctx.closePath(); ctx.fill();
+      break;
+    }
+    case 'settler': {
+      // 沈殿槽：ビーカーに溶液。試薬を加えると沈殿が底にたまり、ろ過して分ける
+      const a = agentById(e.test), wd = u * 0.5, hh = u * 0.5, x0 = cx - wd / 2, y0 = cy - hh * 0.42;
+      const cur = e.item?.s, keys = cur ? ionsOf(cur) : null;
+      // 溶液の色：色のつくイオン（Cu²⁺ 青、Fe³⁺ 黄褐）が入っていれば、その色
+      const liq = keys?.includes('Cu') ? '#5a9be0' : keys?.includes('Fe') ? '#d9b45a' : cur ? hexOf(cur) : '#cfe2ee';
+      const res = a && cur && busy ? settle(cur, a) : null, down = res?.solid && res.solid !== cur ? hexOf(res.solid) : cur && !keys ? hexOf(cur) : null;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0, y0 + hh - u * 0.06); ctx.quadraticCurveTo(x0, y0 + hh, x0 + u * 0.06, y0 + hh); ctx.lineTo(x0 + wd - u * 0.06, y0 + hh); ctx.quadraticCurveTo(x0 + wd, y0 + hh, x0 + wd, y0 + hh - u * 0.06); ctx.lineTo(x0 + wd, y0);
+      ctx.fillStyle = P.plate; ctx.fill();
+      ctx.save(); ctx.clip();
+      if (cur) {
+        ctx.fillStyle = liq; ctx.fillRect(x0, y0 + hh * 0.22, wd, hh);
+        if (down) {
+          const k = busy ? Math.min(1, e.prog || 0) : 1, h0 = hh * (0.08 + 0.24 * k);
+          ctx.fillStyle = down; ctx.fillRect(x0, y0 + hh - h0, wd, h0);
+          if (busy) for (let i = 0; i < 7; i++) { const f = cyc(t, i + e.x, 0.8); ctx.fillRect(x0 + wd * ((i * 0.29 + 0.1) % 1), y0 + hh * 0.25 + (hh * 0.7 - h0) * f, u * 0.03, u * 0.03); }
+        }
+      }
+      ctx.restore();
+      ctx.strokeStyle = P.ink; ctx.lineWidth = line; ctx.stroke();
+      // 試薬を垂らすピペット
+      ctx.lineWidth = line * 0.8; ctx.beginPath(); ctx.moveTo(cx + wd * 0.2, y0 - u * 0.2); ctx.lineTo(cx + wd * 0.2, y0 - u * 0.04); ctx.stroke();
+      if (busy) { const f = cyc(t, e.y, 1.6); disc(cx + wd * 0.2, y0 - u * 0.04 + hh * 0.3 * f, u * 0.022); ctx.fillStyle = P.hi; ctx.fill(); ctx.stroke(); }
+      if (a && u >= 84) {
+        const tx = a.name.replace(/（.*）/, '').slice(0, 8);
+        ctx.font = `700 ${Math.max(8, u * 0.07)}px ${FONT_UI}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        const tw = ctx.measureText(tx).width + u * 0.05, th = Math.max(11, u * 0.095);
+        rr(ctx, cx - tw / 2, y0 + hh + u * 0.035, tw, th, th * 0.3); ctx.fillStyle = P.plate; ctx.fill(); ctx.lineWidth = Math.max(0.8, line * 0.45); ctx.stroke();
+        ctx.fillStyle = P.ink; ctx.fillText(tx, cx, y0 + hh + u * 0.035 + th / 2 + 0.5); ctx.textBaseline = 'alphabetic';
+      }
+      break;
+    }
+    case 'tank': {
+      // 貯蔵タンク：中身の色で、たまっている量だけ満ちる
+      const n = (e.cnt || 0) + (e.rcn || 0), k = Math.min(1, n / TANK_CAP), wd = u * 0.46, hh = u * 0.6, x0 = cx - wd / 2, y0 = cy - hh / 2;
+      rr(ctx, x0, y0, wd, hh, u * 0.12); ctx.fillStyle = P.plate; ctx.fill();
+      if (n && e.sub) {
+        ctx.save(); rr(ctx, x0, y0, wd, hh, u * 0.12); ctx.clip();
+        const gas = sub(e.sub).state === 'gas', col = hexOf(e.sub);
+        if (gas) { ctx.globalAlpha = 0.25 + 0.7 * k; ctx.fillStyle = col; ctx.fillRect(x0, y0, wd, hh); ctx.globalAlpha = 1; }
+        else { const top = y0 + hh * (1 - k) + Math.sin(t * 2 + e.x) * u * 0.006; ctx.fillStyle = col; ctx.fillRect(x0, top, wd, hh); ctx.strokeStyle = P.ink; ctx.lineWidth = Math.max(0.8, line * 0.45); ctx.beginPath(); ctx.moveTo(x0, top); ctx.lineTo(x0 + wd, top); ctx.stroke(); }
+        ctx.restore();
+      }
+      rr(ctx, x0, y0, wd, hh, u * 0.12); ctx.strokeStyle = P.ink; ctx.lineWidth = line; ctx.stroke();
+      // 目盛り
+      ctx.lineWidth = Math.max(0.8, line * 0.4);
+      for (let i = 1; i < 4; i++) { ctx.beginPath(); ctx.moveTo(x0 + wd * 0.7, y0 + (hh * i) / 4); ctx.lineTo(x0 + wd, y0 + (hh * i) / 4); ctx.stroke(); }
+      if (n && e.sub) {
+        ctx.drawImage(sprite(e.sub), cx - u * 0.13, cy - u * 0.15, u * 0.26, u * 0.26);
+        if (u >= 70) {
+          ctx.font = `700 ${Math.max(9, u * 0.085)}px ${FONT_MONO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          const tx = String(n), tw = ctx.measureText(tx).width + u * 0.05, th = Math.max(11, u * 0.1);
+          rr(ctx, cx - tw / 2, cy + u * 0.13, tw, th, th * 0.3); ctx.fillStyle = P.plate; ctx.fill(); ctx.stroke();
+          ctx.fillStyle = P.ink; ctx.fillText(tx, cx, cy + u * 0.13 + th / 2 + 0.5); ctx.textBaseline = 'alphabetic';
+        }
+      }
+      if (e.test === 'hold') { ctx.strokeStyle = P.red; ctx.lineWidth = line * 1.2; ctx.beginPath(); ctx.moveTo(x0 - u * 0.04, y0 + hh + u * 0.05); ctx.lineTo(x0 + wd + u * 0.04, y0 + hh + u * 0.05); ctx.stroke(); }
       break;
     }
     case 'sensor': {

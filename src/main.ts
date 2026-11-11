@@ -8,7 +8,7 @@ import { recipeById } from './content/recipes';
 import { about, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
 import { attachInput, Z_MIN, type InputHandlers } from './ui/input';
-import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showSignal, showStation, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
+import { reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showSettler, showSignal, showStation, showTank, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
 import { showDrills, showEssays, showStructure } from './ui/practice';
 import { draw, type Camera } from './ui/render';
 import { lanePaths, type LaneTile } from './engine/lanes';
@@ -26,12 +26,12 @@ type Tool = 'pan' | 'erase' | 'area' | 'rail' | Placeable;
 /** 範囲コピーした設計図。左上からのずれで持つ */
 type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir } | { t: 'rails'; snap: [string, number | undefined][] };
 const SESSION_LIMIT_MS = 25 * 60 * 1000;
-const BUILD: Placeable[] = ['belt', 'bridge', 'tunnel', 'lift', 'splitter', 'analyzer', 'sensor', 'gate', 'station', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'sampler', 'depot', 'vent'];
+const BUILD: Placeable[] = ['belt', 'bridge', 'tunnel', 'lift', 'splitter', 'analyzer', 'sensor', 'gate', 'station', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'settler', 'sampler', 'depot', 'tank', 'vent'];
 /** 道具の分類。道具が多いので、棚を分けて出す */
 const GROUPS: { id: string; name: string; tools: Tool[] }[] = [
   { id: 'move', name: '運ぶ', tools: ['pan', 'belt', 'bridge', 'tunnel', 'lift', 'splitter', 'analyzer', 'sensor', 'gate', 'station', 'rail'] },
-  { id: 'make', name: '作る', tools: ['extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector'] },
-  { id: 'store', name: '出し入れ', tools: ['sampler', 'depot', 'vent'] },
+  { id: 'make', name: '作る', tools: ['extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'settler'] },
+  { id: 'store', name: '出し入れ', tools: ['sampler', 'depot', 'tank', 'vent'] },
   { id: 'edit', name: '編集', tools: ['area', 'erase'] },
 ];
 const SPEEDS = [1, 2, 4, 0];
@@ -250,6 +250,8 @@ function boot(data: HotData) {
     if (kind === 'analyzer') { showAnalyzer(panel(), e, extra()); return; }
     if (kind === 'station') { showStation(panel(), e, extra()); return; }
     if (kind === 'sensor' || kind === 'gate') { showSignal(panel(), e, extra()); return; }
+    if (kind === 'settler') { showSettler(panel(), e, extra()); return; }
+    if (kind === 'tank') { showTank(panel(), e, extra()); return; }
     showSheet(h('header', {}, h('h2', {}, MACHINES[kind].name), closeBtn()),
       kind === 'extractor' ? h('p', { class: 'eq' }, `ここで採れるもの：${sub(resourceAt(e.x, e.y)).name}`) : null,
       kind === 'lift' ? h('div', { class: 'row' }, h('span', { class: 'status' }, `${floorOf(e.y) + 1} 階の${e.role === 'in' ? '入口。ここに入った物は、もう一方の階の同じ場所から出る。' : '出口。もう一方の階の入口から入った物が、ここから正面へ出る。'}`),
@@ -415,7 +417,7 @@ function boot(data: HotData) {
   const placeAct = () => {
     if (!selected || !modal.hidden || !slot || floorOf(selected.y) !== floor) { act.hidden = true; return; }
     const hub = selected.kind === 'hub';
-    actOpen.textContent = isMachine(selected.kind) || selected.kind === 'station' || selected.kind === 'sensor' || selected.kind === 'gate' ? '設定' : selected.kind === 'depot' || selected.kind === 'sampler' ? '選ぶ' : selected.kind === 'analyzer' ? '検査' : '説明';
+    actOpen.textContent = isMachine(selected.kind) || selected.kind === 'station' || selected.kind === 'sensor' || selected.kind === 'gate' || selected.kind === 'settler' ? '設定' : selected.kind === 'tank' ? '中身' : selected.kind === 'depot' || selected.kind === 'sampler' ? '選ぶ' : selected.kind === 'analyzer' ? '検査' : '説明';
     actTurn.hidden = actErase.hidden = hub;
     actCopy.hidden = !copyable(selected);
     act.hidden = false;
@@ -459,7 +461,7 @@ function boot(data: HotData) {
       placed.sub = clone.sub;
       return;
     }
-    if (isMachine(tool) || tool === 'depot' || tool === 'sampler' || tool === 'analyzer' || tool === 'station' || tool === 'sensor' || tool === 'gate') inspect(placed);
+    if (isMachine(tool) || tool === 'depot' || tool === 'sampler' || tool === 'analyzer' || tool === 'station' || tool === 'sensor' || tool === 'gate' || tool === 'settler') inspect(placed);
   };
   /** 置く前の見本：占めるマス、置けるかどうか、向き、出口（外向きの矢印）と入口（内向きの矢印） */
   const toolGhost = () => {
@@ -469,8 +471,9 @@ function boot(data: HotData) {
     const ok = footprint(px, py, big ? 2 : 1).every(([fx, fy]) => !at(world, fx, fy));
     const fake: Ent = { kind: tool, x: px, y: py, dir, big: big || undefined };
     const ports: { x: number; y: number; d: number; out: boolean }[] = [];
-    const outs = isMachine(tool) ? slotCount(fake) : tool === 'splitter' ? 3 : tool === 'analyzer' ? 2 : tool === 'station' ? 2 : tool === 'vent' || tool === 'bridge' ? 0 : 1;
-    for (let i = 0; i < outs; i++) { const q = slotPort(fake, i); ports.push({ x: q.x, y: q.y, d: q.d, out: true }); }
+    const outs = isMachine(tool) ? slotCount(fake) : tool === 'splitter' ? 3 : tool === 'analyzer' ? 2 : tool === 'station' || tool === 'tank' ? 2 : tool === 'vent' || tool === 'bridge' ? 0 : 1;
+    // 沈殿槽の出口は、正面（左）のろ液と、右手（手前）の沈殿
+    for (const i of tool === 'settler' ? [0, 2] : Array.from({ length: outs }, (_, k) => k)) { const q = slotPort(fake, i); ports.push({ x: q.x, y: q.y, d: q.d, out: true }); }
     for (const q of inDoors(fake)) if (tool !== 'station') ports.push({ x: q.x, y: q.y, d: q.d, out: false });
     return [{ x: px, y: py, size: big ? 2 : 1, ok, dir, glyph: MACHINES[tool].glyph, ports }];
   };

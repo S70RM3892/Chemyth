@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { AGENTS, ION_ORDER, MIXES, MUD_CL, MUD_OH, SLUDGE, agentById, ionsId, ionsOf, reachableFrom, refusal, settle } from '../src/content/ions';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
 import { RAIL_BOOST, addRail, layRail, railRoute, removeRail, stationRoutes, STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, goalRate, reactionsPerMin, stationTargets, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
-import { sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
+import { hasSub, sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
 import { HUB_TILES, MAP_H, MAP_W, ZONES, hubTiles, isSea, resourceAt, zoneAt, zoneSpots, type Zone } from '../src/content/map';
 import { GOALS, CHAPTERS, chapterOf } from '../src/content/goals';
@@ -67,6 +68,8 @@ describe('内容データ', () => {
   });
   it('すべての指令の物質は、天然の産出物から順にたどって作れる', () => {
     const have = new Set<string>(['air', ...Object.values(ZONES).map((z) => z.resource), ...REAGENTS, ...SETS.flatMap((x) => x.members)]);
+    // 試薬棚の混合溶液から、沈殿槽で作れるもの
+    for (const m of MIXES) for (const x of reachableFrom(m.id)) have.add(x);
     for (let grew = true; grew;) {
       grew = false;
       for (const r of RECIPES) {
@@ -81,7 +84,8 @@ describe('内容データ', () => {
   it('章と指令の対応', () => {
     expect(GOALS.length).toBe(CHAPTERS.reduce((a, c) => a + c.goals.length, 0));
     expect(chapterOf(0)?.name).toContain('第1章');
-    expect(chapterOf(GOALS.length - 1)?.name).toContain('第21章');
+    expect(chapterOf(GOALS.length - 1)?.name).toContain('第22章');
+    expect(CHAPTERS[MACHINES.settler.chapter!].name).toContain('系統分離');
     expect(CHAPTERS[13].name).toContain('総合演習');
     expect(CHAPTERS[13].goals.length).toBeGreaterThan(60);
     expect(chapterOf(GOALS.length)).toBeNull();
@@ -1429,5 +1433,148 @@ describe('反応の見せ方', () => {
       expect(count(p.left), r.id).toEqual(count(p.right));
     }
     expect(fly).toBeGreaterThan(RECIPES.length * 0.6);
+  });
+});
+
+describe('金属イオンの系統分離とタンク', () => {
+  const A = (id: string) => agentById(id)!;
+  const run = (w: ReturnType<typeof newWorld>, sec: number) => { for (let i = 0; i < sec * 60; i++) step(w, 1 / 60); };
+
+  it('混合溶液の id は順をそろえ、知らないイオンや重複は受けつけない', () => {
+    expect(ionsId(['Cu', 'Ag'])).toBe('ions:Ag.Cu');
+    expect(ionsOf('ions:Ag.Cu')).toEqual(['Ag', 'Cu']);
+    for (const bad of ['ions:', 'ions:Cu.Ag', 'ions:Ag.Ag', 'ions:Xx', 'Ag.Cu']) expect(ionsOf(bad), bad).toBeNull();
+    expect(hasSub('ions:Ag.Cu')).toBe(true);
+    expect(hasSub('ions:Cu.Ag')).toBe(false);
+    expect(sub('ions:Ag.Cu').name).toBe('Ag⁺・Cu²⁺ の溶液');
+    expect(sub('ions:Na').state).toBe('liquid');
+    // 試薬の沈殿は、どれも物質の一覧にある
+    for (const a of AGENTS) { for (const k of ION_ORDER) if (a.ppt[k]) expect(hasSub(a.ppt[k]!), a.ppt[k]).toBe(true); for (const x of a.quiz.answer) expect(a.quiz.pool).toContain(x); }
+    expect(new Set(AGENTS.map((a) => a.id)).size).toBe(AGENTS.length);
+  });
+
+  it('試薬の順が正しければ 1 種類ずつ沈殿し、誤るとまじる', () => {
+    // 第 1 属 → 第 2 属：Ag⁺ と Cu²⁺
+    expect(settle('ions:Ag.Cu', A('hcl'))).toEqual({ solid: 'AgCl', liquid: 'ions:Cu' });
+    expect(settle('ions:Cu', A('h2s-acid'))).toEqual({ solid: 'CuS', liquid: null });
+    // 先に硫化水素を通じると、Ag₂S と CuS がまじる
+    expect(settle('ions:Ag.Cu', A('h2s-acid'))).toEqual({ solid: SLUDGE, liquid: null });
+    // 硫化水素は、酸性では Zn²⁺ を沈殿させず、塩基性で沈殿させる
+    expect(settle('ions:Cu.Fe.Zn', A('h2s-acid'))).toEqual({ solid: 'CuS', liquid: 'ions:Fe.Zn' });
+    expect(settle('ions:Fe.Zn', A('nh3'))).toEqual({ solid: 'Fe(OH)3', liquid: 'ions:Zn' });
+    expect(settle('ions:Zn', A('h2s-base'))).toEqual({ solid: 'ZnS', liquid: null });
+    // アンモニア水（過剰）では、Ag⁺・Cu²⁺・Zn²⁺ は錯イオンになって溶けたまま
+    expect(settle('ions:Ag.Cu.Fe.Zn', A('nh3'))).toEqual({ solid: 'Fe(OH)3', liquid: 'ions:Ag.Cu.Zn' });
+    // 何も沈殿しなければ、そのまま通る
+    expect(settle('ions:Ca.Na', A('hcl'))).toEqual({ solid: null, liquid: 'ions:Ca.Na' });
+    expect(settle('ions:Ca.Na', A('co3'))).toEqual({ solid: 'CaCO3', liquid: 'ions:Na' });
+    // 重金属が残ったまま炭酸アンモニウムを使うと、混ざる
+    expect(settle('ions:Zn.Ca', A('co3')).solid).toBe(SLUDGE);
+  });
+
+  it('まじりの沈殿は、教科書の手順で溶かし分けられる', () => {
+    expect(settle('ions:Ag.Pb', A('hcl'))).toEqual({ solid: MUD_CL, liquid: null });
+    expect(settle(MUD_CL, A('hot'))).toEqual({ solid: 'AgCl', liquid: 'ions:Pb' });
+    expect(settle('ions:Pb', A('cro4'))).toEqual({ solid: 'PbCrO4', liquid: null });
+    expect(settle('ions:Fe.Al.Ca', A('nh3'))).toEqual({ solid: MUD_OH, liquid: 'ions:Ca' });
+    expect(settle(MUD_OH, A('naoh'))).toEqual({ solid: 'Fe(OH)3', liquid: 'ions:Al' });
+    // 効かない試薬では、沈殿はそのまま残る
+    expect(settle(MUD_CL, A('naoh'))).toEqual({ solid: MUD_CL, liquid: null });
+    // 両性：過剰の NaOH では Al³⁺・Zn²⁺・Pb²⁺ は溶けたまま
+    expect(settle('ions:Pb.Fe.Al.Zn', A('naoh'))).toEqual({ solid: 'Fe(OH)3', liquid: 'ions:Pb.Al.Zn' });
+    // 言い切れない組み合わせは使わせない
+    expect(refusal('ions:Fe.Ca', A('naoh'))).toMatch(/Ca²⁺/);
+    expect(refusal('ions:Pb', A('cro4'))).toBeNull();
+    expect(refusal('ions:Pb.Cu', A('cro4'))).toMatch(/Cu²⁺/);
+  });
+
+  it('系統分離の指令は、どれも混合溶液から達成できる', () => {
+    const ch = CHAPTERS.find((c) => c.name.includes('系統分離'))!;
+    expect(ch.goals.length).toBe(MIXES.length);
+    ch.goals.forEach((g, i) => {
+      const can = reachableFrom(MIXES[i].id);
+      for (const x of [g.s, ...(g.also ?? [])]) expect(can.has(x), `${MIXES[i].name}: ${x}`).toBe(true);
+    });
+    // 8 種すべてからは、6 つの属の沈殿がすべて取り出せる
+    const all = reachableFrom(MIXES[MIXES.length - 1].id);
+    for (const x of ['AgCl', 'PbCrO4', 'CuS', 'Fe(OH)3', 'ZnS', 'CaCO3', 'ions:Na', 'ions:Al']) expect(all.has(x), x).toBe(true);
+  });
+
+  it('沈殿槽を並べた工場で、最初の指令（Ag⁺ と Cu²⁺）を通す', () => {
+    const w = newWorld();
+    const ci = CHAPTERS.findIndex((c) => c.name.includes('系統分離'));
+    setChapter(w, ci);
+    expect(toolUnlocked(w, MACHINES.settler)).toBe(true);
+    const [hx0, hy0] = HUB_TILES[0];
+    // 試薬棚 → 沈殿槽①（希塩酸）→ 沈殿槽②（硫化水素・酸性）。沈殿は右手（下）へ出るので、ベルトで納品所へ
+    place(w, 'sampler', hx0 - 12, hy0, 0); at(w, hx0 - 12, hy0)!.sub = 'ions:Ag.Cu';
+    place(w, 'settler', hx0 - 11, hy0, 0); place(w, 'settler', hx0 - 8, hy0, 0);
+    place(w, 'belt', hx0 - 9, hy0, 0);
+    const s1 = at(w, hx0 - 11, hy0)!, s2 = at(w, hx0 - 8, hy0)!;
+    // 試薬を決めるまでは受け取らない
+    run(w, 3);
+    expect(s1.item).toBeNull();
+    expect(s1.bad).toBe('ions:Ag.Cu');
+    s1.test = 'hcl'; s2.test = 'h2s-acid';
+    // 沈殿の出口（右手・手前＝下向き）から、下の行を通って納品所へ
+    for (const s of [s1, s2]) { const p = slotPort(s, 2); expect(p.d).toBe(1); for (let y = p.ty; y <= hy0 + 3; y++) place(w, 'belt', p.tx, y, 1); }
+    for (let x = slotPort(s1, 2).tx; x < hx0; x++) if (!at(w, x, hy0 + 4)) place(w, 'belt', x, hy0 + 4, 0);
+    place(w, 'belt', hx0, hy0 + 4, 3); for (let y = hy0 + 3; y > hy0 + 1; y--) place(w, 'belt', hx0, y, 3);
+    run(w, 200);
+    expect(w.delivered.AgCl).toBeGreaterThan(0);
+    expect(w.delivered.CuS).toBeGreaterThan(0);
+    expect(w.made.AgCl).toBeGreaterThanOrEqual(w.delivered.AgCl);
+    expect(w.progress[ci]).toBeGreaterThanOrEqual(1);       // 1 つ目の指令を達成
+    // 受け取れないもの：ただの物質
+    const w2 = newWorld();
+    place(w2, 'settler', 10, 10, 0); at(w2, 10, 10)!.test = 'hcl';
+    place(w2, 'belt', 9, 10, 0); at(w2, 9, 10)!.item = { s: 'N2', p: 0, m: 0 };
+    run(w2, 2);
+    expect(at(w2, 10, 10)!.bad).toBe('N2');
+    // 保存して読み直しても、試薬と途中の物が残る
+    const r = deserialize(serialize(w))!;
+    expect(at(r, hx0 - 11, hy0)!.test).toBe('hcl');
+  });
+
+  it('貯蔵タンク：1 種類だけをため、出口を閉じればためるだけになり、開けば出てくる', () => {
+    const w = newWorld();
+    place(w, 'belt', 8, 10, 0); place(w, 'belt', 9, 10, 0);
+    place(w, 'tank', 10, 10, 0);
+    place(w, 'belt', 12, 10, 0); place(w, 'vent', 13, 10, 0);
+    const tank = at(w, 10, 10)!;
+    tank.test = 'hold';
+    const feed = (s: string) => { const b = at(w, 8, 10)!; if (!b.item) b.item = { s, p: 0, m: w.tick }; };
+    for (let i = 0; i < 60 * 20; i++) { feed('NH3'); step(w, 1 / 60); }
+    expect(tank.sub).toBe('NH3');
+    expect(tank.cnt!).toBeGreaterThan(20);
+    expect(w.vented.NH3 || 0).toBe(0);                       // 閉じているあいだは出ない
+    // 別の物質は受け取らない
+    const before = tank.cnt!;
+    for (let i = 0; i < 60 * 3; i++) { feed('O2'); step(w, 1 / 60); }
+    expect(tank.bad).toBe('O2');
+    expect(tank.cnt).toBeGreaterThanOrEqual(before);
+    expect(tank.sub).toBe('NH3');
+    at(w, 8, 10)!.item = null; at(w, 9, 10)!.item = null;
+    // 開くと出てくる。数は合う
+    tank.test = undefined;
+    const held = tank.cnt!;
+    run(w, 120);
+    expect(tank.cnt).toBe(0);
+    expect(w.vented.NH3).toBe(held);
+    // 上限まで
+    const w2 = newWorld();
+    place(w2, 'tank', 10, 10, 0); const t2 = at(w2, 10, 10)!; t2.test = 'hold';
+    place(w2, 'belt', 9, 10, 0);
+    for (let i = 0; i < 60 * 200; i++) { const b = at(w2, 9, 10)!; if (!b.item) b.item = { s: 'H2O', p: 1, m: 0 }; step(w2, 1 / 60); }
+    expect(t2.cnt).toBe(200);
+    // 試薬棚から来たぶんは、タンクを通しても指令に数えない
+    const w3 = newWorld();
+    const [hx0, hy0] = HUB_TILES[0];
+    place(w3, 'sampler', hx0 - 6, hy0, 0); at(w3, hx0 - 6, hy0)!.sub = 'N2';
+    place(w3, 'tank', hx0 - 5, hy0, 0);
+    for (let x = hx0 - 3; x < hx0; x++) place(w3, 'belt', x, hy0, 0);
+    run(w3, 30);
+    expect(w3.stock.N2).toBeGreaterThan(0);
+    expect(w3.delivered.N2 || 0).toBe(0);
   });
 });

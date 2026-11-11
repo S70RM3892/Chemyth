@@ -1,4 +1,5 @@
 import { normalizeFormula, parseFormula, pretty } from '../chem/formula';
+import { ION_LABEL, ionsOf } from './ions';
 import { element } from './elements';
 
 export type State = 'gas' | 'liquid' | 'solid';
@@ -51,6 +52,13 @@ export const SUBSTANCES: Substance[] = [
   M('bauxite', 'ボーキサイト', 'solid', ['Al', 'O', 'Fe']),
   M('starch', 'デンプン', 'solid', ['C', 'H', 'O']),
   M('fat', '油脂', 'liquid', ['C', 'H', 'O', 'O']),
+  // ---- 系統分離で生じる、まじりの沈殿 ----
+  M('mud-cl', 'AgCl と PbCl₂ のまじった沈殿', 'solid', ['Ag', 'Pb', 'Cl']),
+  M('mud-oh', 'Fe(OH)₃ と Al(OH)₃ のまじった沈殿', 'solid', ['Fe', 'Al', 'O']),
+  M('sludge', '混ざった沈殿（分け直せない）', 'solid', ['S', 'O', 'C']),
+  F('PbCl2', '塩化鉛(II)', 'solid'), F('Ag2S', '硫化銀', 'solid'), F('CuS', '硫化銅(II)', 'solid'),
+  F('Fe(OH)3', '水酸化鉄(III)', 'solid'), F('Al(OH)3', '水酸化アルミニウム', 'solid'), F('Pb(OH)2', '水酸化鉛(II)', 'solid'),
+  F('Ag2O', '酸化銀', 'solid'), F('Cu(OH)2', '水酸化銅(II)', 'solid'), F('PbCrO4', 'クロム酸鉛(II)', 'solid'), F('Ag2CrO4', 'クロム酸銀', 'solid'),
   // ---- 名前で扱う生成物 ----
   M('tar', 'コールタール', 'liquid', ['C', 'H'], true),
   M('naphtha', 'ナフサ', 'liquid', ['C', 'H', 'H'], true),
@@ -320,12 +328,20 @@ const byId = new Map(SUBSTANCES.map((s) => [s.id, s]));
 const byText = new Map<string, Substance>();
 for (const s of SUBSTANCES) for (const t of [s.formula, ...(s.aliases ?? [])]) if (t) byText.set(t, s);
 
+/** 金属イオンの混合溶液（'ions:Ag.Cu' など）。組み合わせが多いので、一覧には持たず、求められたときに作る */
+function ionMix(id: string): Substance | null {
+  const keys = ionsOf(id);
+  if (!keys) return null;
+  const s: Substance = { id, name: `${keys.map((k) => ION_LABEL[k]).join('・')} の溶液`, state: 'liquid', rep: keys, color: tint(keys) };
+  byId.set(id, s);
+  return s;
+}
 export function sub(id: string): Substance {
-  const s = byId.get(id);
+  const s = byId.get(id) ?? ionMix(id);
   if (!s) throw new Error(`未定義の物質: ${id}`);
   return s;
 }
-export const hasSub = (id: string) => byId.has(id);
+export const hasSub = (id: string) => byId.has(id) || ionMix(id) !== null;
 
 /** 入力された化学式から物質を引く。知らない式なら null */
 export function subByFormula(raw: string): Substance | null {
