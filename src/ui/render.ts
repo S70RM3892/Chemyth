@@ -2,6 +2,7 @@ import { ZONES, hubRect, isSea, resourceAt, zoneAt, zoneSpots, type Zone } from 
 import { ELEMENTS } from '../content/elements';
 import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
+import { heightOf, TOP_H } from './three';
 import { at, FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { BRASS, BRASS_DARK, mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
@@ -16,7 +17,10 @@ import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/s
 export interface Camera { x: number; y: number; z: number }
 /** WebGL の合成段に渡す層。glow：光っている所（黒地に加算で描く）、mask：効果をかける所（赤＝熱のゆらぎ、青＝水面）。どちらも画面と同じ座標で描ける */
 export interface FxLayers { glow: CanvasRenderingContext2D; mask: CanvasRenderingContext2D }
-export interface View { /** 光と効果の層。あれば、絵と一緒に描く */ fx?: FxLayers | null; /** 見ている階（0 が 1 階） */ floor?: number; tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string; /** 出口（out）と入口の場所。d は物が流れる向き */ ports?: { x: number; y: number; d: number; out: boolean }[] }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null }
+/** 立体表示のときに渡すもの。top：2×2 の装置と納品所、その上を通るもの（線路・札）を描く層（地面と同じ座標、透明地）。
+ *  screen：画面にじかに描く層（縁の道しるべ）。boxes：箱の一覧を、ここへ書き足す（1 個につき x, y, 大きさ, 高さ, r, g, b, 層） */
+export interface Three { top: CanvasRenderingContext2D; screen: CanvasRenderingContext2D; sw: number; sh: number; project(x: number, y: number, h?: number): [number, number]; boxes: number[]; /** 1 階から見た 2 階の設備（宙に浮く板として描く） */ slabs: number[] }
+export interface View { /** 立体表示 */ three?: Three | null; /** 光と効果の層。あれば、絵と一緒に描く */ fx?: FxLayers | null; /** 見ている階（0 が 1 階） */ floor?: number; tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string; /** 出口（out）と入口の場所。d は物が流れる向き */ ports?: { x: number; y: number; d: number; out: boolean }[] }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null }
 
 // 方眼ノートに描いた工場の図面。輪郭線と斜線で描き、ぼかしや発光は使わない
 let FONT_HAND = '"Klee One", sans-serif';
@@ -324,6 +328,14 @@ function districts(w: World): District[] {
 export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: World, cam: Camera, t: number, dt: number, view: View) {
   const P = palette();
   const z = cam.z;
+  // 立体表示では、描き先を層ごとに替える。base：地面、T：装置の天面とその上を通るもの
+  const base = ctx, three = view.three ?? null, T = three ? three.top : null;
+  const use = (c: CanvasRenderingContext2D) => {
+    if (c === ctx) return;
+    c.textAlign = ctx.textAlign; c.textBaseline = ctx.textBaseline; c.font = ctx.font; c.lineCap = ctx.lineCap; c.lineJoin = ctx.lineJoin;
+    ctx = c;
+  };
+  const rgb01 = (hex: string): [number, number, number] => { const n = parseInt(hex.slice(1), 16); return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; };
   // 2 階の設備は y を FLOOR_DY だけずらして持っているので、描くときに引く。gy は地面（地形・資源地・1 階）の y
   const off = (view.floor || 0) * FLOOR_DY;
   const sx = (x: number) => (x - cam.x) * z + cw / 2;
@@ -468,25 +480,29 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   // ---- いまの指令で使う資源地が画面の外にあれば、縁に道しるべを出す ----
   const gz = currentGoal(w)?.zone;
   if (gz) {
-    const zn = ZONES[gz], tx = sx(zn.at[0]), ty = gy(zn.at[1]);
-    if (tx < 0 || tx > cw || ty < 150 || ty > ch - 170) {
-      const px = Math.min(cw - 80, Math.max(80, tx)), py = Math.min(ch - 190, Math.max(170, ty));
+    const zn = ZONES[gz];
+    // 立体表示では、地面の絵の縁は画面の縁ではないので、画面にじかに描く
+    const [tx, ty] = three ? three.project(zn.at[0], zn.at[1], 0) : [sx(zn.at[0]), gy(zn.at[1])];
+    const pc = three ? three.screen : ctx, pw = three ? three.sw : cw, ph = three ? three.sh : ch;
+    if (three) { pc.textAlign = 'center'; pc.textBaseline = 'middle'; }
+    if (tx < 0 || tx > pw || ty < 150 || ty > ph - 170) {
+      const px = Math.min(pw - 80, Math.max(80, tx)), py = Math.min(ph - 190, Math.max(170, ty));
       const ang = Math.atan2(ty - py, tx - px);
-      ctx.font = `700 14px ${FONT_SMALL}`;
-      const wd = ctx.measureText(zn.name).width + 22;
-      ctx.fillStyle = P.plate;
-      ctx.strokeStyle = P.ink;
-      ctx.lineWidth = 1.5;
-      rr(ctx, px - wd / 2, py - 14, wd, 28, 4);
-      ctx.fill(); ctx.stroke();
-      ctx.fillStyle = P.ink;
-      ctx.fillText(zn.name, px, py + 1);
-      ctx.fillStyle = P.red;
-      ctx.save();
-      ctx.translate(px + Math.cos(ang) * (wd / 2 + 10), py + Math.sin(ang) * 25);
-      ctx.rotate(ang);
-      ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(-5, -6); ctx.lineTo(-5, 6); ctx.closePath(); ctx.fill();
-      ctx.restore();
+      pc.font = `700 14px ${FONT_SMALL}`;
+      const wd = pc.measureText(zn.name).width + 22;
+      pc.fillStyle = P.plate;
+      pc.strokeStyle = P.ink;
+      pc.lineWidth = 1.5;
+      rr(pc, px - wd / 2, py - 14, wd, 28, 4);
+      pc.fill(); pc.stroke();
+      pc.fillStyle = P.ink;
+      pc.fillText(zn.name, px, py + 1);
+      pc.fillStyle = P.red;
+      pc.save();
+      pc.translate(px + Math.cos(ang) * (wd / 2 + 10), py + Math.sin(ang) * 25);
+      pc.rotate(ang);
+      pc.beginPath(); pc.moveTo(8, 0); pc.lineTo(-5, -6); pc.lineTo(-5, 6); pc.closePath(); pc.fill();
+      pc.restore();
     }
   }
 
@@ -737,6 +753,14 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     const age = t - born.get(e)!;
     const pop = age < 0.24 ? 0.7 + 0.3 * (1 - Math.pow(1 - age / 0.24, 3)) + 0.1 * Math.sin((age / 0.24) * Math.PI) : 1;
     const sz = sizeOf(e);
+    if (three) {
+      // 立体表示：2×2 の装置は天面の層へ描く。1 マスの設備は地面に描いたまま、その絵を少し持ち上げる
+      use(sz === 2 ? T! : base);
+      const c = rgb01(mix(MACHINES[e.kind as keyof typeof MACHINES]?.color ?? '#888888', light ? '#fbf7ea' : '#15181d', light ? 0.35 : 0.5));
+      // 箱は、絵の中の装置の本体（マスの 84%）に合わせる
+      const ins = sz * 0.08;
+      three.boxes.push(e.x + ins, e.y - off + ins, sz - ins * 2, heightOf(e) * Math.max(0.05, Math.min(1.1, (pop - 0.7) / 0.3)), c[0], c[1], c[2], sz === 2 ? 1 : 0);
+    }
     if (far) {
       // 引いた視野：機種の色の札と、状態を示す点だけ
       const info = MACHINES[e.kind as keyof typeof MACHINES], px0 = sx(e.x) + z * 0.08, py0 = sy(e.y) + z * 0.08, ps = sz * z - z * 0.16;
@@ -807,6 +831,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     }
   }
 
+  use(base);
   // 闇の炉：稼働中の装置と納品所は、暗がりに光をこぼす
   if ((punk || arcane) && !light && !G) {
     ctx.globalCompositeOperation = 'lighter';
@@ -832,13 +857,18 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       const ey = e.y - FLOOR_DY;
       if (e.x < x0 - 2 || e.x > x1 + 2 || ey < y0 - 2 || ey > y1 + 2) continue;
       const sz = sizeOf(e) * z, pad = z * 0.12;
+      if (three && e.kind !== 'belt') { const c = rgb01(MACHINES[e.kind as keyof typeof MACHINES]?.color ?? '#999999'), s2 = sizeOf(e); three.slabs.push(e.x + 0.1, ey + 0.1, s2 - 0.2, 0.16, c[0], c[1], c[2], 2); }
       ctx.fillRect(sx(e.x) + pad, gy(ey) + pad, sz - pad * 2, sz - pad * 2);
       ctx.strokeRect(sx(e.x) + pad, gy(ey) + pad, sz - pad * 2, sz - pad * 2);
     }
     ctx.setLineDash([]);
   }
   const hr = hubRect(w.hubSize);
-  if (!off) hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
+  if (!off) {
+    if (three) { use(T!); const c = rgb01(light ? '#8a8d93' : '#2a2023'); three.boxes.push(hr.x + 0.04, hr.y + 0.04, hr.s - 0.08, TOP_H, c[0], c[1], c[2], 1); }
+    hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
+    use(base);
+  }
   // 納品所の口は、赤く脈打つ光。熱で上の空気がゆらぐ
   if (G && !off) { const hx2 = sx(hr.x + hr.s / 2), hy2 = sy(hr.y + hr.s / 2); glow(hx2, hy2, hr.s * z * 0.95, '255,70,40', 0.4 + 0.1 * Math.sin(t * 2.3)); heat(hx2, hy2 - hr.s * z * 0.5, hr.s * z * 0.6, 0.5); }
   // 納品所のまわりの灯り：章を 1 つ終えるごとに 1 つともる
@@ -856,6 +886,8 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     }
   }
 
+  // 線路・列車・札は装置の上を通るので、立体表示では天面の層に描く
+  if (T) use(T);
   // ---- 貨物線：設備の上を越える高架の線路と列車。
   //      敷いた線路は、どの駅の列車も共有する網。つながっていない駅どうしは、自動の仮線路（横に進んでから縦に曲がる）で結ぶ ----
   if (!off) {
@@ -987,6 +1019,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.textBaseline = 'alphabetic';
   }
 
+  use(base);
   // ---- 敷いている途中の線路 ----
   if (view.rail && view.rail.length) {
     ctx.strokeStyle = P.hi; ctx.lineWidth = z * 0.16; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
@@ -1032,6 +1065,8 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.setLineDash([]);
   }
 
+  // （立体表示では、札は天面の層に描く。地面に描くと、手前の設備の箱に隠れたり、持ち上がったりする）
+  if (T) use(T);
   // ---- 反応式の札：選んだ装置の下に、その装置の反応式と条件を出す。うんと近づけば、見えている装置すべてに出す ----
   {
     const plate = (e: Ent) => {
@@ -1064,6 +1099,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   // ---- 選んだものは蛍光ペンで囲む ----
   if (view.selected && view.selected.kind !== 'hub') {
     const e = view.selected;
+    use(T && sizeOf(e) === 2 ? T : base);
     if (punk) {
       // 照準の角
       const cx0 = sx(e.x + sizeOf(e) / 2), cy0 = sy(e.y + sizeOf(e) / 2), r = z * (sizeOf(e) * 0.5 + 0.1 + 0.03 * Math.sin(t * 6)), L = z * 0.2;
@@ -1086,6 +1122,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   }
 
   // ---- 粒子 ----
+  if (T) use(T);
   ctx.textAlign = 'center';
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
@@ -1126,6 +1163,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   }
   ctx.globalAlpha = 1;
 
+  use(base);
   if (punk) ambient(ctx, P, cw, ch, t, dt, sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), z);
   if (arcane) {
     // 魔術：ゆっくり漂う青い光の粒と、四隅の暗がり

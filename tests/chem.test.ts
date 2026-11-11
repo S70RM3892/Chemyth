@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { TOP_H, camera3, heightOf, pickTile, planeSize } from '../src/ui/three';
 import { ORG_MIXES, WASHES, extract, extractReachable, extractRefusal, washById } from '../src/content/extract';
 import { AMINO, AMINO_MIXES, migrate, migrateReachable, poleAt } from '../src/content/phoresis';
 import { AGENTS, ION_ORDER, MIXES, MUD_CL, MUD_OH, SLUDGE, agentById, ionsId, ionsOf, reachableFrom, refusal, settle } from '../src/content/ions';
@@ -1867,5 +1868,66 @@ describe('達成の報酬', () => {
     // セーブの要約に、章ごとの進み具合が入る（タイトルの本棚に使う）
     const sum = summarize(serialize(w))!;
     expect(sum.progress[0]).toBe(CHAPTERS[0].goals.length);
+  });
+});
+
+describe('立体表示のカメラ', () => {
+  const cam = { x: 42.3, y: 27.6, z: 48 }, cw = 1180, ch = 820;
+  it('注視点は画面の真ん中に見え、そこでの 1 マスは cam.z ピクセル', () => {
+    const c = camera3(cam, cw, ch);
+    const [px, py] = c.project(cam.x, cam.y, 0);
+    expect(px).toBeCloseTo(cw / 2, 3); expect(py).toBeCloseTo(ch / 2, 3);
+    expect(c.project(cam.x + 1, cam.y, 0)[0] - px).toBeCloseTo(cam.z, 2);
+    // 傾いているので、南北は縦に縮んで見える
+    const dy = c.project(cam.x, cam.y + 1, 0)[1] - py;
+    expect(dy).toBeGreaterThan(cam.z * 0.75); expect(dy).toBeLessThan(cam.z * 0.95);
+  });
+  it('画面の点 → 地面の点 → 画面の点、で元に戻る（高さがあっても）', () => {
+    const c = camera3(cam, cw, ch);
+    for (const h of [0, TOP_H]) for (const [px, py] of [[0, 0], [cw, 0], [300, 500], [cw, ch], [17, 803]]) {
+      const [x, y] = c.unproject(px, py, h), [qx, qy] = c.project(x, y, h);
+      expect(qx).toBeCloseTo(px, 2); expect(qy).toBeCloseTo(py, 2);
+    }
+  });
+  it('遠く（北）ほど小さく見え、高い所は画面の上へずれる', () => {
+    const c = camera3(cam, cw, ch);
+    const near = c.project(cam.x + 1, cam.y + 5, 0)[0] - c.project(cam.x, cam.y + 5, 0)[0];
+    const far = c.project(cam.x + 1, cam.y - 5, 0)[0] - c.project(cam.x, cam.y - 5, 0)[0];
+    expect(near).toBeGreaterThan(far);
+    expect(c.project(cam.x, cam.y, TOP_H)[1]).toBeLessThan(c.project(cam.x, cam.y, 0)[1]);
+  });
+  it('見えている範囲は、画面の四隅（地面と天面）をすべて含み、絵の大きさは拡大率によらない', () => {
+    const c = camera3(cam, cw, ch);
+    for (const h of [0, TOP_H]) for (const [px, py] of [[0, 0], [cw, 0], [0, ch], [cw, ch]]) {
+      const [x, y] = c.unproject(px, py, h);
+      expect(x).toBeGreaterThanOrEqual(c.x0 - 1e-6); expect(x).toBeLessThanOrEqual(c.x1 + 1e-6);
+      expect(y).toBeGreaterThanOrEqual(c.y0 - 1e-6); expect(y).toBeLessThanOrEqual(c.y1 + 1e-6);
+    }
+    const [gw, gh] = planeSize(cw, ch);
+    for (const z of [9, 30, 110]) { const q = camera3({ ...cam, z }, cw, ch); expect((q.x1 - q.x0) * z).toBeLessThanOrEqual(gw); expect((q.y1 - q.y0) * z).toBeLessThanOrEqual(gh); }
+    // 平らな表示よりは広いが、2 倍までは要らない
+    expect(gw).toBeGreaterThan(cw); expect(gw * gh).toBeLessThan(cw * ch * 2);
+  });
+  it('箱の天面や南の側面に触れたら、その設備のマス。何もなければ地面のマス', () => {
+    const c = camera3(cam, cw, ch);
+    const big = { kind: 'reactor', big: true } as const, vent = { kind: 'vent' } as const;
+    const entAt = (x: number, y: number) => (x >= 40 && x <= 41 && y >= 26 && y <= 27 ? big : x === 45 && y === 27 ? vent : undefined);
+    const tap = (x: number, y: number, h: number) => pickTile(c, ...c.project(x, y, h), entAt);
+    expect(tap(40.5, 26.5, TOP_H)).toEqual([40, 26]);          // 天面の奥の左
+    expect(tap(41.5, 27.9, TOP_H * 0.5)[0]).toBe(41);          // 南の側面
+    expect(tap(41.5, 27.9, TOP_H * 0.5)[1]).toBe(27);
+    expect(tap(45.5, 27.5, heightOf(vent))).toEqual([45, 27]); // 低い設備の天面
+    expect(tap(43.5, 29.5, 0)).toEqual([43, 29]);              // 地面
+    // 箱の天面の奥の辺は、地面でいえば 1 マスほど北に見える。そこを触っても、北の地面ではなく箱を取る
+    const [px, py] = c.project(40.5, 26.1, TOP_H);
+    expect(Math.floor(c.unproject(px, py, 0)[1])).toBeLessThan(26);
+    expect(pickTile(c, px, py, entAt)).toEqual([40, 26]);
+  });
+  it('平らなもの（ベルト、立体交差、地下ベルトの口）は高さ 0、2×2 の装置と納品所は同じ高さ', () => {
+    for (const kind of ['belt', 'bridge', 'tunnel', 'part']) expect(heightOf({ kind } as never)).toBe(0);
+    expect(heightOf({ kind: 'hub' } as never)).toBe(TOP_H);
+    expect(heightOf({ kind: 'tank', big: true } as never)).toBe(TOP_H);
+    expect(heightOf({ kind: 'extractor' } as never)).toBeGreaterThan(0);
+    expect(heightOf({ kind: 'extractor' } as never)).toBeLessThan(TOP_H);
   });
 });

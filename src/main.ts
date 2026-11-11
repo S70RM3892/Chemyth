@@ -16,8 +16,9 @@ import { CASES, CASE_KIND, CASE_REWARD, limitStock, type Case, type CaseState } 
 import { appearance, equationOf } from './content/looks';
 import { isSep, sepSlots } from './content/sep';
 import { showMock } from './ui/mock';
-import { drawFireworks, launchFireworks } from './ui/fireworks';
+import { drawFireworks, fireworksActive, launchFireworks } from './ui/fireworks';
 import { POST_PRESETS, createPost, type Post } from './ui/gl';
+import { TOP_H, camera3, heightOf, pickTile, planeSize } from './ui/three';
 import { palette } from './ui/theme';
 import { FLAMES } from './content/looks';
 import { decodeBlueprint, encodeBlueprint, type Stamp } from './engine/blueprint';
@@ -120,16 +121,41 @@ function boot(data: HotData) {
   const glowCv = document.createElement('canvas'), maskCv = document.createElement('canvas');
   const glowCtx = glowCv.getContext('2d')!, maskCtx = maskCv.getContext('2d')!;
   const fxOn = () => !!post && gfxHigh && !post.lost();
+  // ---- 立体表示：地面の絵と、装置の天面の絵を別々に描き、WebGL で箱と影をつけて、傾いたカメラで見る ----
+  let three = store.meta().view3d === 'on';
+  const threeOn = () => three && fxOn();
+  /** 地面の層と天面の層（画面より広い範囲を描く。遠くは小さく見えるので、奥ほど広く要る）。大きさは gw × gh */
+  const gndCv = document.createElement('canvas'), topCv = document.createElement('canvas');
+  const gndCtx = gndCv.getContext('2d')!, topCtx = topCv.getContext('2d')!;
+  /** 画面にじかに描く光（花火） */
+  const glowSCv = document.createElement('canvas'), glowSCtx = glowSCv.getContext('2d')!;
+  let gw = 0, gh = 0, fxK = FX_SCALE;
+  const boxes: number[] = [], slabs: number[] = [];
+  let boxBuf = new Float32Array(8 * 256);
   const applyGfx = () => {
     if (gfxHigh && !post) { try { post = createPost(glCv); } catch { post = null; } if (!post) gfxHigh = false; }
     glCv.hidden = !fxOn();
+    // 立体表示では、WebGL の絵が下、#cv はその上の透明な層（縁の道しるべと花火）になる
+    if (threeOn()) { if (cv.previousElementSibling !== glCv) cv.before(glCv); } else if (glCv.previousElementSibling !== cv) cv.after(glCv);
+    app.classList.toggle('three', threeOn());
   };
   const resize = () => {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     cw = cv.clientWidth; ch = cv.clientHeight;
     cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    for (const c of [glowCv, maskCv]) { c.width = Math.max(8, Math.round(cw * FX_SCALE)); c.height = Math.max(8, Math.round(ch * FX_SCALE)); }
+    if (threeOn() && cw > 0 && ch > 0) {
+      // 層の絵は、画面より 5 割ほど広い。重くなりすぎないよう、細かさは 1.5 倍までにする
+      const dg = Math.min(dpr, 1.5);
+      [gw, gh] = planeSize(cw, ch);
+      for (const c of [gndCv, topCv]) { c.width = Math.round(gw * dg); c.height = Math.round(gh * dg); }
+      gndCtx.setTransform(dg, 0, 0, dg, 0, 0); topCtx.setTransform(dg, 0, 0, dg, 0, 0);
+      for (const c of [glowCv, maskCv]) { c.width = Math.max(8, Math.round(gw * FX_SCALE)); c.height = Math.max(8, Math.round(gh * FX_SCALE)); }
+      glowSCv.width = Math.max(8, Math.round(cw * FX_SCALE)); glowSCv.height = Math.max(8, Math.round(ch * FX_SCALE));
+    } else {
+      for (const c of [glowCv, maskCv]) { c.width = Math.max(8, Math.round(cw * FX_SCALE)); c.height = Math.max(8, Math.round(ch * FX_SCALE)); }
+    }
+    fxK = FX_SCALE;
     post?.resize(cv.width, cv.height);
   };
   new ResizeObserver(resize).observe(cv);
@@ -361,6 +387,13 @@ function boot(data: HotData) {
           store.setMeta({ gfx: gfxHigh ? 'high' : 'plain' }); sfx.tap(); showMenu();
           if (!gfxHigh && store.meta().gfx === 'high') toast('この端末では高画質を使えない。', 2600);
         }),
+        item('m-3d', threeOn() ? '立体表示：オン（傾いた視点・箱・影）' : '立体表示：オフ（真上からの平らな表示）', () => {
+          three = !threeOn(); slowFrames = 0;
+          if (three && !fxOn()) { gfxHigh = true; }
+          applyGfx(); resize();
+          if (three && !threeOn()) { three = false; toast('この端末では立体表示を使えない。', 2600); }
+          store.setMeta({ view3d: three ? 'on' : 'off', ...(three ? { gfx: 'high' as const } : {}) }); sfx.tap(); placeAct(); showMenu();
+        }),
         item('m-music', musicOn() ? '音楽：あり' : '音楽：なし', () => { setMusic(!musicOn()); store.setMeta({ music: musicOn() }); sfx.tap(); showMenu(); }),
         item('m-help', '遊び方', () => showHelp()),
         item('m-title', '保存してタイトルへ戻る', () => { modal.hidden = true; sheet.replaceChildren(); toTitle(); })),
@@ -465,9 +498,12 @@ function boot(data: HotData) {
     actCopy.hidden = !copyable(selected);
     act.hidden = false;
     const hr = hubRect(world.hubSize);
-    const ax = ((hub ? hr.x + hr.s / 2 : selected.x + sizeOf(selected) / 2) - cam.x) * cam.z + cw / 2;
+    const wx = hub ? hr.x + hr.s / 2 : selected.x + sizeOf(selected) / 2, wy = hub ? hr.y : groundY(selected.y);
+    // 立体表示では、箱の天面の奥の辺の上に出す
+    const scr = threeOn() ? camera3(cam, cw, ch).project(wx, wy, heightOf(selected)) : [(wx - cam.x) * cam.z + cw / 2, (wy - cam.y) * cam.z + ch / 2];
+    const ax = scr[0];
     // 稼働率の札を出しているときは、札の上に出す
-    const ay = ((hub ? hr.y : groundY(selected.y)) - cam.y) * cam.z + ch / 2 - 14 - (overlay && !hub ? 26 : 0);
+    const ay = scr[1] - 14 - (overlay && !hub ? 26 : 0);
     act.style.transform = `translate(${Math.round(Math.min(cw - 110, Math.max(110, ax)))}px, ${Math.round(Math.max(64, ay))}px) translate(-50%, -100%)`;
   };
 
@@ -631,6 +667,9 @@ function boot(data: HotData) {
     stroke: (x, y, prev) => H.stroke(x, F(y), prev && [prev[0], F(prev[1])]),
     hold: (x, y) => H.hold(x, F(y)),
     hover: (t) => H.hover(t && [t[0], F(t[1])]),
+  }, {
+    ground: (px, py) => (threeOn() ? camera3(cam, cw, ch).unproject(px, py, 0) : null),
+    pick: (px, py) => (threeOn() ? pickTile(camera3(cam, cw, ch), px, py, (x, y) => at(world, x, F(y))) : null),
   });
   // ---- 階の切り替え ----
   const floorBtn = $<HTMLButtonElement>('b-floor');
@@ -884,7 +923,7 @@ function boot(data: HotData) {
   // ---- 花火：章を終えたら、納品所が飲み込んだ元素の炎色で上げる ----
   const fireworks = (count: number) => launchFireworks(flamesFed(world).map((sym) => ({ sym, ...FLAMES[sym] })), count);
   // 確認用：アドレスに ?fw を付けると、花火を上げる関数と、いまの視点を外から読める
-  if (typeof location !== 'undefined' && location.search.includes('fw')) Object.assign(window, { __fireworks: fireworks, __cam: cam });
+  if (typeof location !== 'undefined' && location.search.includes('fw')) Object.assign(window, { __fireworks: fireworks, __cam: cam, __project: (x: number, y: number, hh = 0) => (threeOn() ? camera3(cam, cw, ch).project(x, y, hh) : [(x - cam.x) * cam.z + cw / 2, (y - cam.y) * cam.z + ch / 2]) });
 
   // ---- アルバム：指令を達成した瞬間の工場を、上から撮って残す（章ごとに最新の 1 枚と、最初の 1 枚）----
   interface Photo { k: string; cap: string; d: string; done: number; ms: number }
@@ -1047,18 +1086,43 @@ function boot(data: HotData) {
       if (lastSeen !== world.seen) { lastSeen = world.seen; refreshTools(true); }
       if (lastRes !== world.research.length) { lastRes = world.research.length; refreshTools(true); paintOpts(); paintFloor(); }
       const d0 = PERF ? performance.now() : 0;
-      const fx = fxOn();
+      const fx = fxOn(), t3 = fx && three && gw > 0;
+      const view = { floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : toolGhost() };
       if (fx) {
         // 光の層は黒地に加算、効果の層は黒地（何もない所は効果なし）
-        for (const c2 of [glowCtx, maskCtx]) { c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'source-over'; c2.globalAlpha = 1; c2.fillStyle = '#000'; c2.fillRect(0, 0, glowCv.width, glowCv.height); c2.setTransform(FX_SCALE, 0, 0, FX_SCALE, 0, 0); c2.globalCompositeOperation = 'lighter'; }
+        for (const c2 of [glowCtx, maskCtx]) { c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'source-over'; c2.globalAlpha = 1; c2.fillStyle = '#000'; c2.fillRect(0, 0, glowCv.width, glowCv.height); c2.setTransform(fxK, 0, 0, fxK, 0, 0); c2.globalCompositeOperation = 'lighter'; }
       }
-      draw(ctx, cw, ch, world, cam, now / 1000, dt, { fx: fx ? { glow: glowCtx, mask: maskCtx } : null, floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : toolGhost() });
-      drawFireworks(ctx, cw, ch, dt, fx ? glowCtx : null);
+      if (t3) {
+        // 立体表示：見えている範囲を囲む長方形を、地面の層と天面の層に描く。#cv は透明にして、画面にじかに描くものだけを載せる
+        const c3 = camera3(cam, cw, ch), cam2 = { x: (c3.x0 + c3.x1) / 2, y: (c3.y0 + c3.y1) / 2, z: cam.z };
+        topCtx.clearRect(0, 0, gw, gh);
+        ctx.clearRect(0, 0, cw, ch);
+        boxes.length = 0; slabs.length = 0;
+        draw(gndCtx, gw, gh, world, cam2, now / 1000, dt, { ...view, fx: { glow: glowCtx, mask: maskCtx }, three: { top: topCtx, screen: ctx, sw: cw, sh: ch, project: c3.project, boxes, slabs } });
+        const fw = fireworksActive();
+        if (fw) { glowSCtx.setTransform(1, 0, 0, 1, 0, 0); glowSCtx.globalCompositeOperation = 'source-over'; glowSCtx.globalAlpha = 1; glowSCtx.fillStyle = '#000'; glowSCtx.fillRect(0, 0, glowSCv.width, glowSCv.height); glowSCtx.setTransform(FX_SCALE, 0, 0, FX_SCALE, 0, 0); glowSCtx.globalCompositeOperation = 'lighter'; }
+        drawFireworks(ctx, cw, ch, dt, fw ? glowSCtx : null);
+        if (boxBuf.length < boxes.length + slabs.length) boxBuf = new Float32Array((boxes.length + slabs.length) * 2);
+        boxBuf.set(boxes); boxBuf.set(slabs, boxes.length);
+        const pal = palette(), ink = parseInt((pal.skin === 'punk' ? '#0b0d10' : pal.ink).slice(1), 16);
+        post!.render3d({
+          ground: gndCv, top: topCv, rect: [cam2.x - gw / 2 / cam.z, cam2.y - gh / 2 / cam.z, cam2.x + gw / 2 / cam.z, cam2.y + gh / 2 / cam.z],
+          vp: new Float32Array(c3.vp), boxes: boxBuf, count: boxes.length / 8, slabs: slabs.length / 8, topH: TOP_H,
+          ink: [((ink >> 16) & 255) / 255, ((ink >> 8) & 255) / 255, (ink & 255) / 255], shadow: pal.name === 'light' ? 0.3 : 0.5, glowScreen: fw ? glowSCv : null,
+        }, glowCv, maskCv, { ...POST_PRESETS[pal.key], time: now / 1000 });
+      } else {
+        draw(ctx, cw, ch, world, cam, now / 1000, dt, { ...view, fx: fx ? { glow: glowCtx, mask: maskCtx } : null });
+        drawFireworks(ctx, cw, ch, dt, fx ? glowCtx : null);
+        if (fx) post!.render(cv, glowCv, maskCv, { ...POST_PRESETS[palette().key], time: now / 1000 });
+      }
       if (fx) {
-        post!.render(cv, glowCv, maskCv, { ...POST_PRESETS[palette().key], time: now / 1000 });
-        // 遅い端末では、自動で標準の画質に戻す（3 秒ほど、1 コマ 45 ms を超え続けたら）
+        // 遅い端末では、自動で軽い表示に戻す（3 秒ほど、1 コマ 45 ms を超え続けたら）。立体表示 → 平らな高画質 → 標準、の順
         slowFrames = dt > 0.045 ? slowFrames + 1 : Math.max(0, slowFrames - 2);
-        if (slowFrames > 70 && !KEEP_GFX) { gfxHigh = false; applyGfx(); store.setMeta({ gfx: 'plain' }); toast('動きが重いので、画質を標準に切り替えた。メニューの「画質」で戻せる。', 5000); }
+        if (slowFrames > 70 && !KEEP_GFX) {
+          slowFrames = 0;
+          if (t3) { three = false; applyGfx(); resize(); store.setMeta({ view3d: 'off' }); toast('動きが重いので、立体表示を切った。メニューの「立体表示」で戻せる。', 5000); }
+          else { gfxHigh = false; applyGfx(); store.setMeta({ gfx: 'plain' }); toast('動きが重いので、画質を標準に切り替えた。メニューの「画質」で戻せる。', 5000); }
+        }
       }
       if (PERF) { PERF.draw.push(performance.now() - d0); if (PERF.draw.length > 600) { PERF.draw.shift(); PERF.step.shift(); } }
       hud();

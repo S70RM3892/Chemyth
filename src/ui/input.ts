@@ -20,7 +20,15 @@ export interface InputHandlers {
 export const Z_MIN = 9, Z_MAX = 110;
 
 /** 1本指で操作、2本指で拡大縮小と移動。指を離すと地図は少し滑る。マウスとホイールにも対応 */
-export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers) {
+/** 立体表示のときの、画面の点 → 世界の点。px, py は絵の左上からのピクセル。平らな表示のときは null を返す */
+export interface Projection {
+  /** 視線が地面と交わる点 */
+  ground(px: number, py: number): [number, number] | null;
+  /** その点にあるマス（箱の天面や側面に触れていれば、その設備のマス） */
+  pick(px: number, py: number): [number, number] | null;
+}
+
+export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers, proj?: Projection) {
   const pts = new Map<number, { x: number; y: number }>();
   let start: { x: number; y: number } | null = null;
   let moved = false;
@@ -34,11 +42,24 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
   const rect = () => cv.getBoundingClientRect();
   const toTile = (px: number, py: number): [number, number] => {
     const r = rect();
-    return [Math.floor(cam.x + (px - r.left - r.width / 2) / cam.z), Math.floor(cam.y + (py - r.top - r.height / 2) / cam.z)];
+    return proj?.pick(px - r.left, py - r.top) ?? [Math.floor(cam.x + (px - r.left - r.width / 2) / cam.z), Math.floor(cam.y + (py - r.top - r.height / 2) / cam.z)];
+  };
+  /** 指が (ax, ay) から (bx, by) へ動いたとき、指の下の地面がついてくるように視点を動かす量 */
+  const drag = (ax: number, ay: number, bx: number, by: number): [number, number] => {
+    const r = rect(), g0 = proj?.ground(ax - r.left, ay - r.top), g1 = g0 && proj?.ground(bx - r.left, by - r.top);
+    return g0 && g1 ? [g0[0] - g1[0], g0[1] - g1[1]] : [-(bx - ax) / cam.z, -(by - ay) / cam.z];
   };
   const clamp = () => { /* 地図に果てはない */ };
   const zoomAt = (px: number, py: number, factor: number) => {
     const r = rect();
+    const g0 = proj?.ground(px - r.left, py - r.top);
+    if (g0) {
+      // 立体表示：拡大の前後で、指の下の地面の点が変わらないようにする
+      cam.z = Math.min(Z_MAX, Math.max(Z_MIN, cam.z * factor));
+      const g1 = proj!.ground(px - r.left, py - r.top)!;
+      cam.x += g0[0] - g1[0]; cam.y += g0[1] - g1[1];
+      return;
+    }
     const ox = px - r.left - r.width / 2, oy = py - r.top - r.height / 2;
     const wx = cam.x + ox / cam.z, wy = cam.y + oy / cam.z;
     cam.z = Math.min(Z_MAX, Math.max(Z_MIN, cam.z * factor));
@@ -83,13 +104,13 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
   cv.addEventListener('pointermove', (ev) => {
     const p = pts.get(ev.pointerId);
     if (!p) { if (ev.pointerType === 'mouse' && h.hover) h.hover(toTile(ev.clientX, ev.clientY)); return; }
-    const dx = ev.clientX - p.x, dy = ev.clientY - p.y;
+    const ox = p.x, oy = p.y;
     p.x = ev.clientX;
     p.y = ev.clientY;
     if (pts.size >= 2 && pinch) {
-      const n = pinchState();
-      cam.x -= (n.cx - pinch.cx) / cam.z;
-      cam.y -= (n.cy - pinch.cy) / cam.z;
+      const n = pinchState(), [mx, my] = drag(pinch.cx, pinch.cy, n.cx, n.cy);
+      cam.x += mx;
+      cam.y += my;
       zoomAt(n.cx, n.cy, n.d / pinch.d);
       pinch = n;
       return;
@@ -106,10 +127,11 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
     if (panning) {
       const now = performance.now(), el = Math.max(1, now - lastMove);
       lastMove = now;
-      cam.x -= dx / cam.z;
-      cam.y -= dy / cam.z;
-      vx = 0.6 * vx + 0.4 * (-dx / cam.z / el) * 1000;
-      vy = 0.6 * vy + 0.4 * (-dy / cam.z / el) * 1000;
+      const [mx, my] = drag(ox, oy, ev.clientX, ev.clientY);
+      cam.x += mx;
+      cam.y += my;
+      vx = 0.6 * vx + 0.4 * (mx / el) * 1000;
+      vy = 0.6 * vy + 0.4 * (my / el) * 1000;
       clamp();
       return;
     }
