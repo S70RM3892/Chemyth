@@ -97,7 +97,7 @@ export const SYLLABUS: Unit[] = [
   { id: 'c44', subject: '化学', section: C4, title: '合成高分子化合物', points: '付加重合と縮合重合、合成繊維、合成樹脂（熱可塑性・熱硬化性）、ゴム、イオン交換樹脂、機能性高分子',
     recipes: ['合成繊維', '合成樹脂', 'ゴム', '機能性高分子', '再生繊維', '半合成繊維', 'polyethylene', 'polypropylene', 'pvc', 'polystyrene', 'styrene', 'phenol-resin'], sets: ['W'], knowledge: ['合成高分子', 'ゴム', 'イオン交換'], questions: ['高分子', 'イオン交換'] },
   { id: 'c45', subject: '化学', section: C4, title: '天然高分子化合物', points: '単糖・二糖・多糖、アミノ酸とタンパク質、酵素、核酸',
-    recipes: ['糖類', 'タンパク質', '核酸', 'セルロース'], sets: ['V', 'E', 'F', 'N'], knowledge: ['天然高分子', '核酸', '有機の検出'], questions: ['アミノ酸', '高分子'], passages: ['peptide'], practice: ['pep-1', 'pep-2', 'pep-3'] },
+    recipes: ['糖類', 'タンパク質', '核酸', 'セルロース'], sets: ['V', 'E', 'F', 'N'], knowledge: ['天然高分子', '核酸', '有機の検出'], questions: ['アミノ酸', '高分子'], passages: ['peptide'], practice: ['pep-1', 'pep-2', 'pep-3', 'sugar-1', 'sugar-2', 'sugar-3'] },
   { id: 'c51', subject: '化学', section: C5, title: '様々な物質と人間生活', points: '肥料、医薬品、染料、洗剤、金属やセラミックスなど、生活を支える物質',
     recipes: ['肥料', '医薬品', 'アゾ化合物', 'waterglass', 'silicon'], knowledge: ['油脂', '遷移元素'] },
   { id: 'c52', subject: '化学', section: C5, title: '化学が築く未来', points: '燃料電池、機能性高分子、資源の再利用など',

@@ -212,6 +212,18 @@ b { font-weight: 700; }
 .iso { display: inline-flex; flex-direction: column; gap: 0; border: 1px solid var(--rule); padding: 4px 10px; line-height: 1.35; }
 .iso .muted { font-size: 11px; }
 .isos.pick .iso { min-height: 48px; justify-content: center; font-size: 16px; }
+.isos.col { flex-direction: column; align-items: stretch; }
+.isos.col .iso { text-align: left; font-size: 14px; }
+.draw { display: grid; gap: 8px; }
+.draw-grid { position: relative; display: grid; grid-template-columns: repeat(9, 1fr); gap: 0; border: var(--bw) solid var(--ink); background: var(--card); aspect-ratio: 9 / 5; max-width: 560px; }
+.draw-bonds { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.draw-bonds line { stroke: var(--ink); stroke-width: 0.6; }
+.draw-cell { position: relative; border: 0; border-right: 1px dotted var(--rule); border-bottom: 1px dotted var(--rule); background: transparent; color: var(--ink); font-family: var(--font-mono); font-size: 16px; font-weight: 600; padding: 0; min-width: 0; cursor: pointer; }
+.draw-cell.atom { z-index: 1; }
+.draw-cell.atom::before { content: ""; position: absolute; inset: 26% 14%; background: var(--card); border-radius: 4px; z-index: -1; }
+.draw-cell.on { outline: 3px solid var(--hi); outline-offset: -3px; }
+.draw-cell.bad { color: var(--red); }
+.draw-status { margin: 0; }
 .clues { margin: 0; padding-left: 1.7em; display: grid; gap: 6px; font-size: 15px; }
 .clues li { padding-left: 2px; }
 .clues li::marker { font-family: var(--font-mono); font-weight: 600; color: var(--red); }

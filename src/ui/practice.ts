@@ -1,6 +1,8 @@
 import { DRILLS, checkStep, mulberry32, type Drill, type DrillGen } from '../content/drills';
 import { pretty } from '../chem/formula';
-import { specText, type Isomer } from '../chem/isomers';
+import { canonical, specOf, specText, type Isomer } from '../chem/isomers';
+import { makeSugar, sugarKey, sugarText } from '../content/sugar';
+import { structureEditor } from './draw';
 import { AMINOS, makePeptide } from '../content/peptide';
 import { makeCount, makeIdentify, type CountProblem, type IdentifyProblem } from '../content/structure';
 import { SYLLABUS } from '../content/syllabus';
@@ -67,6 +69,28 @@ function runDrill(c: PanelCtx, g: DrillGen) {
       return;
     }
     const s = d.steps[i];
+    const choices = (s as typeof s & { choices?: string[] }).choices;
+    if (choices) {
+      // 文字式で答える設問：正しい式を選ぶ
+      const fb2 = h('div', { class: 'answer', hidden: true });
+      const list = h('div', { class: 'isos pick col' }, ...choices.map((ch, k) => {
+        const b = h('button', { class: 'chip plain iso', type: 'button', id: `drill-choice-${i}-${k}` }, ch);
+        b.onclick = () => {
+          const good = checkStep(s, k);
+          if (good) { right++; sfx.ok(); } else { sfx.bad(); w.mistakes.push({ machine: 'drill', recipe: g.title, part: 'calc', t: Date.now() }); }
+          [...list.children].forEach((o, n) => { (o as HTMLButtonElement).disabled = true; o.classList.toggle('picked', n === s.answer); });
+          b.classList.toggle('wrong', !good);
+          fb2.replaceChildren(h('p', {}, h('b', {}, good ? '正解。' : '不正解。'), `正しい式は ${choices[s.answer]}`), h('p', { class: 'note' }, s.how));
+          fb2.hidden = false;
+          ask(i + 1);
+        };
+        return b;
+      }));
+      const box2 = h('section', { class: 'drill-step', id: `drill-step-${i}` }, h('p', { class: 'qtext' }, h('b', {}, `(${i + 1}) `), s.text), list, fb2);
+      body.append(box2);
+      if (i > 0) box2.scrollIntoView({ block: 'nearest' });
+      return;
+    }
     let text = '';
     const display = h('div', { class: 'slot on numslot', id: `drill-display-${i}` }, '');
     const paint = () => { display.textContent = text || '答えを入れる'; display.classList.toggle('empty', !text); };
@@ -132,6 +156,43 @@ export function showStructure(c: PanelCtx) {
         h('span', { class: 'muted' }, ['', 'トリペプチド', 'テトラペプチド', 'ペンタペプチド'][lv]),
         h('span', { class: 'drill-n' + (st?.clean ? ' ok' : '') }, st ? `正解 ${st.clean} / ${st.tries} 回` : '未挑戦'));
     })),
+    h('h3', {}, '糖の結合様式を決める'), h('div', { class: 'menu' }, ...([1, 2, 3] as const).map((lv) => {
+      const id = `sugar-${lv}`, st = w.practice[id];
+      return h('button', { class: 'ghost drill', type: 'button', id, onclick: () => runSugar(c, lv) },
+        h('span', { class: 'drill-t' }, `結合様式　${LEVEL[lv]}`),
+        h('span', { class: 'muted' }, ['', '二糖（還元性と酵素）', '三糖（メチル化分析）', '四糖'][lv]),
+        h('span', { class: 'drill-n' + (st?.clean ? ' ok' : '') }, st ? `正解 ${st.clean} / ${st.tries} 回` : '未挑戦'));
+    })),
+  );
+}
+
+/** 糖の構造決定：還元性・酵素・メチル化分析から、グリコシド結合の向きと位置を決める */
+function runSugar(c: PanelCtx, lv: 1 | 2 | 3) {
+  const { w } = c;
+  const q = makeSugar(mulberry32(seed()), lv);
+  const fb = h('div', { class: 'answer', hidden: true });
+  const opts = h('div', { class: 'isos pick col' }, ...q.options.map((o, n) => {
+    const right = sugarKey(o) === sugarKey(q.answer);
+    const b = h('button', { class: 'chip plain iso', type: 'button', id: `sugar-opt-${n}` }, sugarText(o));
+    b.dataset.right = String(right);
+    b.onclick = () => {
+      record(w, `sugar-${lv}`, right);
+      if (right) { w.points += 8 + lv * 2; sfx.ok(); c.actions.stamp('正解'); } else { sfx.bad(); w.mistakes.push({ machine: 'structure', recipe: '糖の結合様式', part: 'calc', t: Date.now() }); }
+      for (const x of opts.children) { (x as HTMLButtonElement).disabled = true; x.classList.toggle('picked', (x as HTMLElement).dataset.right === 'true'); }
+      b.classList.toggle('wrong', !right);
+      fb.replaceChildren(h('p', {}, h('b', {}, right ? `正解。研究点 +${8 + lv * 2}。` : '不正解。')), h('p', { class: 'note' }, q.how),
+        h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'sugar-next', onclick: () => runSugar(c, lv) }, '次の問題'), back('iso-list', '一覧へ', () => showStructure(c))));
+      fb.hidden = false;
+      c.sheet.scrollTop = c.sheet.scrollHeight;
+    };
+    return b;
+  }));
+  c.show(
+    h('header', {}, h('h2', {}, '糖の結合様式'), back('iso-back', '一覧へ', () => showStructure(c))),
+    h('p', { class: 'qtext' }, q.text),
+    h('ol', { class: 'clues' }, ...q.clues.map((t) => h('li', {}, t.text))),
+    h('p', { class: 'muted' }, 'グルコースを六角形で描き、結合に使われた位置に印をつけてから選べ。'),
+    opts, fb,
   );
 }
 
@@ -238,11 +299,42 @@ function runIdentify(c: PanelCtx, lv: 1 | 2 | 3) {
     };
     return b;
   }));
+  // 鎖式の化合物は、構造式を自分で組み立てて答える。ベンゼン環を含むものは選択肢から選ぶ
+  const ans = q.options.find((o) => o.key === q.answer)!;
+  const drawable = ans.mol.atoms.every((a) => a === 'C' || a === 'O' || a === 'Cl' || a === 'Br' || (a as string) === 'N');
+  const els = ['C', 'O', ...(q.spec.cl ? ['Cl'] : []), ...(q.spec.br ? ['Br'] : []), ...((q.spec as { n?: number }).n ? ['N'] : [])];
+  const ed = drawable ? structureEditor(els) : null;
+  const drawFb = h('p', { class: 'feedback', id: 'draw-feedback' });
+  let tries = 0, done = false;
+  const finish = (good: boolean) => {
+    done = true;
+    record(w, `iso-id-${lv}`, good && tries === 0);
+    if (good) { w.points += 12; sfx.ok(); c.actions.stamp('正解'); } else { sfx.bad(); w.mistakes.push({ machine: 'structure', recipe: `${specText(q.spec)} の特定`, part: 'calc', t: Date.now() }); }
+    fb.replaceChildren(h('p', {}, h('b', {}, good ? `正解。研究点 +12。${tries ? '' : '（一発）'}` : '答え：'), ' ', isoChip(ans)), h('p', { class: 'note' }, q.how),
+      h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'iso-next', onclick: () => runIdentify(c, lv) }, '次の問題'), back('iso-list', '一覧へ', () => showStructure(c))));
+    fb.hidden = false;
+    c.sheet.scrollTop = c.sheet.scrollHeight;
+  };
+  const drawOk = h('button', { class: 'primary', type: 'button', id: 'draw-ok' }, 'この構造で答える');
+  drawOk.onclick = () => {
+    if (done || !ed) return;
+    const m = ed.mol();
+    if (!m) { drawFb.textContent = ed.problem() ?? ''; return; }
+    if (canonical(m) === q.answer) { finish(true); return; }
+    tries++;
+    const got = specText(specOf(m));
+    drawFb.textContent = got !== specText(q.spec) ? `分子式が違う。いまの構造は ${pretty(got)}。` : '分子式は合っているが、実験事実に合わない異性体だ。どの事実に反するかを確かめろ。';
+    sfx.bad();
+    w.mistakes.push({ machine: 'structure', recipe: `${specText(q.spec)} の特定`, part: 'calc', t: Date.now() });
+  };
+  const giveUp = h('button', { class: 'ghost', type: 'button', id: 'draw-giveup', onclick: () => { if (!done) { tries++; finish(false); } } }, '答えを見る');
+  const optBox = h('details', { class: 'named', id: 'draw-options' }, h('summary', {}, '描けないときは、選択肢から選ぶ'), opts);
   c.show(
     h('header', {}, h('h2', {}, `構造の特定　${pretty(specText(q.spec))}`), back('iso-back', '一覧へ', () => showStructure(c))),
     h('p', { class: 'qtext' }, q.text),
     h('ol', { class: 'clues' }, ...q.clues.map((t) => h('li', {}, t))),
-    h('p', { class: 'muted' }, '候補を紙に全部書き出し、実験事実ごとに消していけ。残った 1 つを選べ。'),
-    opts, fb,
+    h('p', { class: 'muted' }, ed ? '候補を紙に全部書き出し、実験事実ごとに消していけ。残った 1 つの構造式を、下のマス目に組み立てろ。' : '候補を紙に全部書き出し、実験事実ごとに消していけ。残った 1 つを選べ。'),
+    ...(ed ? [ed.el, drawFb, h('div', { class: 'row' }, drawOk, giveUp), optBox] : [opts]),
+    fb,
   );
 }
