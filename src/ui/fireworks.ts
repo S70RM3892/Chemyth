@@ -22,7 +22,7 @@ export function launchFireworks(colors: FlameColor[], count: number) {
 export const fireworksActive = () => shells.length > 0 || sparks.length > 0 || tags.length > 0;
 
 /** 1 コマ進めて描く。cw, ch は画面の大きさ */
-export function drawFireworks(ctx: CanvasRenderingContext2D, cw: number, ch: number, dt: number) {
+export function drawFireworks(ctx: CanvasRenderingContext2D, cw: number, ch: number, dt: number, glow?: CanvasRenderingContext2D | null) {
   clock += dt;
   const live = fireworksActive();
   veil += ((live ? 1 : 0) - veil) * Math.min(1, dt * 3);
@@ -63,6 +63,8 @@ export function drawFireworks(ctx: CanvasRenderingContext2D, cw: number, ch: num
     // 尾
     ctx.globalAlpha = k * 0.35;
     ctx.beginPath(); ctx.arc(p.x - p.vx * 0.03, p.y - p.vy * 0.03, p.r * 0.8, 0, Math.PI * 2); ctx.fill();
+    // 発光の層にも描く（合成段で、にじんで光る）
+    if (glow) { glow.globalAlpha = k * 0.9; glow.fillStyle = p.hex; glow.beginPath(); glow.arc(p.x, p.y, p.r * 2.2, 0, Math.PI * 2); glow.fill(); glow.globalAlpha = 1; }
   }
   ctx.restore();
   // 何の元素の色か

@@ -48,6 +48,10 @@ b { font-weight: 700; }
 
 #app { position: relative; height: 100%; overflow: hidden; user-select: none; -webkit-user-select: none; }
 #cv { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+/* WebGL の合成結果。地図の絵（#cv）の真上に重ねる。操作は下の #cv が受ける */
+#gl { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: block; }
+#gl[hidden] { display: none; }
+.in-title #gl { visibility: hidden; }
 .in-title #goal, .in-title #topbtns, .in-title #dock, .in-title #act, .in-title #cv { visibility: hidden; }
 .ico { flex: 0 0 auto; display: block; }
 

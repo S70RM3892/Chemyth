@@ -2,7 +2,7 @@ import { ZONES, hubRect, isSea, resourceAt, zoneAt, zoneSpots, type Zone } from 
 import { ELEMENTS } from '../content/elements';
 import { LINE_COLORS, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
-import { FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { at, FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { BRASS, BRASS_DARK, mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 import { districtsOf, type District } from '../engine/districts';
@@ -14,7 +14,9 @@ import { AMINO_ORDER, aminoOf, phOf, poleAt, type AminoKey } from '../content/ph
 import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/sep';
 
 export interface Camera { x: number; y: number; z: number }
-export interface View { /** 見ている階（0 が 1 階） */ floor?: number; tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string; /** 出口（out）と入口の場所。d は物が流れる向き */ ports?: { x: number; y: number; d: number; out: boolean }[] }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null }
+/** WebGL の合成段に渡す層。glow：光っている所（黒地に加算で描く）、mask：効果をかける所（赤＝熱のゆらぎ、青＝水面）。どちらも画面と同じ座標で描ける */
+export interface FxLayers { glow: CanvasRenderingContext2D; mask: CanvasRenderingContext2D }
+export interface View { /** 光と効果の層。あれば、絵と一緒に描く */ fx?: FxLayers | null; /** 見ている階（0 が 1 階） */ floor?: number; tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string; /** 出口（out）と入口の場所。d は物が流れる向き */ ports?: { x: number; y: number; d: number; out: boolean }[] }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null }
 
 // 方眼ノートに描いた工場の図面。輪郭線と斜線で描き、ぼかしや発光は使わない
 let FONT_HAND = '"Klee One", sans-serif';
@@ -345,6 +347,29 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
 
   const x0 = Math.floor(wx0), x1 = Math.ceil(wx1), y0 = Math.floor(wy0), y1 = Math.ceil(wy1);
   const inView = (e: Ent) => e.x >= x0 - 2 && e.x <= x1 + 2 && e.y - off >= y0 - 2 && e.y - off <= y1 + 2;
+  // ---- 光と効果の層（WebGL の合成段があるときだけ）----
+  const G = view.fx?.glow ?? null, M = view.fx?.mask ?? null;
+  /** 光の点：中心が明るく、外へ消える。rgb は '255,200,80' の形 */
+  const shine = (c2: CanvasRenderingContext2D | null, x: number, y: number, r: number, rgb: string, a: number) => {
+    if (!c2 || r <= 0 || x < -r || y < -r || x > cw + r || y > ch + r) return;
+    const g = c2.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(${rgb},${a})`); g.addColorStop(1, `rgba(${rgb},0)`);
+    c2.fillStyle = g; c2.fillRect(x - r, y - r, r * 2, r * 2);
+  };
+  const glow = (x: number, y: number, r: number, rgb: string, a: number) => shine(G, x, y, r, rgb, a);
+  const heat = (x: number, y: number, r: number, a: number) => shine(M, x, y, r, '255,0,0', a);
+  if (M && !off && z >= 9) {
+    // 水面：海と入り江のマスを青で塗る（合成段で、さざ波ときらめきになる）
+    M.fillStyle = 'rgb(0,0,255)';
+    for (let y = y0; y <= y1; y++) {
+      let run = -1;
+      for (let x = x0; x <= x1 + 1; x++) {
+        const wet = x <= x1 && waterAt(x, y) && !at(w, x, y); // 設備の上は、ゆらさない
+        if (wet && run < 0) run = x;
+        else if (!wet && run >= 0) { M.fillRect(sx(run), gy(y), (x - run) * z, z + 0.5); run = -1; }
+      }
+    }
+  }
   if (off) {
     // 2 階：地面を床板で覆い、1 階の設備を薄い影として透かす
     ctx.fillStyle = punk ? (light ? 'rgba(196,201,206,0.82)' : 'rgba(15,18,22,0.84)') : light ? 'rgba(240,242,236,0.84)' : 'rgba(22,26,34,0.84)';
@@ -392,6 +417,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
           ctx.fillStyle = `rgba(255,214,107,${0.22 * k})`; ctx.beginPath(); ctx.arc(px, py, r0 * 3.2, 0, Math.PI * 2); ctx.fill();
           ctx.fillStyle = `rgba(255,226,140,${0.6 + 0.4 * k})`; ctx.beginPath(); ctx.arc(px, py, r0, 0, Math.PI * 2); ctx.fill();
           if (light) { ctx.strokeStyle = 'rgba(90,60,10,0.75)'; ctx.lineWidth = 1; ctx.stroke(); }
+          shine(G, px, py, r0 * 7, '255,214,107', 0.55 * k);
         }
       }
       ctx.globalCompositeOperation = 'source-over';
@@ -604,6 +630,18 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     }
   }
 
+  if (G && belts.length && (arcane || punk)) {
+    // 管の中の光：魔術はガラス管の青い光、工業は液体の配管だけがうっすら光る
+    G.lineCap = 'round';
+    const strokeOn = (list: Belt[]) => {
+      G.beginPath();
+      for (const b of list) { const cx = sx(b.e.x + 0.5), cy = sy(b.e.y + 0.5); G.moveTo(cx + b.c.ax * z, cy + b.c.ay * z); G.quadraticCurveTo(cx, cy, cx + b.c.bx * z, cy + b.c.by * z); }
+      G.stroke();
+    };
+    if (arcane) { G.strokeStyle = `rgba(${P.glow},${light ? 0.34 : 0.5})`; G.lineWidth = z * 0.2; strokeOn(belts); }
+    else if (byKind.liquid.length) { G.strokeStyle = `rgba(90,210,255,${light ? 0.14 : 0.3})`; G.lineWidth = z * 0.16; strokeOn(byKind.liquid); }
+  }
+
   // ベルトの段階：強化するほど、中央の流れ線が色を変えて速く流れる
   const tier = Math.min(5, w.up.belt);
   if (tier > 0 && z >= 14) {
@@ -707,9 +745,23 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       const needs = (isMachine(e.kind) && !e.recipe) || ((e.kind === 'analyzer' && !e.test) || (isSep(e.kind) && !sepReady(e.kind, e.test))) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
       const jam = (e.stuck || 0) > 2.5 || !!e.bad;
       if (needs || jam || e.busy) { ctx.fillStyle = needs || jam ? P.red : '#58e06a'; ctx.fillRect(px0 + ps * 0.3, py0 + ps * 0.3, ps * 0.4, ps * 0.4); }
+      if (G && e.busy) glow(px0 + ps / 2, py0 + ps / 2, z * sz * 1.5, glowOf(e, P), 0.4);
       continue;
     }
     machine(ctx, P, sx(e.x + sz / 2), sy(e.y + sz / 2), z * pop * sz, z, e, t);
+    if (G) {
+      // 動いている装置は光をこぼす。色は、その反応で生じる気体や液の色（なければスキンの光の色）。熱する反応は橙に光り、上の空気がゆらぐ
+      const mcx = sx(e.x + sz / 2), mcy = sy(e.y + sz / 2);
+      // 装置の中身（液や沈殿の色）は覚える対象なので、光で色が変わらないように守る（効果の層の緑）
+      if (M && sz > 1) { M.fillStyle = 'rgb(0,255,0)'; M.beginPath(); M.arc(mcx, mcy, z * sz * 0.4, 0, Math.PI * 2); M.fill(); }
+      if (e.busy) {
+        glow(mcx, mcy, z * sz * 1.3, glowOf(e, P), 0.3 + 0.05 * Math.sin(t * 5 + e.x));
+        if (reactionLookById(e.recipe)?.heat) { glow(mcx, mcy + z * sz * 0.38, z * sz * 0.75, '255,130,40', 0.38); heat(mcx, mcy - z * sz * 0.55, z * sz * 0.85, 0.85); }
+      }
+      if (e.kind === 'vent') { glow(mcx, mcy - z * 0.05, z * 0.5, '255,120,50', 0.22); heat(mcx, mcy - z * 0.7, z * 0.6, 0.5); }
+      else if (e.kind === 'sensor' && (SIG[e.ch || 1] || 0) > 0) glow(mcx, mcy, z * 0.8, hexRgb(LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length]), 0.7);
+      else if (e.kind === 'tank' && (e.cnt || 0) + (e.rcn || 0) > 0 && e.sub) glow(mcx, mcy, z * 0.9, hexRgb(hexOf(e.sub)), 0.22);
+    }
     // 習熟メッキ：その反応を、間隔を空けた復習で覚えているほど、縁が銅 → 銀 → 金になる。まちがえると剥がれる
     const plate = isMachine(e.kind) && !e.sealed ? platingOf(w.srs, e.recipe) : 0;
     if (plate) {
@@ -756,7 +808,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   }
 
   // 闇の炉：稼働中の装置と納品所は、暗がりに光をこぼす
-  if ((punk || arcane) && !light) {
+  if ((punk || arcane) && !light && !G) {
     ctx.globalCompositeOperation = 'lighter';
     const pool = (gx: number, gy: number, r: number, a: number) => {
       const g = ctx.createRadialGradient(sx(gx), sy(gy), 0, sx(gx), sy(gy), r * z);
@@ -787,6 +839,8 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   }
   const hr = hubRect(w.hubSize);
   if (!off) hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
+  // 納品所の口は、赤く脈打つ光。熱で上の空気がゆらぐ
+  if (G && !off) { const hx2 = sx(hr.x + hr.s / 2), hy2 = sy(hr.y + hr.s / 2); glow(hx2, hy2, hr.s * z * 0.95, '255,70,40', 0.4 + 0.1 * Math.sin(t * 2.3)); heat(hx2, hy2 - hr.s * z * 0.5, hr.s * z * 0.6, 0.5); }
   // 納品所のまわりの灯り：章を 1 つ終えるごとに 1 つともる
   if (!off && z >= 12) {
     const done = chaptersDone(w.progress), n = done.length, hcx = sx(hr.x + hr.s / 2), hcy = sy(hr.y + hr.s / 2), ring = (hr.s / 2 + 1.05) * z, lr = Math.max(2.2, z * 0.09);
@@ -797,6 +851,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
         ctx.fillStyle = `rgba(255,214,107,${0.28 * k})`; ctx.beginPath(); ctx.arc(px, py, lr * 2.8, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = '#ffe08a'; ctx.beginPath(); ctx.arc(px, py, lr, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = Math.max(1, z * 0.025); ctx.stroke();
+        glow(px, py, lr * 6, '255,214,107', 0.7 * k);
       } else { ctx.strokeStyle = punk ? 'rgba(255,255,255,0.25)' : P.soft; ctx.globalAlpha = 0.5; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(px, py, lr * 0.7, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1; }
     }
   }
@@ -873,6 +928,8 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
         // 先頭の灯り：前の列車を待って止まっているときは赤
         ctx.fillStyle = tr.held ? P.red : punk ? '#14181d' : P.ink; ctx.fillRect(L / 2 - z * 0.2, -Wd / 2 + z * 0.06, z * 0.14, Wd - z * 0.12);
         ctx.restore();
+        // 前照灯
+        glow(tx + Math.cos(ang) * z * 0.7, ty + Math.sin(ang) * z * 0.7, z * 1.1, tr.held ? '255,60,50' : '255,236,180', 0.6);
         // 走っている列車は、後ろへ煙を残す
         if (z >= 16 && !tr.held && tr.p > 0.01 && tr.p < 0.99 && particles.length < 260 && Math.random() < dt * 5) {
           particles.push({ x: cam.x + (tx - cw / 2) / z - Math.cos(ang) * 0.4, y: cam.y + (ty - ch / 2) / z - Math.sin(ang) * 0.4, vx: -Math.cos(ang) * 0.3, vy: -0.35 - Math.random() * 0.2, age: 0, life: 0.8 + Math.random() * 0.5, color: 'smoke', r: 0.08 + Math.random() * 0.05 });
@@ -1080,9 +1137,11 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       ctx.fillStyle = `rgba(${P.glow},${a})`; ctx.beginPath(); ctx.arc(px, py, rad, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalCompositeOperation = 'source-over';
-    const g = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.45, cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
-    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, light ? 'rgba(70,45,15,0.2)' : 'rgba(0,0,0,0.5)');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, cw, ch);
+    if (!G) {
+      const g = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.45, cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
+      g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, light ? 'rgba(70,45,15,0.2)' : 'rgba(0,0,0,0.5)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, cw, ch);
+    }
   }
 }
 
@@ -1768,6 +1827,23 @@ function smokeTint(recipe: string | undefined): string | undefined {
   if (!L) return undefined;
   const c = L.gasPhase ? L.after : L.gases.find((g) => g !== '#e4ecf1');
   return c && c !== '#e4ecf1' ? c : undefined;
+}
+/** '#rrggbb' を '255,200,80' の形に */
+const hexRgb = (hex: string) => `${parseInt(hex.slice(1, 3), 16)},${parseInt(hex.slice(3, 5), 16)},${parseInt(hex.slice(5, 7), 16)}`;
+/** 動いている装置がこぼす光の色：色のついた気体が生じる反応ならその色、電気を使う装置は青白、ほかはスキンの光の色 */
+function glowOf(e: Ent, P: Palette): string {
+  const tint = smokeTint(e.recipe);
+  if (tint) return hexRgb(tint);
+  if (e.kind === 'electrolyzer' || e.kind === 'battery' || e.kind === 'phoresis') return '150,210,255';
+  return P.skin === 'note' ? '255,225,120' : P.glow;
+}
+/** 水面のマスか（海・入り江）。マスごとの判定は重いので、覚えておく */
+const waterMemo = new Map<number, boolean>();
+function waterAt(x: number, y: number): boolean {
+  const k = (x + 20000) * 40001 + (y + 20000);
+  let v = waterMemo.get(k);
+  if (v === undefined) { v = isSea(zoneAt(x, y)); if (waterMemo.size > 200000) waterMemo.clear(); waterMemo.set(k, v); }
+  return v;
 }
 /** 装置の下に出す、短い札（試薬の名前や pH） */
 function sepTag(ctx: CanvasRenderingContext2D, P: Palette, text: string, cx: number, y: number, u: number, line: number) {

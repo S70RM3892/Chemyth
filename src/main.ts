@@ -17,6 +17,8 @@ import { appearance, equationOf } from './content/looks';
 import { isSep, sepSlots } from './content/sep';
 import { showMock } from './ui/mock';
 import { drawFireworks, launchFireworks } from './ui/fireworks';
+import { POST_PRESETS, createPost, type Post } from './ui/gl';
+import { palette } from './ui/theme';
 import { FLAMES } from './content/looks';
 import { decodeBlueprint, encodeBlueprint, type Stamp } from './engine/blueprint';
 import { showStats, type StatsCtx } from './ui/stats';
@@ -52,6 +54,8 @@ const TOOLS: { id: Tool; glyph: string; name: string; tip: string; color?: strin
   { id: 'erase', glyph: '✕', name: '消す', need: {}, color: '#b0453f', tip: 'タップするか、なぞると消える。間違えたら右上の「元に戻す」。' },
 ];
 
+/** 確認用：アドレスに ?gfx をつけると、重くても高画質のままにする（自動で標準に戻さない） */
+const KEEP_GFX = typeof location !== 'undefined' && location.search.includes('gfx');
 /** 計測用：アドレスに ?perf をつけると、1 フレームの計算と描画にかかった時間（ミリ秒）を window.__perf にためる */
 const PERF: { draw: number[]; step: number[] } | null = typeof location !== 'undefined' && location.search.includes('perf') ? ((window as unknown as { __perf: { draw: number[]; step: number[] } }).__perf = { draw: [], step: [] }) : null;
 
@@ -108,13 +112,28 @@ function boot(data: HotData) {
   const save = () => { if (slot) store.write(slot, serialize(sandbox ? sandbox.home : world)); };
   hot?.snapshot?.(() => (slot ? { slot, save: serialize(world) } : {}));
 
+  // ---- WebGL の合成段：地図の絵（#cv）を素材にして、光・発光・ゆらぎをかけた結果を #gl に出す ----
+  const glCv = $<HTMLCanvasElement>('gl');
+  let post: Post | null = null, gfxHigh = store.meta().gfx !== 'plain';
+  /** 光の層と効果の層。画面の 1/3 の細かさで足りる（どうせぼかす） */
+  const FX_SCALE = 1 / 3;
+  const glowCv = document.createElement('canvas'), maskCv = document.createElement('canvas');
+  const glowCtx = glowCv.getContext('2d')!, maskCtx = maskCv.getContext('2d')!;
+  const fxOn = () => !!post && gfxHigh && !post.lost();
+  const applyGfx = () => {
+    if (gfxHigh && !post) { try { post = createPost(glCv); } catch { post = null; } if (!post) gfxHigh = false; }
+    glCv.hidden = !fxOn();
+  };
   const resize = () => {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     cw = cv.clientWidth; ch = cv.clientHeight;
     cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    for (const c of [glowCv, maskCv]) { c.width = Math.max(8, Math.round(cw * FX_SCALE)); c.height = Math.max(8, Math.round(ch * FX_SCALE)); }
+    post?.resize(cv.width, cv.height);
   };
   new ResizeObserver(resize).observe(cv);
+  applyGfx();
   resize();
   const nearZoom = () => Math.max(40, Math.min(54, cw / 24));
   /** 建てたもの全体が収まる視野 */
@@ -337,6 +356,11 @@ function boot(data: HotData) {
       h('div', { class: 'menu' },
         h('div', { class: 'row' }, h('span', { class: 'muted' }, '見た目'), h('span', { class: 'seg' }, ...skinButtons(showMenu)), h('span', { class: 'seg' }, ...themeButtons(showMenu))),
         item('m-sound', soundOn() ? '音：あり' : '音：なし', () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); showMenu(); }),
+        item('m-gfx', fxOn() ? '画質：高（光・発光・ゆらぎ）' : post || store.meta().gfx !== 'plain' ? '画質：標準（軽い）' : '画質：標準（この端末では高画質を使えない）', () => {
+          gfxHigh = !fxOn(); slowFrames = 0; applyGfx(); resize();
+          store.setMeta({ gfx: gfxHigh ? 'high' : 'plain' }); sfx.tap(); showMenu();
+          if (!gfxHigh && store.meta().gfx === 'high') toast('この端末では高画質を使えない。', 2600);
+        }),
         item('m-music', musicOn() ? '音楽：あり' : '音楽：なし', () => { setMusic(!musicOn()); store.setMeta({ music: musicOn() }); sfx.tap(); showMenu(); }),
         item('m-help', '遊び方', () => showHelp()),
         item('m-title', '保存してタイトルへ戻る', () => { modal.hidden = true; sheet.replaceChildren(); toTitle(); })),
@@ -961,7 +985,7 @@ function boot(data: HotData) {
   const toTitle = () => { leaveCase(); save(); slot = 0; selected = null; app.classList.add('in-title'); title.show(); };
 
   // ---- ループ ----
-  let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0, chapterBefore = 0;
+  let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0, chapterBefore = 0, slowFrames = 0;
   const STEP = 1 / 60;
   const frame = (now: number) => {
     const dt = Math.min(0.1, (now - prev) / 1000);
@@ -1023,8 +1047,19 @@ function boot(data: HotData) {
       if (lastSeen !== world.seen) { lastSeen = world.seen; refreshTools(true); }
       if (lastRes !== world.research.length) { lastRes = world.research.length; refreshTools(true); paintOpts(); paintFloor(); }
       const d0 = PERF ? performance.now() : 0;
-      draw(ctx, cw, ch, world, cam, now / 1000, dt, { floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : toolGhost() });
-      drawFireworks(ctx, cw, ch, dt);
+      const fx = fxOn();
+      if (fx) {
+        // 光の層は黒地に加算、効果の層は黒地（何もない所は効果なし）
+        for (const c2 of [glowCtx, maskCtx]) { c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'source-over'; c2.globalAlpha = 1; c2.fillStyle = '#000'; c2.fillRect(0, 0, glowCv.width, glowCv.height); c2.setTransform(FX_SCALE, 0, 0, FX_SCALE, 0, 0); c2.globalCompositeOperation = 'lighter'; }
+      }
+      draw(ctx, cw, ch, world, cam, now / 1000, dt, { fx: fx ? { glow: glowCtx, mask: maskCtx } : null, floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : toolGhost() });
+      drawFireworks(ctx, cw, ch, dt, fx ? glowCtx : null);
+      if (fx) {
+        post!.render(cv, glowCv, maskCv, { ...POST_PRESETS[palette().key], time: now / 1000 });
+        // 遅い端末では、自動で標準の画質に戻す（3 秒ほど、1 コマ 45 ms を超え続けたら）
+        slowFrames = dt > 0.045 ? slowFrames + 1 : Math.max(0, slowFrames - 2);
+        if (slowFrames > 70 && !KEEP_GFX) { gfxHigh = false; applyGfx(); store.setMeta({ gfx: 'plain' }); toast('動きが重いので、画質を標準に切り替えた。メニューの「画質」で戻せる。', 5000); }
+      }
       if (PERF) { PERF.draw.push(performance.now() - d0); if (PERF.draw.length > 600) { PERF.draw.shift(); PERF.step.shift(); } }
       hud();
     }
