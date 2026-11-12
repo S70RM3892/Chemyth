@@ -21,8 +21,16 @@ export const FLOOR_DY = 100000;
 export const floorOf = (y: number) => (y >= FLOOR_DY / 2 ? 1 : 0);
 /** 階を外した y（地図の上での位置） */
 export const groundY = (y: number) => y - floorOf(y) * FLOOR_DY;
-/** 信号の数（1〜8 番） */
-export const SIGNALS = 8;
+/** 路線番号・信号の番号の上限。数に限りはないのと同じだが、設備に描く数字が 4 桁に収まるようにしてある */
+export const LINE_MAX = 9999;
+/** 番号として使える値に直す（1 〜 LINE_MAX の整数） */
+export const lineNo = (n: number) => Math.max(1, Math.min(LINE_MAX, Math.floor(n) || 1));
+/** 使われていない、いちばん小さい番号 */
+export function freeLine(used: Iterable<number>): number {
+  const u = new Set(used);
+  for (let n = 1; n <= LINE_MAX; n++) if (!u.has(n)) return n;
+  return LINE_MAX;
+}
 /** 2×2 マスを占める装置。出口が 6 か所あり、奥の面が入口の目安になる */
 export const BIG: Kind[] = ['separator', 'reactor', 'electrolyzer', 'battery', 'station', 'settler', 'funnel', 'phoresis', 'tank'];
 /** 貯蔵タンクに入る数 */
@@ -33,8 +41,6 @@ export const SETTLE_TIME = 1.2;
 export const TUNNEL_RANGE = 7;
 /** 貨物駅にためておける数と、列車 1 編成に積める数 */
 export const STATION_CAP = 60, TRAIN_CAP = 24;
-/** 路線の数 */
-export const LINES = 8;
 /** 1 つの積む駅が走らせられる編成の数 */
 export const MAX_CARS = 3;
 
@@ -1054,7 +1060,8 @@ export function step(w: World, dt: number) {
     if (w.hold >= rg.n) finishGoal(w, rg, w.chapter);
   }
   if (currentGoal(w)) { const gk = `${w.chapter}:${w.progress[w.chapter]}`; w.goalMs[gk] = (w.goalMs[gk] || 0) + dt * 1000; }
-  for (let i = 1; i <= SIGNALS; i++) if (w.sig[i] > 0) w.sig[i] = Math.max(0, w.sig[i] - dt);
+  // 使っている番号だけを回る（番号はいくらでも増やせるので、端から数えない）
+  for (const k in w.sig) { if (w.sig[k] > 0) w.sig[k] = Math.max(0, w.sig[k] - dt); else delete w.sig[k]; }
   // 列車の位置の覚え書きは、古いものをときどき捨てる
   if (w.tick % 600 === 0 && w.occ.size) for (const [k, o] of w.occ) if (o.t < w.tick - 2) w.occ.delete(k);
   const speed = beltSpeed(w), every = extractInterval(w), rate = machineRate(w), kU = 1 - Math.exp(-dt / UTIL_TAU);

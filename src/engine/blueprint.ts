@@ -1,6 +1,7 @@
 import { recipeById } from '../content/recipes';
 import { hasSub } from '../content/substances';
 import { MACHINES } from '../content/machines';
+import { LINE_MAX } from './world';
 import type { Dir, Kind } from './world';
 
 /** 設計図の 1 個ぶん：左上からの位置、向き、設定 */
@@ -51,7 +52,7 @@ export function decodeBlueprint(text: string): { name: string; stamps: Stamp[] }
       }
       if (typeof test === 'string' && test.length <= 40) b.test = test;
       if (typeof sub === 'string' && sub.length <= 40) b.sub = sub;
-      if (int(ch, 1, 8)) b.ch = ch;
+      if (int(ch, 1, LINE_MAX)) b.ch = ch;
       if (role === 'in' || role === 'out') b.role = role;
       stamps.push(b);
     }

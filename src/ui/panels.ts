@@ -1,5 +1,5 @@
 import { ELEMENTS } from '../content/elements';
-import { LINE_COLORS, MACHINES } from '../content/machines';
+import { lineColor, MACHINES } from '../content/machines';
 import { CONDITIONS, electronsOf, recipeById, RECIPES } from '../content/recipes';
 import { isCorrect, QUESTIONS, type Question } from '../content/questions';
 import { label, sub } from '../content/substances';
@@ -9,7 +9,7 @@ import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
 import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
-import { TANK_CAP, RESEARCH, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, SIGNALS, signalOn, doResearch, has, researchBlock, tierNeed, LINES, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { TANK_CAP, RESEARCH, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { researchById } from '../content/research';
 import { appearance, lookOf } from '../content/looks';
 import { AGENTS, ION_LABEL, ION_ORDER, MIXES } from '../content/ions';
@@ -473,6 +473,45 @@ export function showTank(c: PanelCtx, e: Ent, extra: HTMLElement) {
     extra);
 }
 
+// ---------------- 番号の選び方（路線番号・信号の番号）----------------
+/** 番号を打ち込んでいる途中の文字。画面を描き直しても残るように、ここに持つ（null なら、打ち込みの欄は閉じている） */
+let lineDraft: { id: string; text: string } | null = null;
+/**
+ * 番号を選ぶ部品。番号は 1 から LINE_MAX まで、いくらでも使える。
+ * よく使う 1〜8 番と、いま使われている番号は、押すだけで選べる。ほかの番号は −／＋ で動かすか、数字を打つ。
+ * 「空き番号」は、まだどこにも使われていない、いちばん小さい番号。
+ */
+function linePicker(o: { id: string; unit: string; cur: number; used: number[]; pick: (n: number) => void; again: () => void }): HTMLElement {
+  const used = new Set(o.used), count = new Map<number, number>();
+  for (const n of o.used) count.set(n, (count.get(n) || 0) + 1);
+  // 並べる番号：1〜8、使われている番号、いまの番号。多すぎるときは、いまの番号に近いものから 40 個
+  let list = [...new Set([1, 2, 3, 4, 5, 6, 7, 8, ...used, o.cur])].sort((a, b) => a - b);
+  const all = list.length;
+  if (all > 40) list = list.sort((a, b) => Math.abs(a - o.cur) - Math.abs(b - o.cur)).slice(0, 40).sort((a, b) => a - b);
+  const chip = (n: number) => {
+    const b = h('button', { class: 'chip plain line' + (o.cur === n ? ' on' : ''), type: 'button', id: `${o.id}-${n}`, onclick: () => { lineDraft = null; o.pick(n); } }, `${n} ${o.unit}`, count.get(n) ? h('span', { class: 'chip-n' }, `×${count.get(n)}`) : null);
+    b.style.setProperty('--line', lineColor(n));
+    return b;
+  };
+  const step = (id: string, text: string, n: number, off: boolean) => h('button', { class: 'ghost', type: 'button', id: `${o.id}-${id}`, disabled: off, onclick: () => { lineDraft = null; o.pick(lineNo(n)); } }, text);
+  const now = h('span', { class: 'chip plain line on line-now', id: `${o.id}-now` }, `${o.cur} ${o.unit}`);
+  now.style.setProperty('--line', lineColor(o.cur));
+  const typing = lineDraft && lineDraft.id === o.id ? lineDraft : null, free = freeLine(used);
+  const typed = typing && typing.text ? lineNo(+typing.text) : 0;
+  return h('div', { class: 'linepick' },
+    h('div', { class: 'row' },
+      step('dec', '−', o.cur - 1, o.cur <= 1), now, step('inc', '＋', o.cur + 1, o.cur >= LINE_MAX),
+      h('button', { class: 'ghost', type: 'button', id: `${o.id}-free`, disabled: free === o.cur, onclick: () => { lineDraft = null; o.pick(free); } }, `空き番号（${free}）`),
+      h('button', { class: 'ghost' + (typing ? ' picked on' : ''), type: 'button', id: `${o.id}-type`, onclick: () => { lineDraft = typing ? null : { id: o.id, text: '' }; o.again(); } }, '番号を打つ')),
+    typing ? h('div', { class: 'linetype' },
+      h('p', { class: 'eq', id: `${o.id}-typed` }, typing.text ? `${typed} ${o.unit}` : `1 〜 ${LINE_MAX} の数字を打つ`),
+      h('div', { class: 'keys numpad' }, ...['7', '8', '9', '4', '5', '6', '1', '2', '3', '⌫', '0'].map((k) =>
+        h('button', { class: 'key ' + (k === '⌫' ? 'fn' : 'n'), type: 'button', id: `${o.id}-key-${k === '⌫' ? 'del' : k}`, onclick: () => { typing.text = k === '⌫' ? typing.text.slice(0, -1) : typing.text.length < 4 ? (typing.text + k).replace(/^0+/, '') : typing.text; o.again(); } }, k)),
+        h('button', { class: 'key fn', type: 'button', id: `${o.id}-ok`, disabled: !typed, onclick: () => { lineDraft = null; o.pick(typed); } }, '決定'))) : null,
+    h('div', { class: 'chips' }, ...list.map(chip)),
+    all > 40 ? h('p', { class: 'muted' }, `使われている番号は ${used.size} 個。いまの番号に近い 40 個を並べている。ほかの番号は、数字を打って選ぶ。`) : null);
+}
+
 // ---------------- 検知器・弁 ----------------
 
 export function showSignal(c: PanelCtx, e: Ent, extra: HTMLElement) {
@@ -484,11 +523,7 @@ export function showSignal(c: PanelCtx, e: Ent, extra: HTMLElement) {
     h('p', { class: 'status' }, `${e.ch} 番の信号は、いま${on ? '点いている' : '消えている'}。同じ番号の検知器 ${users.filter((n) => n.kind === 'sensor').length} 個、弁 ${users.filter((n) => n.kind === 'gate').length} 個。`),
     h('h3', {}, '① 信号の番号'),
     h('p', { class: 'muted' }, sensor ? 'この検知器が点ける信号。同じ番号の弁が、どれだけ離れていても動く。' : 'この弁を動かす信号。同じ番号の検知器が点ける。'),
-    h('div', { class: 'chips' }, ...Array.from({ length: SIGNALS }, (_, i) => {
-      const b = h('button', { class: 'chip plain line' + (e.ch === i + 1 ? ' on' : ''), type: 'button', id: `sg-ch-${i + 1}`, onclick: () => { e.ch = i + 1; sfx.tap(); again(); } }, `${i + 1} 番`);
-      b.style.setProperty('--line', LINE_COLORS[i]);
-      return b;
-    })),
+    linePicker({ id: 'sg-ch', unit: '番', cur: e.ch || 1, used: [...c.w.ents.values()].filter((n) => n.kind === 'sensor' || n.kind === 'gate').map((n) => n.ch || 1), pick: (n) => { e.ch = n; sfx.tap(); again(); }, again }),
     h('h3', {}, sensor ? '② 何を見張るか' : '② いつ通すか'),
     ...(sensor ? [
       h('div', { class: 'row' }, mode('jam', '詰まり（先が詰まって止まっている間、点く）')),
@@ -521,11 +556,7 @@ export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
     h('div', { class: 'row' }, role('in', '積む駅（ここから運び出す）'), role('out', '降ろす駅（ここへ届く）')),
     h('h3', {}, '② 路線番号'),
     h('p', { class: 'muted' }, '同じ番号の「積む駅」と「降ろす駅」が結ばれる。積む駅は、同じ番号のいちばん近い降ろす駅へ運ぶ。'),
-    h('div', { class: 'chips' }, ...Array.from({ length: LINES }, (_, i) => {
-      const b = h('button', { class: 'chip plain line' + (e.ch === i + 1 ? ' on' : ''), type: 'button', id: `st-line-${i + 1}`, onclick: () => { e.ch = i + 1; e.tr = undefined; e.xtr = undefined; sfx.tap(); again(); } }, `${i + 1} 番線`);
-      b.style.setProperty('--line', LINE_COLORS[i]);
-      return b;
-    })),
+    linePicker({ id: 'st-line', unit: '番線', cur: e.ch || 1, used: [...c.w.ents.values()].filter((n) => n.kind === 'station').map((n) => n.ch || 1), pick: (n) => { e.ch = n; e.tr = undefined; e.xtr = undefined; sfx.tap(); again(); }, again }),
     h('p', { class: 'status' }, e.role === 'in'
       ? (to && route ? `行き先：線路 ${Math.round(route.len)} マス先の降ろす駅（${route.custom ? '敷いた線路' : '自動の仮線路'}）。片道 約 ${(route.len / speedOn(route.custom)).toFixed(1)} 秒、1 編成 ${trainCap(c.w)} 個で、1 分あたり およそ ${Math.round(((e.cars || 1) * trainCap(c.w) * 60) / ((2 * route.len) / speedOn(route.custom) + 1))} 個まで運べる。${held ? `いま ${held} 編成が、前の列車を待って止まっている。幹線が混んでいる。` : ''}` : `${e.ch} 番線の「降ろす駅」がまだない。届け先に貨物駅を置き、同じ番線の「降ろす駅」にしろ。`)
       : `${e.ch} 番線の積む駅：${feeders} か所。届いたものは、正面の 2 つの口から出る。${(e.buf?.length ?? 0) >= stationCap(c.w) ? '満杯で、列車が降ろせずに待っている。出口にベルトをつなげ。' : ''}`),

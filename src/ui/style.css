@@ -267,6 +267,13 @@ b { font-weight: 700; }
 .bp-name:focus { outline: 2px solid var(--hi); }
 .bp .stack { flex: 1; min-width: 0; }
 .chip.line { box-shadow: inset 5px 0 0 var(--line); padding-left: 14px; }
+/* 番号の選び方：−／いまの番号／＋、空き番号、番号を打つ */
+.linepick .row { align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.linepick .line-now { min-width: 92px; text-align: center; font-size: 17px; cursor: default; }
+.linepick .chip-n { margin-left: 6px; font-size: 11px; opacity: 0.6; font-weight: 500; }
+.linepick .linetype { margin: 0 0 8px; }
+.linepick .linetype .numpad { max-width: 300px; }
+.linepick .chips { max-height: 132px; overflow-y: auto; }
 [data-skin="punk"] #tabs button { border-radius: 0; background: #1a1f25; color: var(--panel-soft); border-color: #000; }
 [data-skin="punk"] #tabs button.on { background: var(--hi); color: #14181d; box-shadow: none; border-color: #000; }
 [data-skin="punk"] #bar { background: transparent; border: 0; border-radius: 0; box-shadow: none; padding: 0; }

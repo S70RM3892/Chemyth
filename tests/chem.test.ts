@@ -1931,3 +1931,71 @@ describe('立体表示のカメラ', () => {
     expect(heightOf({ kind: 'extractor' } as never)).toBeLessThan(TOP_H);
   });
 });
+
+describe('路線番号と信号の番号は、8 までに限らない', () => {
+  it('信号：大きな番号でも点き、時間がたてば消え、ほかの番号には漏れない', async () => {
+    const { signalOn, LINE_MAX } = await import('../src/engine/world');
+    const w = newWorld();
+    for (const x of [10, 11]) place(w, 'belt', x, 10, 0);
+    place(w, 'sensor', 12, 10, 0); place(w, 'gate', 13, 10, 0); place(w, 'vent', 14, 10, 0);
+    Object.assign(at(w, 12, 10)!, { test: 'is:O2', ch: 4321 });
+    Object.assign(at(w, 13, 10)!, { test: 'on', ch: 4321 });
+    at(w, 10, 10)!.item = { s: 'O2', p: 0, m: 0 };
+    for (let i = 0; i < 120; i++) step(w, 1 / 60);
+    expect(signalOn(w, 4321)).toBe(true);
+    // 8 で割った余りが同じ番号（1 番）や、となりの番号は点かない
+    for (const n of [1, 4321 % 8, 4320, 4322, LINE_MAX]) expect(signalOn(w, n)).toBe(false);
+    // 同じ番号の弁が開いて、先へ流れる
+    for (let i = 0; i < 120; i++) step(w, 1 / 60);
+    expect(w.vented.O2).toBe(1);
+    for (let i = 0; i < 60 * 4; i++) step(w, 1 / 60);
+    expect(signalOn(w, 4321)).toBe(false);
+    // 消えた番号は片づく（番号を増やしても、毎回の計算は使っている分だけ）
+    expect(Object.keys(w.sig).length).toBe(0);
+  });
+  it('路線：大きな番号どうしが結ばれ、番号が違えば結ばれない。保存しても番号は残る', () => {
+    const w = newWorld();
+    place(w, 'station', 10, 10, 0); place(w, 'station', 10, 30, 0); place(w, 'station', 30, 10, 0);
+    const a = at(w, 10, 10)!, b = at(w, 10, 30)!, c = at(w, 30, 10)!;
+    Object.assign(a, { role: 'in', ch: 2500 }); Object.assign(b, { role: 'out', ch: 2500 }); Object.assign(c, { role: 'out', ch: 2501 });
+    expect(stationRoutes(w, a).map((r) => `${r.dest.x},${r.dest.y}`)).toEqual(['10,30']);
+    c.ch = 2500;
+    expect(stationRoutes(w, a).length).toBe(2);
+    const back = deserialize(serialize(w))!;
+    expect([...back.ents.values()].filter((e) => e.kind === 'station').map((e) => e.ch)).toEqual([2500, 2500, 2500]);
+  });
+  it('設計図：大きな番号も写せる。範囲の外の番号は捨てる', async () => {
+    const { LINE_MAX } = await import('../src/engine/world');
+    const { decodeBlueprint, encodeBlueprint } = await import('../src/engine/blueprint');
+    const stamp = (ch: number) => [{ kind: 'station' as const, dx: 0, dy: 0, dir: 0 as const, ch, role: 'in' as const }, { kind: 'sensor' as const, dx: 3, dy: 0, dir: 0 as const, ch, test: 'jam' }];
+    expect(decodeBlueprint(encodeBlueprint('番号', stamp(137)))!.stamps.map((s) => s.ch)).toEqual([137, 137]);
+    expect(decodeBlueprint(encodeBlueprint('番号', stamp(LINE_MAX)))!.stamps.map((s) => s.ch)).toEqual([LINE_MAX, LINE_MAX]);
+    expect(decodeBlueprint(encodeBlueprint('番号', stamp(LINE_MAX + 1)))!.stamps.map((s) => s.ch)).toEqual([undefined, undefined]);
+    expect(decodeBlueprint(encodeBlueprint('番号', stamp(2.5)))!.stamps.map((s) => s.ch)).toEqual([undefined, undefined]);
+  });
+  it('番号の直し方と、空き番号', async () => {
+    const { lineNo, freeLine, LINE_MAX } = await import('../src/engine/world');
+    expect([0, -3, 1, 8, 9, 12.9, LINE_MAX, LINE_MAX + 5, NaN].map(lineNo)).toEqual([1, 1, 1, 8, 9, 12, LINE_MAX, LINE_MAX, 1]);
+    expect(freeLine([])).toBe(1);
+    expect(freeLine([1, 2, 3, 5])).toBe(4);
+    expect(freeLine([2, 3])).toBe(1);
+    expect(freeLine(Array.from({ length: 300 }, (_, i) => i + 1))).toBe(301);
+  });
+  it('色：1〜8 番は決まった色のまま。9 番からも、番号ごとに決まった色で、近い番号どうしは見分けがつく', async () => {
+    const { lineColor, LINE_COLORS } = await import('../src/content/machines');
+    expect(Array.from({ length: 8 }, (_, i) => lineColor(i + 1))).toEqual(LINE_COLORS);
+    const rgb = (h: string) => [1, 3, 5].map((k) => parseInt(h.slice(k, k + 2), 16));
+    for (let n = 9; n <= 400; n++) {
+      const c = lineColor(n);
+      expect(c).toMatch(/^#[0-9a-f]{6}$/);
+      expect(lineColor(n)).toBe(c);
+      // となりの番号とは、はっきり違う色
+      const a = rgb(c), b = rgb(lineColor(n + 1));
+      expect(Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2])).toBeGreaterThan(60);
+      // 白にも黒にも寄りすぎない（明るい地でも暗い地でも見える）
+      const l = (a[0] * 299 + a[1] * 587 + a[2] * 114) / 1000;
+      expect(l).toBeGreaterThan(55); expect(l).toBeLessThan(205);
+    }
+    expect(lineColor(9999)).toMatch(/^#[0-9a-f]{6}$/);
+  });
+});

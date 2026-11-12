@@ -19,8 +19,16 @@ export interface MachineInfo {
   research?: string;
 }
 
-/** 貨物駅の路線の色（1〜8 番線） */
+/** 路線・信号の色。1〜8 番は決まった色 */
 export const LINE_COLORS = ['#d23f3a', '#2f6fc0', '#2f8f55', '#c9821a', '#7a4fb5', '#1f9a9a', '#b0457e', '#6b7280'];
+/** n 番の色。9 番からは、色相を黄金角（約 137.5°）ずつ回して作る。近い番号どうしが似た色にならず、同じ番号はいつも同じ色になる */
+export function lineColor(n: number): string {
+  if (n >= 1 && n <= LINE_COLORS.length) return LINE_COLORS[n - 1];
+  const hue = ((n - 9) * 137.508 + 20) % 360, sat = 0.58, lig = [0.5, 0.42, 0.58][n % 3];
+  const k = (i: number) => (i + hue / 30) % 12, a = sat * Math.min(lig, 1 - lig);
+  const f = (i: number) => Math.round(255 * (lig - a * Math.max(-1, Math.min(k(i) - 3, 9 - k(i), 1))));
+  return '#' + [f(0), f(8), f(4)].map((v) => v.toString(16).padStart(2, '0')).join('');
+}
 
 export const MACHINES: Record<Exclude<Kind, 'hub' | 'part'>, MachineInfo> = {
   belt: {

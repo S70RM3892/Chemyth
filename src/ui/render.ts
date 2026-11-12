@@ -1,6 +1,6 @@
 import { ZONES, hubRect, isSea, resourceAt, zoneAt, zoneSpots, type Zone } from '../content/map';
 import { ELEMENTS } from '../content/elements';
-import { LINE_COLORS, MACHINES } from '../content/machines';
+import { lineColor, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
 import { heightOf, TOP_H } from './three';
 import { at, FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
@@ -783,7 +783,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
         if (reactionLookById(e.recipe)?.heat) { glow(mcx, mcy + z * sz * 0.38, z * sz * 0.75, '255,130,40', 0.38); heat(mcx, mcy - z * sz * 0.55, z * sz * 0.85, 0.85); }
       }
       if (e.kind === 'vent') { glow(mcx, mcy - z * 0.05, z * 0.5, '255,120,50', 0.22); heat(mcx, mcy - z * 0.7, z * 0.6, 0.5); }
-      else if (e.kind === 'sensor' && (SIG[e.ch || 1] || 0) > 0) glow(mcx, mcy, z * 0.8, hexRgb(LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length]), 0.7);
+      else if (e.kind === 'sensor' && (SIG[e.ch || 1] || 0) > 0) glow(mcx, mcy, z * 0.8, hexRgb(lineColor(e.ch || 1)), 0.7);
       else if (e.kind === 'tank' && (e.cnt || 0) + (e.rcn || 0) > 0 && e.sub) glow(mcx, mcy, z * 0.9, hexRgb(hexOf(e.sub)), 0.22);
     }
     // 習熟メッキ：その反応を、間隔を空けた復習で覚えているほど、縁が銅 → 銀 → 金になる。まちがえると剥がれる
@@ -922,7 +922,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       if (e.kind !== 'station' || e.role !== 'in') continue;
       const routes = stationRoutes(w, e);
       if (!routes.length) continue;
-      const col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length];
+      const col = lineColor(e.ch || 1);
       const screen = routes.map((r) => ({ r, xs: r.pts.map((q) => sx(q[0])), ys: r.pts.map((q) => sy(q[1])) }));
       ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
       for (const { r, xs, ys } of screen) {
@@ -1575,6 +1575,13 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
   const info = MACHINES[e.kind as keyof typeof MACHINES];
   const disc = (x: number, y: number, r: number) => { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); };
   const inked = (fill: string) => { ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = P.ink; ctx.lineWidth = line; ctx.stroke(); };
+  /** 信号の番号の小さな札（色が似ていても、番号で見分けられるように） */
+  const chNo = (n: number, x: number, y: number) => {
+    const tx = String(n), fs = u * 0.13, wd = fs * (0.62 * tx.length + 0.5);
+    rr(ctx, x - wd / 2, y - fs * 0.62, wd, fs * 1.24, fs * 0.3); ctx.fillStyle = P.plate; ctx.fill(); ctx.strokeStyle = P.ink; ctx.lineWidth = line * 0.5; ctx.stroke();
+    ctx.fillStyle = P.ink; ctx.font = `700 ${fs}px ${FONT_MONO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(tx, x, y + fs * 0.04); ctx.textBaseline = 'alphabetic';
+  };
   const busy = !!e.busy;
   // 反応を設定した装置は、その反応の様子を描く（中身の色、気体、沈殿、加熱、電極での変化）
   if (e.sealed) {
@@ -1698,13 +1705,15 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
     }
     case 'station': {
       // 駅舎：路線色の屋根に番線の数字。積む駅は上向き、降ろす駅は下向きの矢じり
-      const col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length], out = e.role === 'out';
+      const col = lineColor(e.ch || 1), out = e.role === 'out';
       rr(ctx, cx - u * 0.3, cy - u * 0.22, u * 0.6, u * 0.44, u * 0.05); inked(col);
       ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = line * 0.6;
       for (const k of [-0.1, 0.1]) { ctx.beginPath(); ctx.moveTo(cx - u * 0.3, cy + u * k); ctx.lineTo(cx + u * 0.3, cy + u * k); ctx.stroke(); }
       disc(cx, cy, u * 0.14); inked('#f3f1e8');
-      ctx.fillStyle = '#14181d'; ctx.font = `700 ${u * 0.18}px ${FONT_MONO}`; ctx.textAlign = 'center';
-      ctx.fillText(String(e.ch || 1), cx, cy + u * 0.01);
+      // 桁が増えたら、丸に収まるように字を小さくする
+      const no = String(e.ch || 1);
+      ctx.fillStyle = '#14181d'; ctx.font = `700 ${u * [0.18, 0.18, 0.15, 0.11, 0.088][no.length]}px ${FONT_MONO}`; ctx.textAlign = 'center';
+      ctx.fillText(no, cx, cy + u * 0.01);
       ctx.fillStyle = P.ink;
       ctx.beginPath();
       if (out) { ctx.moveTo(cx - u * 0.08, cy + u * 0.27); ctx.lineTo(cx + u * 0.08, cy + u * 0.27); ctx.lineTo(cx, cy + u * 0.36); }
@@ -1815,16 +1824,17 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
     }
     case 'sensor': {
       // 検知器：信号の色の灯り。点いているときは明るく、まわりに輪が出る
-      const on = (SIG[e.ch || 1] || 0) > 0, col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length];
+      const on = (SIG[e.ch || 1] || 0) > 0, col = lineColor(e.ch || 1);
       rr(ctx, cx - u * 0.27, cy - u * 0.2, u * 0.54, u * 0.4, u * 0.08); inked(P.plate);
       if (e.item) ctx.drawImage(sprite(e.item.s), cx - u * 0.02, cy - u * 0.16, u * 0.32, u * 0.32);
       disc(cx - u * 0.13, cy, u * 0.1); inked(on ? col : mix(col, '#20242a', 0.7));
       if (on) { ctx.strokeStyle = col; ctx.lineWidth = line * 0.8; disc(cx - u * 0.13, cy, u * (0.15 + 0.03 * Math.sin(t * 9))); ctx.stroke(); }
+      chNo(e.ch || 1, cx + u * 0.13, cy + u * 0.3);
       break;
     }
     case 'gate': {
       // 弁：開いているときは板が開き、閉じているときは流れをふさぐ
-      const open = ((SIG[e.ch || 1] || 0) > 0) === (e.test !== 'off'), col = LINE_COLORS[((e.ch || 1) - 1) % LINE_COLORS.length];
+      const open = ((SIG[e.ch || 1] || 0) > 0) === (e.test !== 'off'), col = lineColor(e.ch || 1);
       disc(cx, cy, u * 0.26); inked(P.plate);
       if (e.item) ctx.drawImage(sprite(e.item.s), cx - u * 0.17, cy - u * 0.17, u * 0.34, u * 0.34);
       ctx.save();
@@ -1833,6 +1843,7 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
       rr(ctx, -u * 0.3, -u * 0.055, u * 0.6, u * 0.11, u * 0.03); ctx.fill(); ctx.stroke();
       ctx.restore();
       disc(cx, cy, u * 0.06); inked(col);
+      chNo(e.ch || 1, cx + u * 0.16, cy + u * 0.3);
       break;
     }
     case 'lift': {
