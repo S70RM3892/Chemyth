@@ -1324,12 +1324,15 @@ function boot(data: HotData) {
     const ax = scr[0];
     // 稼働率の札を出しているときは、札の上に出す
     const ay = scr[1] - 14 - (overlay && !hub ? 26 : 0);
-    act.style.transform = `translate(${Math.round(Math.min(cw - 110, Math.max(110, ax)))}px, ${Math.round(Math.max(64, ay))}px) translate(-50%, -100%)`;
+    // 帯の幅は、選んだものと「ボタンを大きく」で変わる（隣に・‖・⇄ も入る）。測った幅で、両端が画面の内に入るように寄せる
+    const inX = (el: HTMLElement) => { const half = el.offsetWidth / 2 + 8; return Math.round(Math.min(Math.max(half, ax), Math.max(cw / 2, cw - half))); };
+    const ah = act.offsetHeight, by = Math.round(Math.max(64, ah + 8, ay));
+    act.style.transform = `translate(${inX(act)}px, ${by}px) translate(-50%, -100%)`;
     const note = hub ? '' : b2.note(selected, statusOf(selected));
     actNote.hidden = !note;
     if (note) {
       if (actNote.textContent !== note) actNote.textContent = note;
-      actNote.style.transform = `translate(${Math.round(Math.min(cw - 110, Math.max(110, ax)))}px, ${Math.round(Math.max(64, ay) - 58)}px) translate(-50%, -100%)`;
+      actNote.style.transform = `translate(${inX(actNote)}px, ${by - ah - 6}px) translate(-50%, -100%)`;
     }
   };
 
