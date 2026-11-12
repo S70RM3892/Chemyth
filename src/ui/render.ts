@@ -28,7 +28,8 @@ export interface View { /** 夕暮れ（実際の時刻。0 昼〜1 夜） */ du
   /** 見本を持ち上げて見せる（ずらしている最中） */ lift?: boolean;
   /** 選んだ設備の出口と入口（d は物が流れる向き） */ ports?: { x: number; y: number; d: number; out: boolean }[] | null;
   /** 選んだ装置と同じ反応の装置（印をつける） */ marks?: Ent[] | null;
-  /** 反応式の札を、うんと近づかなくても出す */ allPlates?: boolean }
+  /** 反応式の札を、うんと近づかなくても出す */ allPlates?: boolean;
+  /** 上に重ねて描くもの（src/ui/build2.ts）。base は地面の層、top は天面の層（平らな表示では同じ） */ over?: (base: CanvasRenderingContext2D, top: CanvasRenderingContext2D, sx: (x: number) => number, sy: (y: number) => number, z: number, t: number, view: View) => void }
 
 // 方眼ノートに描いた工場の図面。輪郭線と斜線で描き、ぼかしや発光は使わない
 let FONT_HAND = '"Klee One", sans-serif';
@@ -1429,6 +1430,8 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.strokeRect(sx(ax0), sy(ay0), (ax1 - ax0 + 1) * z, (ay1 - ay0 + 1) * z);
     ctx.setLineDash([]);
   }
+  // ---- 組み立ての道具が重ねて描くもの（名前・旗・一時停止・つながりの印・道の見本） ----
+  view.over?.(base, T ?? base, sx, sy, z, t, view);
 
   // （立体表示では、札は天面の層に描く。地面に描くと、手前の設備の箱に隠れたり、持ち上がったりする）
   if (T) use(T);

@@ -38,15 +38,16 @@ import { conflictSlots, flushAccount, initAccount, onAccountChange, syncState } 
 import { applySkin, applyTheme } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
 import { drawToken, elementIcon } from './ui/token';
+import { initBuild2 } from './ui/build2';
 
 type Placeable = Exclude<Kind, 'hub' | 'part'>;
-type Tool = 'pan' | 'erase' | 'area' | 'rail' | Placeable;
+type Tool = 'pan' | 'erase' | 'area' | 'rail' | 'route' | Placeable;
 /** 範囲コピーした設計図。左上からのずれで持つ */
 type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir } | { t: 'rails'; snap: [string, number | undefined][] } | { t: 'ch'; x: number; y: number; ch: number };
 const BUILD: Placeable[] = ['belt', 'bridge', 'tunnel', 'lift', 'splitter', 'analyzer', 'sensor', 'gate', 'station', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'settler', 'funnel', 'phoresis', 'sampler', 'depot', 'tank', 'vent'];
 /** 道具の分類。道具が多いので、棚を分けて出す */
 const GROUPS: { id: string; name: string; tools: Tool[] }[] = [
-  { id: 'move', name: '運ぶ', tools: ['pan', 'belt', 'bridge', 'tunnel', 'lift', 'splitter', 'analyzer', 'sensor', 'gate', 'station', 'rail'] },
+  { id: 'move', name: '運ぶ', tools: ['pan', 'belt', 'route', 'bridge', 'tunnel', 'lift', 'splitter', 'analyzer', 'sensor', 'gate', 'station', 'rail'] },
   { id: 'make', name: '作る', tools: ['extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'settler', 'funnel', 'phoresis'] },
   { id: 'store', name: '出し入れ', tools: ['sampler', 'depot', 'tank', 'vent'] },
   { id: 'edit', name: '編集', tools: ['area', 'erase'] },
@@ -59,6 +60,7 @@ const TOOLS: { id: Tool; glyph: string; name: string; tip: string; color?: strin
   { id: 'pan', glyph: '☝', name: '見る', need: {}, tip: 'タップで選ぶ。装置やベルトから指を引くとベルトが伸びる。何もない所を引くと地図が動く。' },
   ...BUILD.map((id) => ({ id, glyph: MACHINES[id].glyph, name: MACHINES[id].name, tip: MACHINES[id].tip, color: MACHINES[id].color, need: MACHINES[id] })),
   { id: 'rail', glyph: '線', name: '線路', need: { done: 3 }, color: '#8a5a2c', tip: '駅か、敷いてある線路から指でなぞると、線路が伸びる。積む駅と降ろす駅がつながると、列車はそこを走る（仮の線路の 1.5 倍の速さ）。線路はどの駅も共有でき、途中で枝分かれさせてよい。' },
+  { id: 'route', glyph: '道', name: '自動ベルト', need: {}, color: '#5b7a3a', tip: '始まりと終わりをタップすると、空いたマスを通る最短の道にベルトを敷く。始まりに装置を選べばその出口から、終わりに装置を選べばそこへ流し込む向きで敷く。まっすぐのベルトは立体交差で横切る。' },
   { id: 'area', glyph: '▭', name: '範囲', need: {}, color: '#4a5a78', tip: '指でなぞって四角く囲む。囲んだ設備をまとめてコピーして別の場所に貼りつけたり、まとめて消したりできる。ラインを丸ごと増設するのに使う。' },
   { id: 'erase', glyph: '✕', name: '消す', need: {}, color: '#b0453f', tip: 'タップするか、なぞると消える。間違えたら右上の「元に戻す」。' },
 ];
@@ -257,11 +259,13 @@ function boot(data: HotData) {
   };
   const clearUndo = () => { undo.length = 0; redo.length = 0; group = null; paintUndo(); };
   const doPlace = (kind: Placeable, x: number, y: number, dir: Dir): string | null => {
+    if (b2.locked()) return b2.LOCKED;
     const err = place(world, kind, x, y, dir);
     if (!err) { record({ t: 'add', x, y }); const e = at(world, x, y); if (e) burst(e.x, e.y, sizeOf(e), 'place'); if (kind !== 'belt') buzz(8); }
     return err;
   };
   const doErase = (x: number, y: number): boolean => {
+    if (b2.locked()) { b2.lockNote(); return false; }
     const e = at(world, x, y);
     if (!e && world.rails.has(`${x},${y}`)) {
       // 何も建っていないマスの線路を取り除く
@@ -281,6 +285,7 @@ function boot(data: HotData) {
   };
   const doTurn = (e: Ent, dir: Dir) => {
     if (e.dir === dir) return;
+    if (b2.locked()) { b2.lockNote(); return; }
     record({ t: 'dir', x: e.x, y: e.y, dir: e.dir });
     e.dir = dir;
   };
@@ -290,6 +295,7 @@ function boot(data: HotData) {
    */
   const doMove = (es: Ent[], dx: number, dy: number, quiet = false, rect?: [number, number, number, number] | null): boolean => {
     group = null;
+    if (b2.locked()) { if (!quiet) b2.lockNote(); return false; }
     const r = moveEnts(world, es, dx, dy);
     if (!r.ok) { if (!quiet) { toast(r.why, 2200); sfx.bad(); buzz(30); } return false; }
     if (!r.added.length) return true;
@@ -331,12 +337,14 @@ function boot(data: HotData) {
     return inv;
   };
   const doUndo = () => {
+    if (b2.locked()) { b2.lockNote(); return; }
     const g = undo.pop();
     group = null;
     if (g) { selected = null; redo.push(applyOps(g)); toast(`ひとつ前に戻した（${describe(g)}）`, 1400); }
     paintUndo();
   };
   const doRedo = () => {
+    if (b2.locked()) { b2.lockNote(); return; }
     const g = redo.pop();
     group = null;
     if (g) { selected = null; undo.push(applyOps(g)); toast('やり直した', 1200); }
@@ -354,7 +362,9 @@ function boot(data: HotData) {
     toast,
     stamp,
     rotate: (e: Ent) => { group = null; doTurn(e, ((e.dir + 1) % 4) as Dir); },
-    erase: (e: Ent) => { group = null; doErase(e.x, e.y); sfx.erase(); },
+    // 中に物をためた装置は、確かめてから消す
+    erase: (e: Ent) => b2.askErase(e, () => { group = null; if (doErase(e.x, e.y)) sfx.erase(); group = null; }),
+    memo: (e: Ent) => b2.memoRow(e),
   };
   const panel = (): PanelCtx => ({ w: world, show: showSheet, close: closeModal, toast, sheet, actions: sheetActions });
   const statsBtn = $('b-stats');
@@ -375,6 +385,7 @@ function boot(data: HotData) {
       diagram(e),
       h('button', { class: 'ghost', type: 'button', id: 'info-rotate', onclick: () => { sheetActions.rotate(e); paint(); } }, '↻ 向きを変える'),
       h('button', { class: 'ghost warn', type: 'button', id: 'info-erase', onclick: () => { sheetActions.erase(e); closeModal(); } }, '✕ これを消す'),
+      b2.memoRow(e) ?? '',
     );
     paint();
     return side;
@@ -496,7 +507,8 @@ function boot(data: HotData) {
   /** キーと指の操作の一覧 */
   const KEYS: [string, string][] = [
     ['矢印・W A S D', '地図を動かす'], ['+ / −', '拡大・縮小'], ['0', '全体を見る'], ['H', '納品所へ'], ['K・L', '覚えた場所 1・2 へ（Shift を押しながらで、いまの場所を覚える）'],
-    ['V・B・X・G・T', '見る・ベルト・撤去・範囲・線路'], ['Q', '直前の道具に戻る'], ['R', '選んだものを回す（設備の道具なら、置く向きを回す）'],
+    ['V・B・X・G・T・U', '見る・ベルト・撤去・範囲・線路・自動ベルト'], ['Q', '直前の道具に戻る'], ['R', '選んだものを回す（設備の道具なら置く向き、範囲なら囲んだものを回す）'],
+    ['Ctrl + D', '選んだ設備を、同じ設定で隣に複製（正面がふさがっていれば横）'], ['.', '最後に置いたものを、同じ向きでもう一度（マウスの下に置く）'],
     ['Shift + 矢印', '選んだもの（範囲選択なら囲んだもの）を 1 マスずらす'], ['Delete', '選んだものを消す'], ['Esc', 'やめる・選択を外す・窓を閉じる'],
     ['Space', '一時停止・再開'], ['F', '速さを切り替える'], ['J', '稼働率と詰まりを地図に重ねる'], ['M', '小地図を出す・隠す'], ['P', '画面写真を保存'], ['N', '通知の履歴'],
     ['Ctrl + Z / Ctrl + Y', '元に戻す・やり直す'], ['Ctrl + C', '選んだ設備・囲んだものをコピー'], ['Ctrl + S', 'いますぐ保存'],
@@ -506,6 +518,7 @@ function boot(data: HotData) {
     ['長押し → そのまま動かす', '「見る」のとき、置いたものをつかんでずらす（設備の道具なら、置く場所を選ぶ）'], ['⇲（選んだものの帯）', '押してから行き先をタップすると、そこへずらす'],
     ['範囲の中から引く', '囲んだものをまとめてずらす（中の線路も一緒に）'], ['2 本指で軽くたたく', '元に戻す'], ['3 本指で軽くたたく', 'やり直す'], ['ダブルタップ', 'その場所へ寄る'],
     ['なぞって画面の端へ', '地図が自動で送られる（ベルト・ずらす・範囲選択）'], ['通知を押す', '通知を消す'], ['場所1・場所2 を長押し', 'いまの場所を覚える'],
+    ['道具を長押し', '★ をつける（★ の棚に並ぶ）。もう一度長押しで外す'], ['設備の道具で、置けない所を長押し', '置けない理由が出る'],
   ];
   const showKeys = () => showSheet(
     h('header', {}, h('h2', {}, 'キーと指の操作'), closeBtn()),
@@ -634,7 +647,8 @@ function boot(data: HotData) {
       row('復習の札の位置', '', seg<'left' | 'right'>('p-side', p.cardSide, [['left', '左'], ['right', '右']], (v) => setPrefs({ cardSide: v }))),
       row('休憩の知らせ', '続けて遊んだ時間で知らせる。', seg<0 | 25 | 50>('p-break', p.breakMin, [[25, '25 分'], [50, '50 分'], [0, 'なし']], (v) => setPrefs({ breakMin: v }))),
       row('放置で省電力', '5 分さわらなければ、描く回数を減らして電池をもたせる（工場は動き続ける）。', onoff('p-saver', p.saver, 'saver')),
-      row('小地図の大きさ', '', seg('p-mini', p.miniBig, [[false, '小'], [true, '大']], (v) => { setPrefs({ miniBig: v }); window.setTimeout(paintMini, 30); })));
+      row('小地図の大きさ', '', seg('p-mini', p.miniBig, [[false, '小'], [true, '大']], (v) => { setPrefs({ miniBig: v }); window.setTimeout(paintMini, 30); })),
+      ...b2.prefRows(showPrefs));
   };
 
   const showMenu = () => {
@@ -646,6 +660,7 @@ function boot(data: HotData) {
         item('m-chapters', '指令の一覧（章を切り替える）', () => showChapters(panel())),
         item('m-stats', '統計（納品の速さ・装置の稼働率・学習の進み）', () => showStats(statsCtx())),
         item('m-where', 'どこで作っている？（物質から装置を探す）', () => showWhere()),
+        ...b2.menuItems(item),
         item('m-album', 'アルバム（達成した瞬間の工場の写真）', () => showAlbum())),
       h('h3', {}, '京大形式の演習'),
       h('div', { class: 'menu' },
@@ -969,7 +984,7 @@ function boot(data: HotData) {
   // ---- キーボード（一覧は「?」キーか、遊び方の「キーと指の操作」） ----
   /** 直前の道具（Q で戻る） */
   let prevTool: Tool = 'pan', lastSpeed = 1;
-  const KEY_TOOLS: Record<string, Tool> = { v: 'pan', b: 'belt', x: 'erase', g: 'area', t: 'rail' };
+  const KEY_TOOLS: Record<string, Tool> = { v: 'pan', b: 'belt', x: 'erase', g: 'area', t: 'rail', u: 'route' };
   const zoomBy = (f: number) => { const base = camTo ?? cam; camTo = { x: base.x, y: base.y, z: Math.min(Z_MAX, Math.max(Z_MIN, base.z * f)) }; };
   const togglePause = () => { if (speed === 0) speed = lastSpeed || 1; else { lastSpeed = speed; speed = 0; } paintSpeed(); sfx.tap(); };
   document.addEventListener('keydown', (ev) => {
@@ -987,6 +1002,7 @@ function boot(data: HotData) {
       else if (low === 's') { ev.preventDefault(); save(); saveCam(); toast(savedAt ? '保存した。' : '保存できなかった。', 1200); }
       else if (low === 'c' && selected && copyable(selected)) { ev.preventDefault(); actCopy.click(); }
       else if (low === 'c' && tool === 'area' && !blueprint && inArea().length) { ev.preventDefault(); $('area-copy').click(); }
+      else if (low === 'd' && selected) { ev.preventDefault(); b2.dup(); }
       return;
     }
     if (ev.altKey) return;
@@ -1009,6 +1025,7 @@ function boot(data: HotData) {
     }
     switch (low) {
       case 'Escape':
+        if (b2.esc()) break;
         if (moveArm) { moveArm = null; app.classList.remove('arming'); toast('ずらすのをやめた。', 1000); }
         else if (moving) moving = null;
         else if (clone) { clone = null; pick('pan'); toast('コピーをやめた。', 1000); }
@@ -1025,6 +1042,7 @@ function boot(data: HotData) {
       case 'r':
         if (selected && selected.kind !== 'hub') { sheetActions.rotate(selected); sfx.tap(); }
         else if (tool === 'area' && blueprint) $('area-rot').click();
+        else if (tool === 'area' && inArea().length) b2.rotArea();
         else if (isBuild(tool)) { placeDir = placeDir === null ? 0 : (((placeDir + 1) % 4) as Dir); paintOpts(); toast(`置く向き：${ARROWS[placeDir]}`, 900); }
         break;
       case ' ': ev.preventDefault(); togglePause(); break;
@@ -1040,6 +1058,7 @@ function boot(data: HotData) {
       case 'p': shot(); break;
       case 'n': showNotes(); break;
       case '?': case '/': showKeys(); break;
+      case '.': b2.again(); break;
       default: { const t = KEY_TOOLS[low]; if (t && !buttons.get(t)?.hidden) { pick(t); sfx.tap(); } }
     }
   });
@@ -1072,16 +1091,39 @@ function boot(data: HotData) {
   }
   $('mini-size').onclick = () => { setPrefs({ miniBig: !prefs().miniBig }); sfx.tap(); window.setTimeout(paintMini, 30); };
 
+  // ---- 組み立ての道具（自動ベルト・回す・鏡・隣に複製・一時停止・ロック・旗・名前・つなぎ忘れ など）：src/ui/build2.ts ----
+  const b2 = initBuild2({
+    app, cam, world: () => world, slot: () => slot, floor: () => floor, tool: () => tool, pick: (t) => pick(t as Tool),
+    placeDir: () => placeDir, setPlaceDir: (d) => { placeDir = d; paintOpts(); }, placeAt: (x, y) => placeAt(x, y),
+    selected: () => selected, select: (e) => { selected = e; }, hover: () => hover, toast,
+    place: (k, x, y, d) => doPlace(k as Placeable, x, y, d), erase: doErase, turn: doTurn, cut: () => { group = null; },
+    recordMove: (removed, added, snap) => {
+      group = null;
+      for (const e of removed) record({ t: 'del', ent: e });
+      for (const e of added) record({ t: 'add', x: e.x, y: e.y });
+      if (snap.length) record({ t: 'rails', snap });
+      group = null;
+      if (selected && removed.includes(selected)) selected = added[removed.indexOf(selected)];
+      for (const e of added) burst(e.x, e.y, sizeOf(e), 'move');
+    },
+    save, focus: (e) => statsCtx().focus(e), goTo: (x, y) => { setFloor(floorOf(y)); camTo = { x, y: groundY(y), z: Math.max(cam.z, nearZoom()) }; },
+    show: showSheet, closeBtn, close: closeModal, zoom: (f) => zoomBy(f),
+    clone: () => clone, cancelClone: () => { clone = null; pick('pan'); toast('コピーをやめた。', 1000); },
+    blueprint: () => blueprint, setBlueprint: (bp) => { blueprint = bp; }, areaRect: () => areaRect(), setArea: (r) => { areaA = r ? [r[0], r[1]] : null; areaB = r ? [r[2], r[3]] : null; }, inArea: () => inArea(), paintArea: () => paintArea(),
+    setTab: (id) => { tab = id; paintTabs(); },
+  });
+
   // ---- 道具バー ----
   const bar = $('tools'), tip = $('tip');
   const buttons = new Map<Tool, HTMLButtonElement>();
   const pick = (id: Tool, keepClone = false) => {
+    if (!b2.canPick(id)) return;
     if (id !== tool) prevTool = tool;
     tool = id;
     if (!keepClone) clone = null;
     if (id !== 'area') { blueprint = null; ghost = null; areaA = areaB = null; }
     const grp = GROUPS.find((g) => g.tools.includes(id));
-    if (grp) { tab = grp.id; paintTabs(); }
+    if (grp && !b2.keepTab(tab, id)) { tab = grp.id; paintTabs(); }
     paintArea();
     const t = TOOLS.find((x) => x.id === id)!;
     for (const [k, el] of buttons) { el.classList.toggle('on', k === tool); el.setAttribute('aria-pressed', String(k === tool)); }
@@ -1092,12 +1134,13 @@ function boot(data: HotData) {
     tipTimer = window.setTimeout(() => { tip.hidden = true; }, clone ? 9000 : 5200);
     paintOpts();
     paintFold();
+    b2.picked(id);
   };
   let tipTimer = 0;
   /** 道具ごとの切り替え（棚の右端）：ベルトは引く本数、設備は置く向き */
   const optsEl = $('opts');
   const ARROWS = ['→', '↓', '←', '↑'];
-  const isBuild = (t: Tool): t is Placeable => t !== 'pan' && t !== 'erase' && t !== 'area' && t !== 'rail';
+  const isBuild = (t: Tool): t is Placeable => t !== 'pan' && t !== 'erase' && t !== 'area' && t !== 'rail' && t !== 'route';
   const paintOpts = () => {
     const nodes: HTMLElement[] = [];
     if (tool === 'belt') {
@@ -1115,7 +1158,9 @@ function boot(data: HotData) {
     if (t.color) b.style.setProperty('--tint', t.color);
     buttons.set(t.id, b);
     bar.append(b);
+    b2.toolButton(b, t.id);
   }
+  buttons.get('belt')!.after(buttons.get('route')!); // 自動ベルトは、ベルトの隣に
   // 道具の棚：分類ごとに切り替える
   // 最後に開いていた棚を覚えておく（次に開いたときも同じ棚から）
   let tab = GROUPS.some((g) => g.id === store.meta().tab) ? store.meta().tab! : 'move';
@@ -1126,6 +1171,7 @@ function boot(data: HotData) {
       $(`tab-${g.id}`).classList.toggle('on', g.id === tab);
       for (const id of g.tools) buttons.get(id)?.classList.toggle('off', g.id !== tab);
     }
+    b2.paintTabs(tab);
   }
   paintTabs();
   /** 指令が進むと使える道具が増える */
@@ -1185,6 +1231,7 @@ function boot(data: HotData) {
     actTurn.hidden = actErase.hidden = hub;
     ($('act-move') as HTMLButtonElement).hidden = hub;
     actCopy.hidden = !copyable(selected);
+    b2.paintAct(selected);
     act.hidden = false;
     const hr = hubRect(world.hubSize);
     const wx = hub ? hr.x + hr.s / 2 : selected.x + sizeOf(selected) / 2, wy = hub ? hr.y : groundY(selected.y);
@@ -1194,7 +1241,7 @@ function boot(data: HotData) {
     // 稼働率の札を出しているときは、札の上に出す
     const ay = scr[1] - 14 - (overlay && !hub ? 26 : 0);
     act.style.transform = `translate(${Math.round(Math.min(cw - 110, Math.max(110, ax)))}px, ${Math.round(Math.max(64, ay))}px) translate(-50%, -100%)`;
-    const note = hub ? '' : statusOf(selected);
+    const note = hub ? '' : b2.note(selected, statusOf(selected));
     actNote.hidden = !note;
     if (note) {
       if (actNote.textContent !== note) actNote.textContent = note;
@@ -1222,6 +1269,7 @@ function boot(data: HotData) {
     const err = doPlace(tool, px, py, dir);
     if (err) { toast(err); sfx.bad(); return; }
     sfx.place();
+    b2.lastPlaced(tool, dir);
     const placed = at(world, px, py)!;
     if (clone && clone.kind === tool) {
       // 複製：設定を写す
@@ -1310,17 +1358,22 @@ function boot(data: HotData) {
     groundMode: () => !!moving,
     undo: () => { if (modal.hidden) doUndo(); },
     redo: () => { if (modal.hidden) doRedo(); },
-    begin: () => { group = null; camTo = null; cross = null; railsLaid = 0; beltRun = 0; tip.hidden = true; lanePath = []; laneLaid.clear(); holding = false; },
+    begin: () => { group = null; camTo = null; cross = null; railsLaid = 0; beltRun = 0; tip.hidden = true; lanePath = []; laneLaid.clear(); holding = false; b2.strokeStart(); },
     // 設備の道具で空いたマスを押し続けると、見本が出て、指で場所を選べる。離すと置く
     hold(x, y, g) {
+      if (b2.locked()) return false;
       // 「見る」のとき、置いたものを長押しすると、つかんでずらせる（移す量は、指の下の地面のマスで測る）
       const held = at(world, x, y);
       if (tool === 'pan' && held && held.kind !== 'hub') { moving = { es: [held], gx: g ? g[0] : x, gy: g ? g[1] : y, dx: 0, dy: 0, area: false }; selected = held; sfx.tap(); buzz(15); return true; }
-      if (!isBuild(tool) || tool === 'belt' || at(world, x, y)) return false;
-      holding = true; hover = [x, y]; sfx.tap();
+      if (!isBuild(tool) || tool === 'belt') return false;
+      // 置けない所を長押ししたら、理由を知らせる（空いていても置けなければ、見本は赤く出る）
+      if (at(world, x, y)) { b2.whyNot(tool, x, y); return false; }
+      holding = true; hover = [x, y];
+      if (!b2.whyNot(tool, x, y)) sfx.tap();
       return true;
     },
     end() {
+      b2.strokeEnd();
       if (tool === 'rail' && railsLaid) {
         // 敷き終えた：つながった駅があれば知らせる
         const linked = [...world.ents.values()].filter((e) => e.kind === 'station' && e.role === 'in' && stationRoutes(world, e).some((r) => r.custom)).length;
@@ -1338,9 +1391,10 @@ function boot(data: HotData) {
       const hv = hover;
       hover = null;
       if (hv && !at(world, hv[0], hv[1])) placeAt(hv[0], hv[1]);
+      else if (hv) b2.whyNot(tool, hv[0], hv[1]);
     },
     hover(t) { if (!holding) hover = t; cv.classList.toggle('over-ent', !!t && tool === 'pan' && !!at(world, t[0], t[1])); },
-    mode: (x, y) => (tool === 'rail' ? (!floor && railStart(x, y) ? 'stroke' : 'pan') : tool === 'area' ? (blueprint ? 'pan' : 'stroke') : tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y)) ? 'stroke' : 'pan'),
+    mode: (x, y) => (b2.locked() ? 'pan' : tool === 'rail' ? (!floor && railStart(x, y) ? 'stroke' : 'pan') : tool === 'area' ? (blueprint ? 'pan' : 'stroke') : tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y)) ? 'stroke' : 'pan'),
     tap(x, y) {
       // 「ずらす」を押したあとのタップ：その場所へ（2×2 の装置は、タップしたマスが左上になる）
       if (moveArm) {
@@ -1349,6 +1403,7 @@ function boot(data: HotData) {
         if (at(world, x, y) !== e) doMove([e], x - e.x, y - e.y);
         return;
       }
+      if (tool === 'route') { b2.routeTap(x, y); return; }
       if (tool === 'rail') {
         const e = at(world, x, y), m = world.rails.get(`${x},${y}`) || 0;
         if (e?.kind === 'station') inspect(e);
@@ -1357,7 +1412,7 @@ function boot(data: HotData) {
       }
       if (tool === 'area') { if (blueprint) { ghost = [x, y]; sfx.tap(); } else areaA = areaB = null; paintArea(); return; }
       const e = at(world, x, y);
-      if (tool === 'erase') { if (e?.kind === 'hub') toast('納品所は消せない'); else if (doErase(x, y)) sfx.erase(); else toast('ここには何もない', 1200); return; }
+      if (tool === 'erase') { if (e?.kind === 'hub') toast('納品所は消せない'); else if (e && b2.stocked(e)) sheetActions.erase(e); else if (doErase(x, y)) sfx.erase(); else toast('ここには何もない', 1200); return; }
       if (e) {
         if (selected === e) inspect(e);
         else { selected = e; sfx.tap(); }
@@ -1380,7 +1435,8 @@ function boot(data: HotData) {
         return;
       }
       if (tool === 'area') { if (!prev || !areaA) areaA = [x, y]; areaB = [x, y]; paintArea(); return; }
-      if (tool === 'erase') { doErase(x, y); return; }
+      if (tool === 'erase') { if (!b2.skipStocked(at(world, x, y))) doErase(x, y); return; }
+      b2.strokeAt(x, y);
       if (tool === 'belt' && lanes > 1) { laneStroke(x, y, prev); return; }
       if (prev) {
         const nd = (x > prev[0] ? 0 : x < prev[0] ? 2 : y > prev[1] ? 1 : 3) as Dir;
@@ -1448,7 +1504,7 @@ function boot(data: HotData) {
   const areaRect = (): [number, number, number, number] | null => (areaA && areaB ? [Math.min(areaA[0], areaB[0]), Math.min(areaA[1], areaB[1]), Math.max(areaA[0], areaB[0]), Math.max(areaA[1], areaB[1])] : null);
   const inArea = () => {
     const r = areaRect();
-    return r ? [...world.ents.values()].filter((e) => e.kind !== 'hub' && e.kind !== 'part' && e.x >= r[0] && e.x <= r[2] && e.y >= r[1] && e.y <= r[3]) : [];
+    return r ? [...world.ents.values()].filter((e) => e.kind !== 'hub' && e.kind !== 'part' && e.x >= r[0] && e.x <= r[2] && e.y >= r[1] && e.y <= r[3] && b2.keep(e)) : [];
   };
   /** 設計図を置こうとしている場所の見本 */
   const ghostCells = () => (blueprint && ghost ? blueprint.map((b) => {
@@ -1470,6 +1526,7 @@ function boot(data: HotData) {
     ($('area-put') as HTMLButtonElement).disabled = !ghost;
     $('area-lib').hidden = bp;
     $('area-cancel').hidden = !bp && !areaRect();
+    b2.paintArea(bp, n);
   }
   // ---- 番号をまとめて振る：囲んだ検知器・弁・貨物駅に、連番か同じ番号を付ける（元に戻せる） ----
   const NUMBERED = ['sensor', 'gate', 'station'];
@@ -1538,13 +1595,15 @@ function boot(data: HotData) {
     sfx.ok();
     paintArea();
   };
-  $('area-del').onclick = () => {
+  // 30 個以上か、中に物をためた装置があれば、確かめてから消す
+  $('area-del').onclick = () => b2.bulkErase(inArea(), () => {
     group = null;
     for (const e of inArea()) doErase(e.x, e.y);
+    group = null;
     areaA = areaB = null;
     sfx.erase();
     paintArea();
-  };
+  });
   /** 時計回りに 90° 回す。2×2 の装置は、回したあとの左上のマスを新しい位置にする */
   $('area-rot').onclick = () => {
     if (!blueprint) return;
@@ -1591,10 +1650,12 @@ function boot(data: HotData) {
       l.length ? h('div', { class: 'menu' }, ...l.map((bp, i) => {
         const n = (f: (b: Stamp) => boolean) => bp.stamps.filter(f).length;
         return h('div', { class: 'row bp' },
+          b2.bpThumb(bp.stamps),
           h('span', { class: 'stack' }, (() => { const inp = h('input', { class: 'bp-name', type: 'text', id: `bp-name-${i}`, value: bp.name, maxLength: 30, ariaLabel: '設計図の名前' }); inp.onchange = () => { bp.name = inp.value.trim().slice(0, 30) || bp.name; saveLibrary(l); }; return inp; })(), h('span', { class: 'muted' }, `装置 ${n((b) => BIG.includes(b.kind))}・ベルト類 ${n((b) => b.kind === 'belt' || b.kind === 'bridge' || b.kind === 'tunnel')}・ほか ${n((b) => !BIG.includes(b.kind) && b.kind !== 'belt' && b.kind !== 'bridge' && b.kind !== 'tunnel')}`)),
+          ...b2.bpOrder(l, i, () => { saveLibrary(l); showLibrary(); }),
           h('button', { class: 'primary', type: 'button', id: `bp-use-${i}`, onclick: () => { blueprint = bp.stamps.map((b) => ({ ...b })); ghost = null; areaA = areaB = null; closeModal(); pick('area', true); } }, '使う'),
           h('button', { class: 'ghost', type: 'button', id: `bp-out-${i}`, onclick: () => showLibrary({ mode: 'out', text: encodeBlueprint(bp.name, bp.stamps) }) }, '書き出す'),
-          h('button', { class: 'ghost warn', type: 'button', id: `bp-del-${i}`, onclick: () => { l.splice(i, 1); saveLibrary(l); showLibrary(); } }, '消す'));
+          h('button', { class: 'ghost warn', type: 'button', id: `bp-del-${i}`, onclick: () => b2.ask(`設計図「${bp.name}」を消す？`, 'この端末から消える。元には戻せない。', '消す', () => { l.splice(i, 1); saveLibrary(l); showLibrary(); }) }, '消す'));
       })) : h('p', {}, 'まだ保存した設計図はない。'));
   };
   $('area-lib').onclick = () => showLibrary();
@@ -1963,7 +2024,7 @@ function boot(data: HotData) {
       const idle = pf.saver && performance.now() - lastInput > 5 * 60000 && !shotPending;
       if (idle && ++idleSkip % 6) { hud(); placeAct(); requestAnimationFrame(frame); return; }
       const fx = fxOn(), t3 = fx && three && gw > 0;
-      const view = { dusk: palette().name === 'light' ? dusk : dusk * 0.5, floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: moving && (moving.dx || moving.dy) ? moveGhost() : tool === 'area' ? ghostCells() : toolGhost(), lift: !!moving && !!(moving.dx || moving.dy), ports: moving ? null : selPorts(), marks: sameMarks(), allPlates: pf.plates };
+      const view = { dusk: palette().name === 'light' ? dusk : dusk * 0.5, floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: moving && (moving.dx || moving.dy) ? moveGhost() : tool === 'area' ? ghostCells() : toolGhost(), lift: !!moving && !!(moving.dx || moving.dy), ports: moving ? null : selPorts(), marks: sameMarks(), allPlates: pf.plates, over: b2.draw };
       if (fx) {
         // 光の層は黒地に加算、効果の層は黒地（何もない所は効果なし）
         for (const c2 of [glowCtx, maskCtx]) { c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'source-over'; c2.globalAlpha = 1; c2.fillStyle = '#000'; c2.fillRect(0, 0, glowCv.width, glowCv.height); c2.setTransform(fxK, 0, 0, fxK, 0, 0); c2.globalCompositeOperation = 'lighter'; }
@@ -2012,6 +2073,7 @@ function boot(data: HotData) {
       if (!sandbox && !document.hidden) addPlayTime(world, dt * 1000);
       if (PERF) { PERF.draw.push(performance.now() - d0); if (PERF.draw.length > 600) { PERF.draw.shift(); PERF.step.shift(); } }
       hud();
+      b2.tick();
     }
     placeAct();
     // 背景音楽：工場の画面でだけ鳴らす。動いている装置が多いほど、音が増える
