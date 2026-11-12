@@ -99,6 +99,10 @@ export function drawToken(ctx: CanvasRenderingContext2D, id: string, x: number, 
       // 魔術：真鍮の輪にはめた札
       ctx.lineWidth = 0.17; ctx.strokeStyle = BRASS_DARK; ctx.stroke();
       ctx.lineWidth = 0.08; ctx.strokeStyle = BRASS;
+    } else if (P.skin === 'lab') {
+      // 研究所：ガラスの容器。銀の縁の内側に、青緑の細い光の縁
+      ctx.lineWidth = 0.18; ctx.strokeStyle = P.name === 'light' ? '#6f7d89' : '#02060b'; ctx.stroke();
+      ctx.lineWidth = 0.07; ctx.strokeStyle = P.name === 'light' ? '#0fa9bb' : '#2ef0e0';
     } else {
       ctx.lineWidth = 0.1;
       ctx.strokeStyle = P.ink;

@@ -1988,7 +1988,7 @@ function boot(data: HotData) {
           ground: gndCv, top: topCv, rect: [cam2.x - gw / 2 / cam.z, cam2.y - gh / 2 / cam.z, cam2.x + gw / 2 / cam.z, cam2.y + gh / 2 / cam.z],
           vp: new Float32Array(c3.vp), boxes: boxBuf, count: boxes.length / 8, slabs: slabs.length / 8, topH: TOP_H,
           ink: [((ink >> 16) & 255) / 255, ((ink >> 8) & 255) / 255, (ink & 255) / 255], shadow: pal.name === 'light' ? 0.3 : 0.5, glowScreen: fw ? glowSCv : null,
-          ao: gfxTier === 2 ? (pal.name === 'light' ? 0.32 : 0.45) : 0, rich: gfxTier === 2 ? 1 : 0, skin: pal.skin === 'punk' ? 1 : pal.skin === 'arcane' ? 2 : 0, dark: pal.name === 'dark',
+          ao: gfxTier === 2 ? (pal.name === 'light' ? 0.32 : 0.45) : 0, rich: gfxTier === 2 ? 1 : 0, skin: pal.skin === 'punk' ? 1 : pal.skin === 'arcane' ? 2 : pal.skin === 'lab' ? 3 : 0, dark: pal.name === 'dark',
         }, glowCv, maskCv, duskPost(POST_PRESETS[pal.key], now / 1000, true));
       } else {
         draw(ctx, cw, ch, world, cam, now / 1000, dt, { ...view, fx: fx ? { glow: glowCtx, mask: maskCtx, height: useH ? heightCtx : null } : null });

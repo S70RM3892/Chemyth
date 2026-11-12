@@ -7,6 +7,7 @@ import { flowTrace, JAM_SEC, MOVERS, type FlowTrace } from '../engine/world';
 import { at, floorOf, FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { BRASS, BRASS_DARK, mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
+import { buildChunkLab, hubLab, labAmbient, labBelts, labFrame, labHubGlow, labSelect, labZoneLabel, machineLab } from './skinLab';
 import { districtsOf, type District } from '../engine/districts';
 import { equationOf, hexOf, reactionLookById } from '../content/looks';
 import { drawScene } from './scene';
@@ -52,6 +53,7 @@ const mod = (a: number, n: number) => ((a % n) + n) % n;
 
 function buildChunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
   if (P.skin === 'punk') return buildChunkPunk(P, cx, cy);
+  if (P.skin === 'lab') return buildChunkLab(P, cx, cy, TS, CH);
   const cv = document.createElement('canvas');
   cv.width = cv.height = SIZE;
   const g = cv.getContext('2d')!;
@@ -539,7 +541,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   spawn(w, P);
   FONT_HAND = P.font;
   FONT_SMALL = P.skin === 'punk' ? FONT_UI : P.font;
-  const punk = P.skin === 'punk', arcane = P.skin === 'arcane', light = P.name === 'light';
+  const punk = P.skin === 'punk', arcane = P.skin === 'arcane', lab = P.skin === 'lab', light = P.name === 'light';
 
   ctx.fillStyle = P.paper;
   ctx.fillRect(0, 0, cw, ch);
@@ -555,6 +557,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   const inView = (e: Ent) => e.x >= x0 - 2 && e.x <= x1 + 2 && e.y - off >= y0 - 2 && e.y - off <= y1 + 2;
   // ---- 光と効果の層（WebGL の合成段があるときだけ）----
   const G = view.fx?.glow ?? null, M = view.fx?.mask ?? null;
+  if (lab) labFrame(G, M, !!three, calm);
   /** 光の点：中心が明るく、外へ消える。rgb は '255,200,80' の形 */
   const shine = (c2: CanvasRenderingContext2D | null, x: number, y: number, r: number, rgb: string, a: number) => {
     if (!c2 || r <= 0 || x < -r || y < -r || x > cw + r || y > ch + r) return;
@@ -608,7 +611,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   }
   if (off) {
     // 2 階：地面を床板で覆い、1 階の設備を薄い影として透かす
-    ctx.fillStyle = punk ? (light ? 'rgba(196,201,206,0.82)' : 'rgba(15,18,22,0.84)') : light ? 'rgba(240,242,236,0.84)' : 'rgba(22,26,34,0.84)';
+    ctx.fillStyle = punk ? (light ? 'rgba(196,201,206,0.82)' : 'rgba(15,18,22,0.84)') : lab ? (light ? 'rgba(226,234,240,0.84)' : 'rgba(6,11,18,0.86)') : light ? 'rgba(240,242,236,0.84)' : 'rgba(22,26,34,0.84)';
     ctx.fillRect(0, 0, cw, ch);
     if (z >= 12) {
       ctx.strokeStyle = punk ? 'rgba(0,0,0,0.3)' : P.grid; ctx.lineWidth = 1;
@@ -665,6 +668,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   ctx.textBaseline = 'alphabetic';
   for (const sp of zoneSpots(x0, y0, x1, y1)) {
     const zn = ZONES[sp.zone], lx = sp.cx, ly = sp.cy;
+    if (lab) { labZoneLabel(ctx, P, zn.name, z >= 20 ? `${sub(zn.resource).name}・${zn.form}` : '', sx(lx), gy(ly), z, zn.tint[1]); continue; }
     if (punk) {
       // 鉱区の標識板
       const fs = Math.max(11, z * 0.3), sub2 = `${sub(zn.resource).name} / ${zn.form}`;
@@ -750,6 +754,8 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   const DASH = { solid: [0.04, 0.21], liquid: [0.18, 0.32], gas: [0.03, 0.22], none: [0.1, 0.4] };
   const st = (b: Belt) => b.e.st ?? 'none';
   const edge = lw(0.045) * 2;
+  /** 管の輪郭の色（研究所は銀、夜は黒） */
+  const rim = lab ? (light ? '#7f8c97' : '#02060b') : punk ? '#0b0d10' : P.ink;
   // 速さのために：同じ見た目のベルトは 1 本の道にまとめ、1 回の線引きで描く。
   // 大きな工場を引いて見たとき、1 本ずつ描くと 1 フレームに数万回の線引きになる
   type BK = 'solid' | 'liquid' | 'gas' | 'none';
@@ -773,7 +779,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   // 厚み：ベルトと配管を地面から浮かせる。まず地面に落ちる影、次に手前の側面を描き、そのあと上面を描く
   const lift = z * 0.1;
   ctx.lineCap = 'round';
-  if (!far) {
+  if (!far && !lab) {
     ctx.save();
     ctx.translate(lift * 0.7, lift * 1.7);
     ctx.strokeStyle = punk ? `rgba(0,0,0,${light ? 0.2 : 0.42})` : P.shadow;
@@ -786,7 +792,8 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     pass((k) => { ctx.strokeStyle = mix(P.line[k], punk ? '#0b0d10' : P.ink, punk ? 0.6 : 0.42); ctx.lineWidth = z * WIDTH[k]; });
     ctx.restore();
   }
-  if (punk) {
+  if (lab) labBelts(ctx, P, z, t, beltSpeed(w), belts, pass, far, veryFar, sx, sy);
+  else if (punk) {
     // 工業：固体はゴムのベルトに鋼の側板、液体と気体は継ぎ手のある配管
     const PW = { solid: 0.62, liquid: 0.44, gas: 0.3, none: 0.5 };
     const casing = '#0b0d10', rail = light ? '#8d969e' : '#4d545c', rubber = light ? '#33383e' : '#16191d';
@@ -906,7 +913,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       ctx.setLineDash([]); ctx.globalAlpha = 1;
     }
     ctx.lineCap = 'butt';
-    for (const [col, lwid] of [[punk ? '#0b0d10' : P.ink, wd + edge], [P.line.none, wd]] as [string, number][]) {
+    for (const [col, lwid] of [[rim, wd + edge], [P.line.none, wd]] as [string, number][]) {
       ctx.strokeStyle = col; ctx.lineWidth = lwid;
       ctx.beginPath(); ctx.moveTo(cx + dxv * side * z * 0.5, cy + dyv * side * z * 0.5); ctx.lineTo(cx, cy); ctx.stroke();
     }
@@ -921,7 +928,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.translate(cx, cy); ctx.rotate((e.dir * Math.PI) / 2);
     ctx.fillStyle = punk ? 'rgba(0,0,0,0.45)' : P.shadow; rr(ctx, -z * 0.17 + z * 0.05, -z * 0.4 + z * 0.1, z * 0.34, z * 0.8, z * 0.08); ctx.fill();
     rr(ctx, -z * 0.17, -z * 0.4, z * 0.34, z * 0.8, z * 0.08);
-    ctx.fillStyle = MACHINES.tunnel.color; ctx.fill(); ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = lw(0.05); ctx.stroke();
+    ctx.fillStyle = MACHINES.tunnel.color; ctx.fill(); ctx.strokeStyle = rim; ctx.lineWidth = lw(0.05); ctx.stroke();
     rr(ctx, -z * 0.09, -z * 0.3, z * 0.18, z * 0.6, z * 0.05); ctx.fillStyle = '#050607'; ctx.fill();
     ctx.fillStyle = P.hi;
     ctx.beginPath(); ctx.moveTo(z * 0.06, 0); ctx.lineTo(-z * 0.05, -z * 0.1); ctx.lineTo(-z * 0.05, z * 0.1); ctx.closePath(); ctx.fill();
@@ -933,7 +940,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     if (e.kind !== 'bridge' || !inView(e)) continue;
     const cx = sx(e.x + 0.5), cy = sy(e.y + 0.5), wd = z * WIDTH.none;
     const pipe = (x1: number, y1: number, x2: number, y2: number) => {
-      ctx.strokeStyle = P.ink; ctx.lineWidth = wd + edge;
+      ctx.strokeStyle = lab ? rim : P.ink; ctx.lineWidth = wd + edge;
       ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
       ctx.strokeStyle = P.line.none; ctx.lineWidth = wd;
       ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
@@ -1137,7 +1144,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     }
   }
   // 闇の炉：稼働中の装置と納品所は、暗がりに光をこぼす
-  if ((punk || arcane) && !light && !G) {
+  if ((punk || arcane || lab) && !light && !G) {
     ctx.globalCompositeOperation = 'lighter';
     const pool = (gx: number, gy: number, r: number, a: number) => {
       const g = ctx.createRadialGradient(sx(gx), sy(gy), 0, sx(gx), sy(gy), r * z);
@@ -1155,7 +1162,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   if (!off && w.research.includes('floor2')) {
     ctx.setLineDash([z * 0.14, z * 0.1]);
     ctx.strokeStyle = P.hi; ctx.lineWidth = Math.max(1, z * 0.04);
-    ctx.fillStyle = punk ? `rgba(${P.glow},0.1)` : 'rgba(255,225,77,0.16)';
+    ctx.fillStyle = punk || lab ? `rgba(${P.glow},0.1)` : 'rgba(255,225,77,0.16)';
     for (const e of w.ents.values()) {
       if (e.y < FLOOR_DY / 2 || e.kind === 'part') continue;
       const ey = e.y - FLOOR_DY;
@@ -1194,10 +1201,11 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
     use(base);
   }
-  // 納品所の口は、赤く脈打つ光。熱で上の空気がゆらぐ
-  if (G && !off) { const hx2 = sx(hr.x + hr.s / 2), hy2 = sy(hr.y + hr.s / 2); glow(hx2, hy2, hr.s * z * 0.95, '255,70,40', 0.4 + 0.1 * Math.sin(t * 2.3)); heat(hx2, hy2 - hr.s * z * 0.5, hr.s * z * 0.6, 0.5); }
+  // 納品所の口は、赤く脈打つ光。熱で上の空気がゆらぐ（研究所は、炉心の青緑の光の輪と、回る光の弧）
+  if (G && !off && lab) labHubGlow(G, P, sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), hr.s, z, t);
+  if (G && !off && !lab) { const hx2 = sx(hr.x + hr.s / 2), hy2 = sy(hr.y + hr.s / 2); glow(hx2, hy2, hr.s * z * 0.95, '255,70,40', 0.4 + 0.1 * Math.sin(t * 2.3)); heat(hx2, hy2 - hr.s * z * 0.5, hr.s * z * 0.6, 0.5); }
   // 高画質の飾り：納品所のまわりを、光の弧が 2 重に回る（光の層だけに描くので、標準の画質は変わらない）
-  if (G && !off && z >= 10) {
+  if (G && !off && z >= 10 && !lab) {
     const hx2 = sx(hr.x + hr.s / 2), hy2 = sy(hr.y + hr.s / 2), R1 = (hr.s / 2 + 0.45) * z, R2 = (hr.s / 2 + 0.7) * z;
     G.lineCap = 'round'; G.lineWidth = Math.max(1.5, z * 0.08);
     for (let k = 0; k < 3; k++) { const a = t * 0.7 + k * 2.094; G.strokeStyle = `rgba(${P.glow},${light ? 0.3 : 0.55})`; G.beginPath(); G.arc(hx2, hy2, R1, a, a + 0.85); G.stroke(); }
@@ -1239,7 +1247,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   // ---- 貨物線：設備の上を越える高架の線路と列車。
   //      敷いた線路は、どの駅の列車も共有する網。つながっていない駅どうしは、自動の仮線路（横に進んでから縦に曲がる）で結ぶ ----
   if (!off) {
-    const ink = punk ? '#0b0d10' : P.ink, lift2 = z * 0.3;
+    const ink = punk ? '#0b0d10' : lab && !light ? '#03070c' : P.ink, lift2 = z * 0.3;
     if (w.rails.size) {
       const geo = railGeo(w);
       const seg: number[] = [], junc: number[] = [];
@@ -1258,7 +1266,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       if (!veryFar) { ctx.strokeStyle = ink; ctx.lineWidth = z * 0.32; ctx.setLineDash([z * 0.07, z * 0.18]); path(0, 0); ctx.stroke(); ctx.setLineDash([]); }
       ctx.lineCap = 'round';
       ctx.strokeStyle = ink; ctx.lineWidth = Math.max(2, z * 0.2); path(0, 0); ctx.stroke();
-      ctx.strokeStyle = punk ? (light ? '#c9ced3' : '#8a939c') : light ? '#e9e6da' : '#aeb6c2'; ctx.lineWidth = Math.max(1, z * 0.1); path(0, 0); ctx.stroke();
+      ctx.strokeStyle = punk ? (light ? '#c9ced3' : '#8a939c') : lab ? (light ? '#dfe7ec' : '#6c8194') : light ? '#e9e6da' : '#aeb6c2'; ctx.lineWidth = Math.max(1, z * 0.1); path(0, 0); ctx.stroke();
       if (!far) { ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.8, z * 0.03); path(0, 0); ctx.stroke(); }
       // 分岐点：転てつ器の印
       for (let k = 0; k < junc.length; k += 2) {
@@ -1397,7 +1405,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       const gx = sx(g.x), gy = sy(g.y), gs = g.size * z;
       // ずらしている最中は、持ち上げたように影を落とす
       if (view.lift) { ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(gx + 2 + z * 0.12, gy + 2 + z * 0.18, gs - 4, gs - 4); }
-      ctx.fillStyle = g.ok ? (punk ? `rgba(${P.glow},0.3)` : 'rgba(255,225,77,0.45)') : 'rgba(210,63,58,0.4)';
+      ctx.fillStyle = g.ok ? (punk || lab ? `rgba(${P.glow},0.3)` : 'rgba(255,225,77,0.45)') : 'rgba(210,63,58,0.4)';
       ctx.fillRect(gx + 2, gy + 2, gs - 4, gs - 4);
       ctx.strokeStyle = g.ok ? P.hi : P.red; ctx.lineWidth = lw(0.05); ctx.strokeRect(gx + 2, gy + 2, gs - 4, gs - 4);
       if (z >= 18) { ctx.fillStyle = punk ? '#f0e9dc' : P.ink; ctx.font = `700 ${Math.min(gs * 0.45, z * 0.5)}px ${FONT_SMALL}`; ctx.textBaseline = 'middle'; ctx.fillText(g.glyph, gx + gs / 2, gy + gs / 2 + 1); ctx.textBaseline = 'alphabetic'; }
@@ -1422,7 +1430,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   // ---- 範囲選択 ----
   if (view.area) {
     const [ax0, ay0, ax1, ay1] = view.area;
-    ctx.fillStyle = punk ? `rgba(${P.glow},0.12)` : 'rgba(255,225,77,0.2)';
+    ctx.fillStyle = punk || lab ? `rgba(${P.glow},0.12)` : 'rgba(255,225,77,0.2)';
     ctx.fillRect(sx(ax0), sy(ay0), (ax1 - ax0 + 1) * z, (ay1 - ay0 + 1) * z);
     ctx.strokeStyle = P.hi; ctx.lineWidth = lw(0.08);
     ctx.setLineDash([z * 0.3, z * 0.2]); ctx.lineDashOffset = -t * z * 0.6;
@@ -1465,7 +1473,8 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   if (view.selected && view.selected.kind !== 'hub') {
     const e = view.selected;
     use(T && sizeOf(e) === 2 ? T : base);
-    if (punk) {
+    if (lab) labSelect(ctx, P, sx(e.x + sizeOf(e) / 2), sy(e.y + sizeOf(e) / 2), sizeOf(e), z, t);
+    else if (punk) {
       // 照準の角
       const cx0 = sx(e.x + sizeOf(e) / 2), cy0 = sy(e.y + sizeOf(e) / 2), r = z * (sizeOf(e) * 0.5 + 0.1 + 0.03 * Math.sin(t * 6)), L = z * 0.2;
       ctx.strokeStyle = P.hi; ctx.lineWidth = lw(0.08); ctx.lineCap = 'butt';
@@ -1511,7 +1520,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       ctx.fillStyle = p.tint ?? (punk ? (light ? '#ffffff' : '#aeb7bf') : P.soft);
       ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y), z * p.r * (2.6 - k * 1.6), 0, Math.PI * 2); ctx.fill();
     } else if (p.color === 'spark') {
-      ctx.strokeStyle = punk && !light ? P.hi : P.red;
+      ctx.strokeStyle = (punk && !light) || lab ? P.hi : P.red;
       ctx.lineWidth = lw(0.035);
       ctx.beginPath(); ctx.moveTo(sx(p.x), sy(p.y)); ctx.lineTo(sx(p.x - p.vx * 0.12), sy(p.y - p.vy * 0.12)); ctx.stroke();
     } else if (p.text) {
@@ -1538,7 +1547,8 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
 
   use(base);
   if (punk) ambient(ctx, P, cw, ch, t, dt, sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), z);
-  if (!punk && !arcane) ambientNote(ctx, G, P, cw, ch, t, dt);
+  if (!punk && !arcane && !lab) ambientNote(ctx, G, P, cw, ch, t, dt);
+  if (lab) labAmbient(ctx, P, cw, ch, t, dt);
   if (arcane) ambientArcane(ctx, G, P, cw, ch, t, dt);
   if (arcane) {
     // 魔術：ゆっくり漂う青い光の粒と、四隅の暗がり
@@ -1758,10 +1768,11 @@ const HEAP: [number, number][][] = [[], [[0, 0]],
 function token(ctx: CanvasRenderingContext2D, P: Palette, x: number, y: number, z: number, s: string, flat = false) {
   const d = z * 0.78;
   if (flat) { ctx.drawImage(sprite(s), x - d / 2, y - d / 2, d, d); return; }
-  // 物質はベルトの上に乗っている：下に影を落とし、少し持ち上げて描く
-  ctx.fillStyle = P.skin === 'punk' ? 'rgba(0,0,0,0.38)' : 'rgba(20,30,50,0.2)';
-  ctx.beginPath(); ctx.ellipse(x + d * 0.05, y + d * 0.36, d * 0.3, d * 0.1, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.drawImage(sprite(s), x - d / 2, y - d / 2 - d * 0.09, d, d);
+  // 物質はベルトの上に乗っている：下に影を落とし、少し持ち上げて描く（研究所では、青緑の光の上に浮かせる）
+  const lab = P.skin === 'lab';
+  ctx.fillStyle = P.skin === 'punk' ? 'rgba(0,0,0,0.38)' : lab ? `rgba(${P.glow},${P.name === 'light' ? 0.32 : 0.45})` : 'rgba(20,30,50,0.2)';
+  ctx.beginPath(); ctx.ellipse(x + (lab ? 0 : d * 0.05), y + d * 0.36, d * 0.3, d * 0.1, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.drawImage(sprite(s), x - d / 2, y - d / 2 - d * (lab ? 0.17 : 0.09), d, d);
   if (z >= 52) {
     const su = sub(s), tx = label(s);
     ctx.font = `600 ${z * 0.13}px ${su.formula && !su.mask ? FONT_MONO : FONT_HAND}`;
@@ -1775,8 +1786,11 @@ function token(ctx: CanvasRenderingContext2D, P: Palette, x: number, y: number, 
   }
 }
 
+/** 研究所スキンの装置に渡す、ここにしかない絵の道具 */
+const LAB_KIT = { glyph, poleMarks, powerMark };
 function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, z: number, e: Ent, t: number) {
   if (P.skin === 'punk') { machinePunk(ctx, P, cx, cy, u, z, e, t); return; }
+  if (P.skin === 'lab') { machineLab(ctx, P, cx, cy, u, z, e, t, LAB_KIT); return; }
   const info = MACHINES[e.kind as keyof typeof MACHINES];
   const unset = isMachine(e.kind) && !e.recipe;
   const line = Math.max(1.5, u * 0.045);
@@ -2553,6 +2567,7 @@ const hasSubLook = (id: string) => { try { return sub(id).state === 'solid'; } c
 /** 納品所：全元素を欲しがる機械。大きくなるほど、歯・煙突・棘・回る環が増えていかつくなる。
  *  外周に並ぶ元素の印は、その元素を飲み込むと灯る */
 function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, z: number, size: number, w: World, t: number) {
+  if (P.skin === 'lab') { hubLab(ctx, P, px, py, z, size, w, t); return; }
   const s = z * size, lv = Math.max(0, [2, 4, 6, 8].indexOf(size)), punk = P.skin === 'punk', light = P.name === 'light';
   const cxh = px + s / 2, cyh = py + s / 2, line = Math.max(1.5, z * 0.05), m = z * 0.06, c = z * 0.3;
   const INK = punk ? '#07090b' : P.ink;
