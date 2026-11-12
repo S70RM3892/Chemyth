@@ -1378,3 +1378,7 @@ button.cn-st { cursor: pointer; min-height: 30px; }
 [data-skin="lab"] #title-panel { background: var(--glass-solid); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border: 1px solid var(--edge); border-radius: 16px; box-shadow: var(--lift); }
 [data-skin="lab"] #title-panel textarea { border-color: var(--edge-soft); border-radius: 10px; }
 [data-skin="lab"] .shelf { border-bottom: 2px solid var(--edge); }
+
+/* ===== fix:sheets ===== */
+/* 窓を開いたときは窓そのものへフォーカスを移す。窓には枠を出さない（中のボタンには出る） */
+#sheet:focus { outline: none; }

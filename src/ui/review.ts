@@ -44,7 +44,8 @@ let active: { root: HTMLElement; choose(i: number): boolean; conf(i: number): bo
 /** 押されたキーで問いに答える。使ったら true */
 export function quizKey(key: string): boolean {
   const a = active;
-  if (!a || !a.root.isConnected || a.root.closest('[hidden]')) return false;
+  // 隠れた問いと、開いた窓の後ろ（inert）の札の問いには答えない
+  if (!a || !a.root.isConnected || a.root.closest('[hidden], [inert]')) return false;
   if (/^[1-9]$/.test(key)) { const n = Number(key) - 1; return a.choose(n) || a.conf(n); }
   if (key === 'Enter') return a.next();
   return false;
