@@ -49,7 +49,22 @@ const hash = (x: number, y: number) => {
 // ---- 地形は区画ごとに描いてためておく。地図に果てはないので、見えた所から作る ----
 const TS = 24, CH = 16, SIZE = TS * CH;
 const chunks = new Map<string, HTMLCanvasElement>();
-onThemeChange(() => chunks.clear());
+/** ためておく区画の絵の量（バイト）。1 枚は lod 0 で 576 KB、lod 1 で 144 KB、lod 2 で 36 KB。
+ *  ふだんは 96 MB まで（細かさの替わり目で寄ったり引いたりしても、両方の絵が収まる）。見える区画が多いときは、見えている分の 2 倍まで増やす */
+const CHUNK_MIN = 96 * 1024 * 1024;
+let chunkKeep = CHUNK_MIN, chunkBytes = 0, chunkFrame = 0;
+/** 区画の絵を最後に描いたコマ。このコマに描く絵は捨てない */
+const chunkUsed = new WeakMap<HTMLCanvasElement, number>();
+/** 古いものから捨てる。絵の分のメモリもすぐ返す（参照を外すだけでは GC まで残り、iPad では絵のメモリの上限に当たる） */
+const trimChunks = () => {
+  if (chunkBytes <= chunkKeep) return;
+  for (const [k, c] of chunks) {
+    if (chunkBytes <= chunkKeep) break;
+    if (chunkUsed.get(c) === chunkFrame) continue;
+    chunks.delete(k); chunkBytes -= c.width * c.height * 4; c.width = c.height = 0;
+  }
+};
+onThemeChange(() => { for (const c of chunks.values()) c.width = c.height = 0; chunks.clear(); chunkBytes = 0; });
 let scratch: HTMLCanvasElement | null = null;
 const ORDER = Object.keys(ZONES) as Zone[];
 const mod = (a: number, n: number) => ((a % n) + n) % n;
@@ -432,13 +447,17 @@ function punkDetail(g: CanvasRenderingContext2D, P: Palette, cx: number, cy: num
 
 /** 地面の 1 区画の絵。lod：0 はそのまま、1 は半分、2 は 4 分の 1 の大きさに縮めたもの。
  *  引いた視野で大きい絵を毎フレーム縮めて描くと重いので、あらかじめ縮めた絵を使う */
-function chunk(P: Palette, cx: number, cy: number, lod = 0): HTMLCanvasElement {
+function chunk(P: Palette, cx: number, cy: number, lod = 0, use = true): HTMLCanvasElement {
   const k = `${P.key}:${cx},${cy}:${lod}`;
   let c = chunks.get(k);
-  if (c) { chunks.delete(k); chunks.set(k, c); return c; } // 最近使ったものを後ろへ
+  if (c) {
+    if (use) { chunks.delete(k); chunks.set(k, c); chunkUsed.set(c, chunkFrame); } // 最近使ったものを後ろへ
+    return c;
+  }
   if (lod === 0) c = buildChunk(P, cx, cy);
   else {
-    const full = chunk(P, cx, cy, 0), size = full.width >> lod;
+    // 元の絵（lod 0）もためておく（寄ったときに作り直さずにすむ）。このコマには描かないので、量が足りなくなれば先に捨てられる
+    const full = chunk(P, cx, cy, 0, false), size = full.width >> lod;
     c = document.createElement('canvas');
     c.width = c.height = size;
     const g = c.getContext('2d')!;
@@ -446,7 +465,8 @@ function chunk(P: Palette, cx: number, cy: number, lod = 0): HTMLCanvasElement {
     g.drawImage(full, 0, 0, size, size);
   }
   chunks.set(k, c);
-  if (chunks.size > 520) chunks.delete(chunks.keys().next().value as string);
+  chunkBytes += c.width * c.height * 4;
+  if (use) { chunkUsed.set(c, chunkFrame); trimChunks(); }
   return c;
 }
 
@@ -584,6 +604,10 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   const wx0 = cam.x - cw / 2 / z, wy0 = cam.y - ch / 2 / z, wx1 = cam.x + cw / 2 / z, wy1 = cam.y + ch / 2 / z;
   // 画面の 1 マスが何ピクセルかで、地面の絵の細かさを選ぶ
   const tilePx = z * (ctx.getTransform().a || 1), lod = tilePx >= 20 ? 0 : tilePx >= 10 ? 1 : 2;
+  // ためておく量：見えている区画の 2 倍（寄ったときは減らして、余った分を捨てる）
+  chunkFrame++;
+  chunkKeep = Math.max(CHUNK_MIN, 2 * (Math.floor(wx1 / CH) - Math.floor(wx0 / CH) + 1) * (Math.floor(wy1 / CH) - Math.floor(wy0 / CH) + 1) * (SIZE >> lod) ** 2 * 4);
+  trimChunks();
   for (let cy = Math.floor(wy0 / CH); cy <= Math.floor(wy1 / CH); cy++) for (let cx = Math.floor(wx0 / CH); cx <= Math.floor(wx1 / CH); cx++) {
     ctx.drawImage(chunk(P, cx, cy, lod), Math.floor(sx(cx * CH)), Math.floor(gy(cy * CH)), Math.ceil(CH * z) + 1, Math.ceil(CH * z) + 1);
   }
@@ -1807,7 +1831,7 @@ const ZOOM_IN = 72;
 /** 粒子の窓の絵（反応ごとに 1 枚の画面外の絵に描き、それを貼る） */
 const SW_W = 360, SW_H = 210;
 const scenes = new Map<string, { cv: HTMLCanvasElement; c: CanvasRenderingContext2D; plan: ReturnType<typeof planScene> }>();
-onThemeChange(() => scenes.clear());
+onThemeChange(() => { for (const s of scenes.values()) s.cv.width = s.cv.height = 0; scenes.clear(); });
 function sceneImage(r: Recipe, phase: number): HTMLCanvasElement {
   let s = scenes.get(r.id);
   if (!s) {
@@ -1815,7 +1839,8 @@ function sceneImage(r: Recipe, phase: number): HTMLCanvasElement {
     const c = cv.getContext('2d')!; c.scale(2, 2);
     s = { cv, c, plan: planScene(r, SW_W, SW_H) };
     scenes.set(r.id, s);
-    if (scenes.size > 24) scenes.delete(scenes.keys().next().value as string);
+    // 古いものから捨てる（絵の分のメモリもすぐ返す）
+    if (scenes.size > 24) { const [k0, s0] = scenes.entries().next().value!; scenes.delete(k0); s0.cv.width = s0.cv.height = 0; }
   }
   drawScene(s.c, s.plan, r, SW_W, SW_H, phase);
   return s.cv;
