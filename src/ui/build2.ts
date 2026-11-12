@@ -8,8 +8,9 @@
 import { MACHINES } from '../content/machines';
 import { resourceAt } from '../content/map';
 import { recipeById } from '../content/recipes';
+import { setById } from '../content/samples';
 import { isSep } from '../content/sep';
-import { label, sub } from '../content/substances';
+import { hasSub, label, sub } from '../content/substances';
 import type { Stamp } from '../engine/blueprint';
 import { findRoute, type RouteStep } from '../engine/route';
 import { acceptsFrom, beltLine, dupSpot, looseOutputs, nameOf, reversedDirs, stockOf, whyNot, xEnts, xStamps, type Rect, type Xform } from '../engine/shape';
@@ -472,12 +473,14 @@ export function initBuild2(c: B2Ctx) {
   const cloneBar = h('div', { id: 'clone-bar', hidden: true, role: 'status' }, h('span', { id: 'clone-text' }), h('button', { type: 'button', id: 'clone-cancel', ariaLabel: 'コピーをやめる', onclick: () => { c.cancelClone(); sfx.tap(); } }, '× やめる'));
   c.app.append(cloneBar);
   let shownClone: unknown = null, againKey = '';
+  /** 試薬棚・搬出口の中身の名前。試料の組（'set:A'）は物質ではないので、組の名前（「試料 A」）にする */
+  const subName = (s: string) => { const set = s.startsWith('set:') ? setById(s.slice(4)) : undefined; return set ? set.name.split('：')[0] : hasSub(s) ? label(s) : ''; };
   const tick = () => {
     const cl = c.slot() ? c.clone() : null;
     if (cl !== shownClone) {
       shownClone = cl;
       cloneBar.hidden = !cl;
-      if (cl) { const r = recipeById(cl.recipe); $('clone-text').textContent = `${nameOf(cl.kind as Kind)}${r ? `（${r.name}）` : cl.sub ? `（${label(cl.sub)}）` : ''}をコピー中。タップした所に、同じ設定で貼る。`; }
+      if (cl) { const r = recipeById(cl.recipe), what = r ? r.name : cl.sub ? subName(cl.sub) : ''; $('clone-text').textContent = `${nameOf(cl.kind as Kind)}${what ? `（${what}）` : ''}をコピー中。タップした所に、同じ設定で貼る。`; }
     }
     const zOn = mine.zoom && c.slot() > 0;
     if (zoomEl.hidden === zOn) zoomEl.hidden = !zOn;
