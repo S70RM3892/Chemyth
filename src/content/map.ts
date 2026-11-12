@@ -129,9 +129,15 @@ export const LAND = {
   exam: 'N₂ と O₂ の工業的製法は「液体空気の分留」。化合物から作るのではなく、単体の混合物を分けるだけ、という点が問われる。',
 };
 
+/** 資源地の縁までの距離（中心 cx, cy から角度 th の向き）。マスの中心がこれより内側なら、そのマスは資源地。
+ *  引いた視野では、この形をそのまま多角形にして塗る（マスごとに調べなくてよい） */
+export const blobRadius = (cx: number, cy: number, r: number, th: number) => {
+  const ph = cx * 0.7 + cy * 0.3;
+  return r * (1 + 0.16 * Math.sin(3 * th + ph) + 0.09 * Math.sin(5 * th + ph * 2));
+};
 const blob = (x: number, y: number, cx: number, cy: number, r: number) => {
-  const dx = x + 0.5 - cx, dy = y + 0.5 - cy, th = Math.atan2(dy, dx), ph = cx * 0.7 + cy * 0.3;
-  return Math.hypot(dx, dy) < r * (1 + 0.16 * Math.sin(3 * th + ph) + 0.09 * Math.sin(5 * th + ph * 2));
+  const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+  return Math.hypot(dx, dy) < blobRadius(cx, cy, r, Math.atan2(dy, dx));
 };
 const BLOBS = Object.keys(ZONES) as Zone[];
 /** 遠くの区画に現れる資源地の候補。海水はどの工程でも要るので、入り江は多めに出す */

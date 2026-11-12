@@ -303,6 +303,8 @@ b { font-weight: 700; }
 #marks button.set { background: var(--ink); color: var(--on-ink); }
 .mini-big #minimap { width: 340px; height: 232px; }
 .mini-big #marks { bottom: calc(104px + 232px + 6px); }
+/* 全体が画面に収まって小地図を隠しているあいだは、場所のボタンを下へ */
+#app.mini-fit #marks { bottom: 104px; }
 @media (max-width: 860px), (max-height: 560px) { #marks { display: none; } }
 /* 一時停止中の帯 */
 #paused { position: absolute; left: 50%; top: 70px; transform: translateX(-50%); z-index: 2; padding: 4px 14px; border: 2px solid var(--ink); border-radius: 4px; background: var(--card); color: var(--ink); font-weight: 700; font-size: 14px; pointer-events: none; }
