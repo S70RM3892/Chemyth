@@ -17,6 +17,7 @@ import { agentById, ionsOf, settle } from '../content/ions';
 import { washById } from '../content/extract';
 import { AMINO_ORDER, aminoOf, phOf, poleAt, type AminoKey } from '../content/phoresis';
 import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/sep';
+import { drawFar, farBegin, farEnd } from './far';
 
 export interface Camera { x: number; y: number; z: number }
 /** WebGL の合成段に渡す層。glow：光っている所（黒地に加算で描く）、mask：効果をかける所（赤＝熱のゆらぎ、青＝水面）。どちらも画面と同じ座標で描ける */
@@ -519,7 +520,18 @@ function districts(w: World): District[] {
   return distCache.list;
 }
 
+/** 地図を描く。1 マスが小さく見えるほど引いたら（平らな表示のとき）、far.ts の戦略図に切り替える */
 export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: World, cam: Camera, t: number, dt: number, view: View) {
+  if (view.three || !farBegin(ctx, cam, t, cw, ch)) drawNear(ctx, cw, ch, w, cam, t, dt, view);
+  else {
+    // 引いた視野では煙や土ぼこりを描かないので、出来事はためずに捨てる
+    w.fx.length = 0; particles.length = 0;
+    drawFar(ctx, cw, ch, w, cam, t, view, palette());
+  }
+  if (!view.three) farEnd(ctx, cw, ch, cam, t);
+}
+
+function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: World, cam: Camera, t: number, dt: number, view: View) {
   const P = palette();
   const z = cam.z;
   // 立体表示では、描き先を層ごとに替える。base：地面、T：装置の天面とその上を通るもの

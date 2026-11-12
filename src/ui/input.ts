@@ -22,9 +22,13 @@ export interface InputHandlers {
   undo?(): void;
   /** 3 本指で軽くたたいた（やり直す） */
   redo?(): void;
+  /** いま引ける限界（1 マスのピクセル数）。立体表示では、平らな表示ほど引けない */
+  minZoom?(): number;
 }
 
-export const Z_MIN = 9, Z_MAX = 110;
+/** 拡大率（1 マスのピクセル数）の範囲。平らな表示は、工場と資源地の全体が見える 1.5 まで引ける（8 より小さいと、引いた視野の戦略図になる）。
+ *  立体表示は、傾けた地面を近くの絵で描くので、これまでどおり 9 まで */
+export const Z_MIN = 1.5, Z_MIN_3D = 9, Z_MAX = 110;
 
 /** 1本指で操作、2本指で拡大縮小と移動。指を離すと地図は少し滑る。マウスとホイールにも対応 */
 /** 立体表示のときの、画面の点 → 世界の点。px, py は絵の左上からのピクセル。平らな表示のときは null を返す */
@@ -69,18 +73,18 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
   };
   const clamp = () => { /* 地図に果てはない */ };
   const zoomAt = (px: number, py: number, factor: number) => {
-    const r = rect();
+    const r = rect(), lo = h.minZoom?.() ?? Z_MIN;
     const g0 = proj?.ground(px - r.left, py - r.top);
     if (g0) {
       // 立体表示：拡大の前後で、指の下の地面の点が変わらないようにする
-      cam.z = Math.min(Z_MAX, Math.max(Z_MIN, cam.z * factor));
+      cam.z = Math.min(Z_MAX, Math.max(lo, cam.z * factor));
       const g1 = proj!.ground(px - r.left, py - r.top)!;
       cam.x += g0[0] - g1[0]; cam.y += g0[1] - g1[1];
       return;
     }
     const ox = px - r.left - r.width / 2, oy = py - r.top - r.height / 2;
     const wx = cam.x + ox / cam.z, wy = cam.y + oy / cam.z;
-    cam.z = Math.min(Z_MAX, Math.max(Z_MIN, cam.z * factor));
+    cam.z = Math.min(Z_MAX, Math.max(lo, cam.z * factor));
     cam.x = wx - ox / cam.z;
     cam.y = wy - oy / cam.z;
     clamp();

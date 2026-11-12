@@ -1,6 +1,6 @@
 import { CHAPTERS, TOTAL_GOALS } from './content/goals';
 import { RESEARCH } from './content/research';
-import { HUB_CENTER, LAND, ZONES, hubRect, resourceAt, zoneAt } from './content/map';
+import { HUB_CENTER, LAND, ZONES, hubRect, resourceAt, zoneAt, zoneSpots } from './content/map';
 import { ELEMENTS } from './content/elements';
 import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
@@ -8,7 +8,8 @@ import { moveEnts, moveRails, researchBlock, UPGRADE_COST, signalOn, stationCap,
 import { productsOf, recipeById } from './content/recipes';
 import { about, chip, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
-import { attachInput, Z_MAX, Z_MIN, type InputHandlers } from './ui/input';
+import { attachInput, Z_MAX, Z_MIN, Z_MIN_3D, type InputHandlers } from './ui/input';
+import { FAR_Z } from './ui/far';
 import { numPad, typeNumber, reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showSampler, showTestOut, showPhoresis, showSettler, showSignal, showStation, showTank, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
 import { showDrills, showEssays, showStructure } from './ui/practice';
 import { burst, draw, setCalm, type Camera } from './ui/render';
@@ -188,13 +189,22 @@ function boot(data: HotData) {
   applyGfx();
   resize();
   const nearZoom = () => Math.max(40, Math.min(54, cw / 24));
-  /** 建てたもの全体が収まる視野 */
+  /** いま引ける限界。立体表示は、平らな表示ほど引けない */
+  const zMin = () => (threeOn() ? Z_MIN_3D : Z_MIN);
+  /** 建てたもの全体と、採取機を置いた資源地、いまの指令の資源地が収まる視野 */
   const fitView = (vw = cw, vh = ch - 150): Camera => {
     const hr = hubRect(world.hubSize);
     let x0 = hr.x, y0 = hr.y, x1 = hr.x + hr.s, y1 = hr.y + hr.s;
-    for (const e of world.ents.values()) { const gy = groundY(e.y); x0 = Math.min(x0, e.x); y0 = Math.min(y0, gy); x1 = Math.max(x1, e.x + 1); y1 = Math.max(y1, gy + 1); }
+    const grow = (ax: number, ay: number, bx: number, by: number) => { x0 = Math.min(x0, ax); y0 = Math.min(y0, ay); x1 = Math.max(x1, bx); y1 = Math.max(y1, by); };
+    for (const e of world.ents.values()) {
+      const gy = groundY(e.y);
+      grow(e.x, gy, e.x + 1, gy + 1);
+      if (e.kind === 'extractor' && !floorOf(e.y)) for (const s of zoneSpots(e.x - 6, gy - 6, e.x + 6, gy + 6)) if (Math.hypot(e.x + 0.5 - s.cx, gy + 0.5 - s.cy) <= s.r * 1.3 + 0.5) grow(s.cx - s.r * 1.3, s.cy - s.r * 1.3, s.cx + s.r * 1.3, s.cy + s.r * 1.3);
+    }
+    const gz = !sandbox ? currentGoal(world)?.zone : undefined, za = gz ? ZONES[gz as keyof typeof ZONES]?.at : undefined;
+    if (za) grow(za[0] - za[2] * 1.3, za[1] - za[2] * 1.3, za[0] + za[2] * 1.3, za[1] + za[2] * 1.3);
     const w0 = Math.max(60, x1 - x0 + 16), h0 = Math.max(40, y1 - y0 + 16);
-    return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 + (vh === ch - 150 ? 2 : 0), z: Math.max(Z_MIN, Math.min(nearZoom(), vw / w0, vh / h0)) };
+    return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 + (vh === ch - 150 ? 2 : 0), z: Math.max(zMin(), Math.min(nearZoom(), vw / w0, vh / h0)) };
   };
 
   // ---- トースト ----
@@ -741,7 +751,8 @@ function boot(data: HotData) {
       shadow: d3 ? 0 : base.shadow * (1 - 0.8 * k), ao: d3 ? 0 : base.ao, bevel: d3 ? 0 : base.bevel,
       sun: s0.sun, sunLen: s0.len, tile: cam.z * fxK,
       godPos: [(hx - cam.x) / (cw / cam.z) + 0.5, 0.5 - (hy - cam.y - floor * 0) / (ch / cam.z)] as [number, number],
-      cloud: d3 ? 0 : base.cloud * (1 - k),
+      // 雲の影は地図に貼りついている。引くと細かいしみに見えるので、1 マス 10 ピクセルより引いたら薄めて消す
+      cloud: d3 ? 0 : base.cloud * (1 - k) * Math.min(1, Math.max(0, (cam.z - 6) / 4)),
       fog: d3 && ultra ? (light ? 0.34 : 0.42) : 0, fogColor: light ? pc : ([pc[0] * 1.4 + 0.03, pc[1] * 1.4 + 0.04, pc[2] * 1.4 + 0.07] as [number, number, number]), tilt: d3 && ultra && !pf.calm ? 0.8 : 0,
       cam: [cam.x, cam.y, cam.z * dpr] as [number, number, number],
     };
@@ -886,15 +897,9 @@ function boot(data: HotData) {
   let miniOn = store.meta().minimap !== false;
   let miniMap = { ox: 0, oy: 0, k: 1 };
   function paintMini() {
-    mini.hidden = !miniOn || !slot;
-    if (mini.hidden || !mini.clientWidth) return;
-    const W = mini.clientWidth, Hh = mini.clientHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
-    if (mini.width !== Math.round(W * dpr)) { mini.width = Math.round(W * dpr); mini.height = Math.round(Hh * dpr); }
-    mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    mctx.clearRect(0, 0, W, Hh);
-    const P = palette(), hr = hubRect(world.hubSize);
-    const vw = cw / 2 / cam.z, vh = ch / 2 / cam.z;
-    let x0 = Math.min(hr.x, cam.x - vw), y0 = Math.min(hr.y, cam.y - vh), x1 = Math.max(hr.x + hr.s, cam.x + vw), y1 = Math.max(hr.y + hr.s, cam.y + vh);
+    if (!miniOn || !slot) { mini.hidden = true; app.classList.remove('mini-fit'); return; }
+    const hr = hubRect(world.hubSize);
+    let x0 = hr.x, y0 = hr.y, x1 = hr.x + hr.s, y1 = hr.y + hr.s;
     // いまの指令の資源地も入るように広げる（どこへ取りに行けばよいかがわかる）
     const gz = !sandbox ? currentGoal(world)?.zone : undefined, za = gz ? ZONES[gz as keyof typeof ZONES]?.at : undefined;
     if (za && !floor) { x0 = Math.min(x0, za[0] - za[2]); y0 = Math.min(y0, za[1] - za[2]); x1 = Math.max(x1, za[0] + za[2]); y1 = Math.max(y1, za[1] + za[2]); }
@@ -905,6 +910,18 @@ function boot(data: HotData) {
       const gy = groundY(e.y);
       if (e.x < x0) x0 = e.x; if (e.x + 1 > x1) x1 = e.x + 1; if (gy < y0) y0 = gy; if (gy + 1 > y1) y1 = gy + 1;
     }
+    // 全体が画面に収まっているあいだは、小地図を隠す（地図そのものが全体図になっている）
+    const vw = cw / 2 / cam.z, vh = ch / 2 / cam.z;
+    const fits = !threeOn() && cam.x - vw <= x0 && cam.x + vw >= x1 && cam.y - vh <= y0 && cam.y + vh >= y1;
+    mini.hidden = fits;
+    app.classList.toggle('mini-fit', fits);
+    if (fits || !mini.clientWidth) return;
+    const W = mini.clientWidth, Hh = mini.clientHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (mini.width !== Math.round(W * dpr)) { mini.width = Math.round(W * dpr); mini.height = Math.round(Hh * dpr); }
+    mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    mctx.clearRect(0, 0, W, Hh);
+    const P = palette();
+    x0 = Math.min(x0, cam.x - vw); y0 = Math.min(y0, cam.y - vh); x1 = Math.max(x1, cam.x + vw); y1 = Math.max(y1, cam.y + vh);
     x0 -= 3; y0 -= 3; x1 += 3; y1 += 3;
     const k = Math.min((W - 8) / (x1 - x0), (Hh - 8) / (y1 - y0)), ox = (W - (x1 - x0) * k) / 2 - x0 * k, oy = (Hh - (y1 - y0) * k) / 2 - y0 * k;
     miniMap = { ox, oy, k };
@@ -970,7 +987,7 @@ function boot(data: HotData) {
   /** 直前の道具（Q で戻る） */
   let prevTool: Tool = 'pan', lastSpeed = 1;
   const KEY_TOOLS: Record<string, Tool> = { v: 'pan', b: 'belt', x: 'erase', g: 'area', t: 'rail' };
-  const zoomBy = (f: number) => { const base = camTo ?? cam; camTo = { x: base.x, y: base.y, z: Math.min(Z_MAX, Math.max(Z_MIN, base.z * f)) }; };
+  const zoomBy = (f: number) => { const base = camTo ?? cam; camTo = { x: base.x, y: base.y, z: Math.min(Z_MAX, Math.max(zMin(), base.z * f)) }; };
   const togglePause = () => { if (speed === 0) speed = lastSpeed || 1; else { lastSpeed = speed; speed = 0; } paintSpeed(); sfx.tap(); };
   document.addEventListener('keydown', (ev) => {
     const tag = (ev.target as HTMLElement | null)?.tagName;
@@ -1308,6 +1325,7 @@ function boot(data: HotData) {
   const pullsBelt = (x: number, y: number) => { const e = at(world, x, y); return !!e && e.kind !== 'hub' && e.kind !== 'vent'; };
   const H: Required<InputHandlers> = {
     groundMode: () => !!moving,
+    minZoom: zMin,
     undo: () => { if (modal.hidden) doUndo(); },
     redo: () => { if (modal.hidden) doRedo(); },
     begin: () => { group = null; camTo = null; cross = null; railsLaid = 0; beltRun = 0; tip.hidden = true; lanePath = []; laneLaid.clear(); holding = false; },
@@ -1315,7 +1333,7 @@ function boot(data: HotData) {
     hold(x, y, g) {
       // 「見る」のとき、置いたものを長押しすると、つかんでずらせる（移す量は、指の下の地面のマスで測る）
       const held = at(world, x, y);
-      if (tool === 'pan' && held && held.kind !== 'hub') { moving = { es: [held], gx: g ? g[0] : x, gy: g ? g[1] : y, dx: 0, dy: 0, area: false }; selected = held; sfx.tap(); buzz(15); return true; }
+      if (tool === 'pan' && held && held.kind !== 'hub' && cam.z >= FAR_Z) { moving = { es: [held], gx: g ? g[0] : x, gy: g ? g[1] : y, dx: 0, dy: 0, area: false }; selected = held; sfx.tap(); buzz(15); return true; }
       if (!isBuild(tool) || tool === 'belt' || at(world, x, y)) return false;
       holding = true; hover = [x, y]; sfx.tap();
       return true;
@@ -1340,7 +1358,8 @@ function boot(data: HotData) {
       if (hv && !at(world, hv[0], hv[1])) placeAt(hv[0], hv[1]);
     },
     hover(t) { if (!holding) hover = t; cv.classList.toggle('over-ent', !!t && tool === 'pan' && !!at(world, t[0], t[1])); },
-    mode: (x, y) => (tool === 'rail' ? (!floor && railStart(x, y) ? 'stroke' : 'pan') : tool === 'area' ? (blueprint ? 'pan' : 'stroke') : tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y)) ? 'stroke' : 'pan'),
+    // 引いた視野（戦略図）では、「見る」でなぞると、いつも地図が動く（設備が小さすぎて、ベルトを引くつもりでつかむことはない）
+    mode: (x, y) => (tool === 'rail' ? (!floor && railStart(x, y) ? 'stroke' : 'pan') : tool === 'area' ? (blueprint ? 'pan' : 'stroke') : tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y) && cam.z >= FAR_Z) ? 'stroke' : 'pan'),
     tap(x, y) {
       // 「ずらす」を押したあとのタップ：その場所へ（2×2 の装置は、タップしたマスが左上になる）
       if (moveArm) {
@@ -1418,7 +1437,7 @@ function boot(data: HotData) {
     hold: (x, y, g) => H.hold(x, F(y), [g[0], F(g[1])]),
     groundMode: () => !!moving,
     hover: (t) => H.hover(t && [t[0], F(t[1])]),
-    undo: H.undo, redo: H.redo,
+    undo: H.undo, redo: H.redo, minZoom: H.minZoom,
   }, {
     ground: (px, py) => (threeOn() ? camera3(cam, cw, ch).unproject(px, py, 0) : null),
     pick: (px, py) => (threeOn() ? pickTile(camera3(cam, cw, ch), px, py, (x, y) => at(world, x, F(y))) : null),
@@ -1744,7 +1763,9 @@ function boot(data: HotData) {
     try {
       const W = 560, H = 350, cvs = document.createElement('canvas');
       cvs.width = W; cvs.height = H;
-      draw(cvs.getContext('2d')!, W, H, world, fitView(W, H), performance.now() / 1000, 0, { floor: 0, tool: 'pan', selected: null });
+      // 写真は、これまでどおり近くの絵で撮る（引いた視野の戦略図にはしない）
+      const fv = fitView(W, H);
+      draw(cvs.getContext('2d')!, W, H, world, { ...fv, z: Math.max(FAR_Z + 1, fv.z) }, performance.now() / 1000, 0, { floor: 0, tool: 'pan', selected: null });
       let list = album();
       const photo: Photo = { k: list.length ? key : 'first', cap, d: cvs.toDataURL('image/jpeg', 0.62), done: doneCount(world), ms: Math.round(world.playMs) };
       list = [...list.filter((p) => p.k !== photo.k), photo].slice(-26);
@@ -1849,7 +1870,7 @@ function boot(data: HotData) {
       cam.x = hubCX; cam.y = hubCY; cam.z = nearZoom(); camTo = null;
       // 前に見ていた場所から始める
       const c0 = json ? store.meta().cams?.[String(n)] : undefined;
-      if (c0 && [c0.x, c0.y, c0.z].every((v) => typeof v === 'number' && isFinite(v))) { cam.x = c0.x; cam.y = c0.y; cam.z = Math.min(Z_MAX, Math.max(Z_MIN, c0.z)); }
+      if (c0 && [c0.x, c0.y, c0.z].every((v) => typeof v === 'number' && isFinite(v))) { cam.x = c0.x; cam.y = c0.y; cam.z = Math.min(Z_MAX, Math.max(zMin(), c0.z)); }
       $('b-fit').textContent = '全体';
       title.hide();
       app.classList.remove('in-title');
@@ -1950,6 +1971,9 @@ function boot(data: HotData) {
       sinceSave += dt;
       if (sinceSave > 5) { sinceSave = 0; save(); saveCam(); paintSync(); }
       if (!warned && pf.breakMin && now - began > pf.breakMin * 60000) { warned = true; toast(`${pf.breakMin} 分たった。ここで切り上げて休め。立って、遠くを見ろ。`, 8000); buzz([40, 60, 40]); }
+      // 立体表示は、平らな表示ほど引けない。下限より引いていたら（立体表示に切り替えたときなど）、下限まで寄る
+      const zm = zMin();
+      if (camTo && camTo.z < zm) camTo.z = zm; else if (!camTo && cam.z < zm - 0.01) camTo = { x: cam.x, y: cam.y, z: zm };
       if (camTo && pf.calm) { cam.x = camTo.x; cam.y = camTo.y; cam.z = camTo.z; camTo = null; }
       if (camTo) {
         const k = 1 - Math.exp(-dt * 7);
@@ -1968,9 +1992,10 @@ function boot(data: HotData) {
         // 光の層は黒地に加算、効果の層は黒地（何もない所は効果なし）
         for (const c2 of [glowCtx, maskCtx]) { c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'source-over'; c2.globalAlpha = 1; c2.fillStyle = '#000'; c2.fillRect(0, 0, glowCv.width, glowCv.height); c2.setTransform(fxK, 0, 0, fxK, 0, 0); c2.globalCompositeOperation = 'lighter'; }
         // 高さの層は、地面の高さ（0.1）で塗ってから、高いものを「明るいほうを残す」で重ねる
-        if (gfxTier === 2 && !(three && gw > 0)) { heightCtx.setTransform(1, 0, 0, 1, 0, 0); heightCtx.globalCompositeOperation = 'source-over'; heightCtx.globalAlpha = 1; heightCtx.fillStyle = 'rgb(26,26,26)'; heightCtx.fillRect(0, 0, heightCv.width, heightCv.height); heightCtx.setTransform(fxK, 0, 0, fxK, 0, 0); heightCtx.globalCompositeOperation = 'lighten'; }
+        if (gfxTier === 2 && !(three && gw > 0) && cam.z >= FAR_Z) { heightCtx.setTransform(1, 0, 0, 1, 0, 0); heightCtx.globalCompositeOperation = 'source-over'; heightCtx.globalAlpha = 1; heightCtx.fillStyle = 'rgb(26,26,26)'; heightCtx.fillRect(0, 0, heightCv.width, heightCv.height); heightCtx.setTransform(fxK, 0, 0, fxK, 0, 0); heightCtx.globalCompositeOperation = 'lighten'; }
       }
-      const useH = fx && gfxTier === 2 && !(three && gw > 0);
+      // 高さの層（影とくぼみの陰り）は、引いた視野では使わない（1 マスが数ピクセルでは影が見えず、合成の手間だけかかる）
+      const useH = fx && gfxTier === 2 && !(three && gw > 0) && cam.z >= FAR_Z;
       if (t3) {
         // 立体表示：見えている範囲を囲む長方形を、地面の層と天面の層に描く。#cv は透明にして、画面にじかに描くものだけを載せる
         const c3 = camera3(cam, cw, ch), cam2 = { x: (c3.x0 + c3.x1) / 2, y: (c3.y0 + c3.y1) / 2, z: cam.z };
