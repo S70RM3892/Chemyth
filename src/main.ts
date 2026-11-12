@@ -456,6 +456,25 @@ function boot(data: HotData) {
   // ---- 画面写真（PNG）：次に描いたコマを、見えているとおりに保存する ----
   let shotPending = false;
   const download = (href: string, name: string) => { const a = document.createElement('a'); a.href = href; a.download = name; document.body.append(a); a.click(); a.remove(); };
+  type Saver = { save(r: { filename: string; data: Blob }): Promise<unknown> };
+  /**
+   * ファイルを渡す。claude.ai の中では、ふつうのダウンロードが止められているので、そこで用意された保存の確認（downloads）を使う。
+   * それ以外（GitHub Pages や、保存した HTML）では、ふつうにダウンロードする。保存できたら true
+   */
+  const saveFile = async (name: string, data: Blob): Promise<boolean> => {
+    const cl = (window as unknown as { claude?: { use?: (n: string) => Promise<Saver | null> } }).claude;
+    const dl = cl?.use ? await cl.use('downloads').catch(() => null) : null;
+    if (dl) {
+      try { await dl.save({ filename: name, data }); return true; }
+      catch (e) { const code = (e as { code?: string } | null)?.code; if (code !== 'declined') toast(code === 'rate_limited' ? '保存の確認がまだ開いている。少し待ってからもう一度。' : 'ここでは保存できなかった。', 3000); return false; }
+    }
+    const u = URL.createObjectURL(data);
+    download(u, name);
+    window.setTimeout(() => URL.revokeObjectURL(u), 5000);
+    return true;
+  };
+  /** data: の URL（アルバムの写真）を、ファイルの中身にする */
+  const dataUrlBlob = (d: string): Blob => { const [head, b64] = d.split(','), bin = atob(b64), buf = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i); return new Blob([buf], { type: head.slice(5).split(';')[0] }); };
   const stampName = (ext: string) => { const d = new Date(); return `chemyth-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}.${ext}`; };
   const shot = () => { shotPending = true; };
   /** 描き終えたコマを 1 枚にまとめる（高画質・立体表示では、WebGL の絵の上に #cv を重ねる） */
@@ -467,7 +486,7 @@ function boot(data: HotData) {
       const o = out.getContext('2d')!;
       if (fxOn() && !glCv.hidden) o.drawImage(glCv, 0, 0, W, Hh);
       if (!fxOn() || threeOn()) o.drawImage(cv, 0, 0, W, Hh);
-      out.toBlob((b) => { if (!b) { toast('写真を作れなかった。', 2000); return; } const u = URL.createObjectURL(b); download(u, stampName('png')); window.setTimeout(() => URL.revokeObjectURL(u), 5000); toast('画面写真を保存した（ダウンロード）。', 2000); }, 'image/png');
+      out.toBlob((b) => { if (!b) { toast('写真を作れなかった。', 2000); return; } void saveFile(stampName('png'), b).then((ok) => { if (ok) toast('画面写真を保存した。', 2000); }); }, 'image/png');
     } catch { toast('この画面では写真を保存できない。', 2400); }
   };
   /** キーと指の操作の一覧 */
@@ -500,10 +519,7 @@ function boot(data: HotData) {
     let blueprints: unknown = [];
     try { blueprints = JSON.parse(localStorage.getItem(BP_KEY) || '[]'); } catch { /* なくてよい */ }
     const blob = new Blob([JSON.stringify({ app: 'chemyth', v: 2, at: Date.now(), slots, blueprints })], { type: 'application/json' });
-    const u = URL.createObjectURL(blob);
-    download(u, stampName('json'));
-    window.setTimeout(() => URL.revokeObjectURL(u), 5000);
-    toast('3 冊ぶんを 1 つのファイルに書き出した（アルバムの写真は含まない）。', 3000);
+    void saveFile(stampName('json'), blob).then((ok) => { if (ok) toast('3 冊ぶんを 1 つのファイルに書き出した（アルバムの写真は含まない）。', 3000); });
   };
   const importAll = () => {
     const inp = h('input', { type: 'file', accept: '.json,application/json' }) as HTMLInputElement;
@@ -1708,7 +1724,7 @@ function boot(data: HotData) {
     if (big) {
       const img = h('img', { class: 'photo-big', src: big.d, alt: big.cap });
       showSheet(h('header', {}, h('h2', {}, 'アルバム'), h('button', { class: 'ghost', type: 'button', id: 'album-back', onclick: () => showAlbum() }, '戻る')), img, h('p', {}, big.cap), h('p', { class: 'muted' }, `達成 ${big.done} / ${TOTAL_GOALS}`),
-        h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'album-save', onclick: () => { download(big.d, stampName('jpg')); toast('写真を保存した（ダウンロード）。', 2000); } }, 'この写真を保存する')));
+        h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'album-save', onclick: () => { void saveFile(stampName('jpg'), dataUrlBlob(big.d)).then((ok) => { if (ok) toast('写真を保存した。', 2000); }); } }, 'この写真を保存する')));
       return;
     }
     showSheet(h('header', {}, h('h2', {}, 'アルバム'), closeBtn()),

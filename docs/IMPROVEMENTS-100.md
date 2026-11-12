@@ -148,6 +148,10 @@
 | 99 | 設定をひとつの画面にまとめた（メニュー →「設定」） | 画面 |
 | 100 | 更新のお知らせを、既存のプレイヤーに 1 度だけ出す（新しく始めた人には出さない） | 画面 |
 
+## 補足：claude.ai の中での保存
+
+claude.ai の Artifact の中では、ふつうのダウンロードが止められている。画面写真（87）・すべて書き出す（88）・アルバムの写真（83）は、そこでは Artifact の `downloads` の仕組みを通し、保存する前に確認が出る。GitHub Pages では、ふつうにダウンロードする。claude.ai の中での動きは、`window.claude` を真似た代わりの物でしか確かめていない（呼び出しの形と、ふつうのダウンロードが起きないこと）。ファイルから読み込む（89）の、claude.ai の中でのファイル選びも確かめていない。
+
 ## 出典
 
 - 振動（Vibration API）は iOS・iPadOS の Safari で未実装：[Can I use: Vibration API](https://caniuse.com/vibration)、[W3C Vibration API implementation report](https://w3c.github.io/vibration/reports/implementation.html)
