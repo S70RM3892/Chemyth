@@ -177,6 +177,8 @@ function boot(data: HotData) {
     // 立体表示では、WebGL の絵が下、#cv はその上の透明な層（縁の道しるべと花火）になる
     if (threeOn()) { if (cv.previousElementSibling !== glCv) cv.before(glCv); } else if (glCv.previousElementSibling !== cv) cv.after(glCv);
     app.classList.toggle('three', threeOn());
+    // 使わなくなった描き先は、すぐ捨てる（立体表示をやめたら立体の分を、標準にしたらすべてを。iPad では GPU のメモリが限られる）
+    if (post && !fxOn()) post.sleep(); else if (post && !threeOn()) post.drop3d();
   };
   const resize = () => {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -193,9 +195,12 @@ function boot(data: HotData) {
       glowSCv.width = Math.max(8, Math.round(cw * FX_SCALE)); glowSCv.height = Math.max(8, Math.round(ch * FX_SCALE));
     } else {
       for (const c of [glowCv, maskCv, heightCv]) { c.width = Math.max(8, Math.round(cw * FX_SCALE)); c.height = Math.max(8, Math.round(ch * FX_SCALE)); }
+      // 立体表示の層は使わないので、絵の分のメモリを返す（1180×820 の画面で、地面と天面は 1 枚 13 MB ほど）
+      for (const c of [gndCv, topCv, glowSCv]) c.width = c.height = 1;
+      gw = gh = 0;
     }
     fxK = FX_SCALE;
-    post?.resize(cv.width, cv.height);
+    if (fxOn()) post!.resize(cv.width, cv.height);
   };
   new ResizeObserver(resize).observe(cv);
   applyGfx();

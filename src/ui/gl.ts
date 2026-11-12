@@ -83,6 +83,10 @@ export interface Post {
   render(scene: TexImageSource, glow: TexImageSource, mask: TexImageSource, p: PostParams, height?: TexImageSource | null): void;
   /** 立体表示：地面・箱・天面を遠近カメラで描いてから、同じ合成をかける。glow と mask は、地面の絵と同じ範囲に描いたもの */
   render3d(s: Scene3, glow: TexImageSource, mask: TexImageSource, p: PostParams): void;
+  /** 立体表示をやめたとき：立体表示だけが使う描き先と、地面・天面のテクスチャを捨てる（シェーダーは残すので、戻すのは速い） */
+  drop3d(): void;
+  /** 標準の画質にしたとき：描き先とテクスチャをすべて捨て、絵を 1 画素にする。また使うときは resize から */
+  sleep(): void;
   lost(): boolean;
 }
 
@@ -496,7 +500,7 @@ export function createPost(canvas: HTMLCanvasElement): Post | null {
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
     return { fbo, tex, w, h };
   };
-  const tScene = texture(), tGlow = texture(), tMask = texture(), tHeight = texture();
+  let tScene = texture(), tGlow = texture(), tMask = texture(), tHeight = texture();
   let W = 0, H = 0, lv: Target[] = [];
   /** 最高画質の作業用：影（高さの層と同じ細かさ）、光の筋、レンズの光の筋（2 枚）、上下のぼかし（2 枚） */
   let shA: Target | null = null, shB: Target | null = null, god: Target | null = null, stA: Target | null = null, stB: Target | null = null, sfA: Target | null = null, sfB: Target | null = null;
@@ -659,10 +663,18 @@ export function createPost(canvas: HTMLCanvasElement): Post | null {
     } catch { bad3 = true; st3 = null; }
     return st3;
   };
+  /** 立体表示の描き先を捨てる */
+  const free3 = (s: Stage3) => {
+    if (s.ms) { gl.deleteFramebuffer(s.ms); gl.deleteRenderbuffer(s.msColor); gl.deleteRenderbuffer(s.msDepth); gl.deleteFramebuffer(s.scene!.fbo); gl.deleteTexture(s.scene!.tex); gl.deleteFramebuffer(s.fbB); gl.deleteTexture(s.bGlow); gl.deleteTexture(s.bMask); gl.deleteRenderbuffer(s.bDepth); for (const t of [s.sh1!, s.sh2!, s.ao1!]) { gl.deleteFramebuffer(t.fbo); gl.deleteTexture(t.tex); } }
+    s.ms = s.fbB = null; s.msColor = s.msDepth = s.bDepth = null; s.bGlow = s.bMask = null; s.scene = s.sh1 = s.sh2 = s.ao1 = null;
+    s.w = s.h = 0;
+  };
+  /** 中身ごとテクスチャを捨てて、空のものに替える */
+  const renew = (t: WebGLTexture) => { gl.deleteTexture(t); return texture(); };
   /** 立体表示の描き先を、画面の大きさに合わせて作り直す */
   const size3 = (s: Stage3) => {
     if (s.w === W && s.h === H) return;
-    if (s.ms) { gl.deleteFramebuffer(s.ms); gl.deleteRenderbuffer(s.msColor); gl.deleteRenderbuffer(s.msDepth); gl.deleteFramebuffer(s.scene!.fbo); gl.deleteTexture(s.scene!.tex); gl.deleteFramebuffer(s.fbB); gl.deleteTexture(s.bGlow); gl.deleteTexture(s.bMask); gl.deleteRenderbuffer(s.bDepth); for (const t of [s.sh1!, s.sh2!, s.ao1!]) { gl.deleteFramebuffer(t.fbo); gl.deleteTexture(t.tex); } }
+    free3(s);
     s.w = W; s.h = H;
     // 絵：輪郭のぎざぎざを消すため、1 画素を 4 点で描いてから（多重標本化）、ふつうのテクスチャへ写す
     const samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) as number);
@@ -688,8 +700,26 @@ export function createPost(canvas: HTMLCanvasElement): Post | null {
     s.sh1 = target(sw, sh); s.sh2 = target(sw, sh); s.ao1 = target(sw, sh);
   };
 
+  const drop3d = () => {
+    // 上下のぼかしも、立体表示でしか使わない
+    drop(sfA); drop(sfB); sfA = sfB = null;
+    if (!st3 || !st3.ms) return;
+    free3(st3);
+    // 地面と天面の絵は、画面より広い（1180×820 の画面で 2171×1523）。次に描くときに入れ直す
+    st3.tGround = renew(st3.tGround); st3.tTop = renew(st3.tTop); st3.tGlowS = renew(st3.tGlowS);
+  };
+
   return {
     lost: () => dead || gl.isContextLost(),
+    drop3d,
+    sleep() {
+      if (!W && !H) return;
+      drop3d(); free();
+      drop(shA); drop(shB); shA = shB = null; hW = hH = 0;
+      tScene = renew(tScene); tGlow = renew(tGlow); tMask = renew(tMask); tHeight = renew(tHeight);
+      W = H = 0;
+      canvas.width = canvas.height = 1;
+    },
     resize(w, h) {
       if (w === W && h === H) return;
       W = w; H = h;
