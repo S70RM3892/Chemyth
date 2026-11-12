@@ -456,7 +456,8 @@ export function createPost(canvas: HTMLCanvasElement): Post | null {
   const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: typeof location !== 'undefined' && location.search.includes('gfx') });
   if (!gl) return null;
   let dead = false;
-  canvas.addEventListener('webglcontextlost', (ev) => { ev.preventDefault(); dead = true; });
+  // 失われた段は、戻ってきても使えない（main が作り直す）。preventDefault で、ブラウザに戻すよう頼む
+  canvas.addEventListener('webglcontextlost', (ev) => { ev.preventDefault(); dead = true; }, { once: true });
 
   const compile = (type: number, src: string) => {
     const sh = gl.createShader(type)!;

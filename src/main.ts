@@ -205,6 +205,10 @@ function boot(data: HotData) {
   new ResizeObserver(resize).observe(cv);
   applyGfx();
   resize();
+  // WebGL の絵が失われたら（iPad が裏で GPU を取り上げたときなど）、#gl を隠して平らな絵で続ける。
+  // 戻ってきたら、合成段を作り直す（失われた段のシェーダーやテクスチャは、もう使えない）
+  glCv.addEventListener('webglcontextlost', () => { applyGfx(); resize(); });
+  glCv.addEventListener('webglcontextrestored', () => { post = null; applyGfx(); resize(); });
   const nearZoom = () => Math.max(40, Math.min(54, cw / 24));
   /** いま引ける限界。立体表示は、平らな表示ほど引けない */
   const zMin = () => (threeOn() ? Z_MIN_3D : Z_MIN);
