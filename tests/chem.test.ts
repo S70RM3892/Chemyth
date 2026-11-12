@@ -4,7 +4,7 @@ import { ORG_MIXES, WASHES, extract, extractReachable, extractRefusal, washById 
 import { AMINO, AMINO_MIXES, migrate, migrateReachable, poleAt } from '../src/content/phoresis';
 import { AGENTS, ION_ORDER, MIXES, MUD_CL, MUD_OH, SLUDGE, agentById, ionsId, ionsOf, reachableFrom, refusal, settle } from '../src/content/ions';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
-import { DX, DY, outputBlocked, RAIL_BOOST, addRail, layRail, railRoute, removeRail, stationRoutes, STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, goalRate, reactionsPerMin, stationTargets, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
+import { DX, DY, outputBlocked, signalOn, stationCap, trainCap, RAIL_BOOST, addRail, layRail, railRoute, removeRail, stationRoutes, STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, goalRate, reactionsPerMin, stationTargets, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { hasSub, sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
@@ -792,10 +792,10 @@ describe('工場の動作', () => {
     for (let i = 0; i < 40 * 60; i++) {
       const src = at(w, 9, 10)!;
       if (!src.item) src.item = { s: i % 2 ? 'N2' : 'O2', p: 1, m: 0 };
-      for (const [x, y] of [[62, 10], [62, 11]]) { const o = at(w, x, y)!; if (o.item) { got++; o.item = null; } }
+      for (const [x, y] of [[62, 10], [62, 11]]) { const o = at(w, x, y)!; if (o.item) { got += o.item.n || 1; o.item = null; } }
       step(w, 1 / 60);
     }
-    expect(got).toBeGreaterThan(TRAIN_CAP * 2);   // 何往復かして届いている
+    expect(got).toBeGreaterThan(60);   // 何往復かして届いている（入れているのは毎秒 2 個ほど）
     expect(a.n!).toBeGreaterThan(1);
     expect(a.buf!.length).toBeLessThanOrEqual(STATION_CAP);
     // 速さの目安：線路 100 マスでも、ベルト 1 本（毎分 120 個）の半分以上は運べる
@@ -807,8 +807,9 @@ describe('工場の動作', () => {
       expect(railLength(src, dst)).toBe(100);
       let moved = 0;
       for (let i = 0; i < 60 * 60; i++) { src.buf = Array(STATION_CAP).fill('N2'); moved += dst.buf!.length; dst.buf = []; step(f, 1 / 60); }
-      expect(moved).toBeGreaterThan(60);
-      expect(moved).toBeLessThan(140);
+      // 1 編成 240 個。線路 100 マスの往復は 14 秒ほどなので、60 秒で 4 往復
+      expect(moved).toBeGreaterThanOrEqual(TRAIN_CAP * 3);
+      expect(moved).toBeLessThanOrEqual(TRAIN_CAP * 5);
     }
     // 降ろす駅は受け取らない（ベルトで押し込めない）
     place(w, 'belt', 59, 10, 0);
@@ -870,8 +871,9 @@ describe('工場の動作', () => {
     const a = at(w, 10, 10)!, b1 = at(w, 30, 10)!, b2 = at(w, 10, 40)!;
     b1.role = 'out'; b2.role = 'out';
     expect(stationTargets(w, a)).toEqual([b1, b2]);   // 近い順
-    for (let i = 0; i < 60 * 60; i++) { a.buf = Array(STATION_CAP).fill('N2'); step(w, 1 / 60); if (b1.buf!.length > 40) b1.buf = []; if (b2.buf!.length > 40) b2.buf = []; }
-    expect(b1.buf!.length + b2.buf!.length).toBeGreaterThan(0);
+    let r1 = 0, r2 = 0;
+    for (let i = 0; i < 60 * 60; i++) { a.buf = Array(STATION_CAP).fill('N2'); step(w, 1 / 60); r1 += b1.buf!.length; b1.buf = []; r2 += b2.buf!.length; b2.buf = []; }
+    expect(r1).toBeGreaterThan(0); expect(r2).toBeGreaterThan(0);
     const w1 = newWorld();
     place(w1, 'station', 10, 10, 0); place(w1, 'station', 30, 10, 0); place(w1, 'station', 10, 40, 0);
     at(w1, 30, 10)!.role = 'out'; at(w1, 10, 40)!.role = 'out';
@@ -1184,7 +1186,7 @@ describe('研究・信号・2 階・設計図の共有・区画', () => {
     expect(doResearch(w, 'heavy')).toBe(true);
     expect(has(w, 'express')).toBe(false);
     expect(ts2(w)).toBeCloseTo(v0);
-    expect(trainCap(w)).toBe(40);
+    expect(trainCap(w)).toBe(400);
     // 保存して読み直しても残る。知らない id は捨てる
     const j = JSON.parse(serialize(w)); j.research.push('nonsense');
     expect(deserialize(JSON.stringify(j))!.research.sort()).toEqual([...w.research].sort());
@@ -1546,7 +1548,7 @@ describe('金属イオンの系統分離とタンク', () => {
     expect(at(r, hx0 - 11, hy0)!.test).toBe('hcl');
   });
 
-  it('貯蔵タンク：1 種類だけをため、出口を閉じればためるだけになり、開けば出てくる', () => {
+  it('貯蔵タンク：1 種類だけをため、出口を閉じればためるだけになり、開けば出てくる', async () => {
     const w = newWorld();
     place(w, 'belt', 8, 10, 0); place(w, 'belt', 9, 10, 0);
     place(w, 'tank', 10, 10, 0);
@@ -1576,7 +1578,12 @@ describe('金属イオンの系統分離とタンク', () => {
     place(w2, 'tank', 10, 10, 0); const t2 = at(w2, 10, 10)!; t2.test = 'hold';
     place(w2, 'belt', 9, 10, 0);
     for (let i = 0; i < 60 * 200; i++) { const b = at(w2, 9, 10)!; if (!b.item) b.item = { s: 'H2O', p: 1, m: 0 }; step(w2, 1 / 60); }
-    expect(t2.cnt).toBe(200);
+    const { TANK_CAP } = await import('../src/engine/world');
+    expect(t2.cnt).toBe(TANK_CAP);
+    at(w2, 9, 10)!.item = { s: 'H2O', p: 1, m: 0, n: 50 };
+    for (let i = 0; i < 600; i++) step(w2, 1 / 60);
+    expect(t2.cnt).toBe(TANK_CAP);       // 満杯のタンクは受け取らない
+    expect(at(w2, 9, 10)!.item?.n).toBeGreaterThanOrEqual(50);
     // 試薬棚から来たぶんは、タンクを通しても指令に数えない
     const w3 = newWorld();
     const [hx0, hy0] = HUB_TILES[0];
@@ -2179,5 +2186,123 @@ describe('アカウント：端末をまたいだセーブの同期の判断', (
     expect(await unpack('raw:{"v":1}')).toBe('{"v":1}');
     expect(await unpack('gz:これは壊れている')).toBeNull();
     expect(await unpack('nonsense')).toBeNull();
+  });
+});
+
+describe('どの設備を通っても、流れが細らない', () => {
+  const sim = (w: ReturnType<typeof newWorld>, sec: number) => { for (let i = 0; i < Math.round(sec * 60); i++) step(w, 1 / 60); };
+  const total = (r: Record<string, number>) => Object.values(r).reduce((a, b) => a + b, 0);
+  /** 採取機 n 台を、(x0, y) から東へ伸びるベルトに合流させる */
+  const farm = (w: ReturnType<typeof newWorld>, n: number, x0: number, y: number) => {
+    for (let k = 0; k < n; k++) { place(w, 'belt', x0 + k * 2, y, 0); place(w, 'belt', x0 + k * 2 + 1, y, 0); expect(place(w, 'extractor', x0 + k * 2, y - 1, 1)).toBeNull(); }
+    return x0 + n * 2;
+  };
+  it('分析器（選別）・検知器・弁・分配器・地下ベルト・立体交差を続けて通しても、採取機 8 台ぶんが流れる', () => {
+    const w = newWorld();
+    w.research.push('logic');
+    let x = farm(w, 8, 40, 100);
+    const res = resourceAt(40, 99);
+    for (const k of ['analyzer', 'belt', 'sensor', 'gate', 'belt', 'tunnel'] as const) expect(place(w, k, x++, 100, 0)).toBeNull();
+    x += 3; expect(place(w, 'tunnel', x++, 100, 0)).toBeNull();
+    for (const k of ['bridge', 'belt', 'splitter', 'belt', 'vent'] as const) expect(place(w, k, x++, 100, 0)).toBeNull();
+    const an = [...w.ents.values()].find((e) => e.kind === 'analyzer')!, gate = [...w.ents.values()].find((e) => e.kind === 'gate')!, sen = [...w.ents.values()].find((e) => e.kind === 'sensor')!;
+    an.test = `is:${res}`; gate.test = 'off'; sen.test = `is:${res}`; sen.ch = 9; gate.ch = 8;
+    sim(w, 120);
+    // 着いた数 ＋ 途中（長い道のり）にある数が、採れた数とほぼ同じ。どこかが細っていれば、採取機が止まって、採れた数が減る
+    const moving = [...w.ents.values()].reduce((sum, e) => sum + (e.item ? e.item.n || 1 : 0) + (e.items ?? []).reduce((t, it) => t + (it ? it.n || 1 : 0), 0), 0);
+    const dug = [...w.ents.values()].reduce((sum, e) => sum + (e.kind === 'extractor' ? e.n || 0 : 0), 0);
+    expect(dug).toBeGreaterThan(120 * 8 * 0.97);
+    expect(total(w.vented) + moving).toBe(dug);
+    expect(total(w.vented)).toBeGreaterThan(120 * 8 * 0.85);
+    expect(signalOn(w, 9)).toBe(true); // 検知器は、通るたびに信号を点けている
+  });
+  it('タンクは、入ってきた分を、待たせずに出す（1 個ずつにしぼらない）', () => {
+    const w = newWorld();
+    let x = farm(w, 8, 40, 110);
+    expect(place(w, 'tank', x, 110, 0)).toBeNull();
+    const tank = at(w, x, 110)!;
+    for (const i of [0, 1]) { const p = slotPort(tank, i); place(w, 'belt', p.tx, p.ty, p.d); place(w, 'vent', p.tx + DX[p.d], p.ty + DY[p.d], p.d); }
+    sim(w, 120);
+    expect(total(w.vented)).toBeGreaterThan(120 * 8 * 0.93);
+    expect(tank.cnt!).toBeLessThan(100);
+  });
+  it('列車：採取機 12 台ぶんを、1 編成で 40 マス先へ運びきる（1 編成 240 個、降ろす駅も待たせずに出す）', () => {
+    const w = newWorld();
+    let x = farm(w, 12, 40, 120);
+    expect(place(w, 'station', x, 120, 0)).toBeNull();
+    expect(place(w, 'station', x, 160, 0)).toBeNull();
+    const a = at(w, x, 120)!, b = at(w, x, 160)!;
+    b.role = 'out';
+    for (const i of [0, 1]) { const p = slotPort(b, i); place(w, 'belt', p.tx, p.ty, p.d); place(w, 'vent', p.tx + DX[p.d], p.ty + DY[p.d], p.d); }
+    sim(w, 180);
+    // 往復の間に駅にたまる分（720 個の上限に届かない）と、走っている列車の分を除けば、ほぼ全部が着いている
+    expect(total(w.vented)).toBeGreaterThan(180 * 12 * 0.85);
+    expect(a.buf!.length).toBeLessThan(stationCap(w));
+    expect(trainCap(w)).toBe(240);
+  });
+  it('行き先のないベルトは、これまでどおり詰まり、装置を止める（荷が際限なく積み上がらない）', () => {
+    const w = newWorld();
+    place(w, 'electrolyzer', 60, 60, 1);
+    const e = at(w, 60, 60)!;
+    configure(e, rec('water-electrolysis'), ['H2', 'O2'], ['c', 'a']);
+    e.inBuf = { H2O: 1e6 };
+    const p0 = outPort(e, 0), p1 = outPort(e, 1);
+    place(w, 'vent', p0.tx, p0.ty, p0.d);
+    for (let k = 0; k < 5; k++) place(w, 'belt', p1.tx + DX[p1.d] * k, p1.ty + DY[p1.d] * k, p1.d); // O₂ の先は行き止まり
+    sim(w, 60);
+    expect(e.busy).toBe(false);
+    expect(outputBlocked(e)).toBe(true);
+    const n1 = e.n!;
+    sim(w, 60);
+    expect(e.n).toBe(n1);                                    // 止まったまま
+    const onBelt = [...w.ents.values()].filter((b) => b.kind === 'belt' && b.item).map((b) => b.item!.n || 1);
+    expect(onBelt.length).toBe(5);                           // 5 マスとも、荷 1 つずつで埋まっている
+    expect(Math.max(...onBelt)).toBeLessThan(20);            // 1 つの荷に積み上がるのは、待てる時間（2 秒）の分まで
+    // 先に廃棄口をつなぐと、流れ出して再開する
+    place(w, 'vent', p1.tx + DX[p1.d] * 5, p1.ty + DY[p1.d] * 5, p1.d);
+    sim(w, 20);
+    expect(e.n!).toBeGreaterThan(n1 + 5);
+  });
+  it('装置は、原料がそろっていて動けるなら、使い切れない分を捨てずに待たせる。ほかの原料が足りなくて動けないなら、あふれさせて道をあける', () => {
+    // 動ける装置：N₂ も H₂ も十分。そこへ N₂ の大きな荷が続けて着く
+    const w = newWorld();
+    place(w, 'reactor', 30, 30, 0);
+    const e = at(w, 30, 30)!;
+    configure(e, rec('haber-bosch'), ['NH3']);
+    place(w, 'vent', 32, 30, 0);
+    for (const x of [27, 28, 29]) place(w, 'belt', x, 30, 0);
+    e.inBuf = { N2: 0, H2: 1e6 };
+    let fed = 0;
+    for (let i = 0; i < 60 * 60; i++) { const b = at(w, 27, 30)!; if (!b.item) { b.item = { s: 'N2', p: 0, m: w.tick, n: 40 }; fed += 40; } step(w, 1 / 60); }
+    expect(w.spilled.N2 || 0).toBe(0);
+    expect(e.ts![2]).toBeLessThan(0.5);
+    const waiting = [27, 28, 29].reduce((sum, x) => sum + (at(w, x, 30)!.item?.n || 0), 0);
+    expect(fed).toBe(e.n! + (e.busy ? 1 : 0) + e.inBuf.N2 + waiting);   // 入れた数 ＝ 使った数 ＋ 装置の中 ＋ ベルトの上
+    // 動けない装置：H₂ がない。1 本のベルトに N₂ と H₂ を混ぜて送ると、余る N₂ が道をふさがずに、H₂ が届く
+    const w2 = newWorld();
+    place(w2, 'reactor', 30, 30, 0);
+    const e2 = at(w2, 30, 30)!;
+    configure(e2, rec('haber-bosch'), ['NH3']);
+    place(w2, 'vent', 32, 30, 0);
+    for (const x of [27, 28, 29]) place(w2, 'belt', x, 30, 0);
+    for (let i = 0; i < 60 * 120; i++) { const b = at(w2, 27, 30)!; if (!b.item) b.item = { s: Math.floor(i / 40) % 6 === 0 ? 'H2' : 'N2', p: 0, m: w2.tick, n: 5 }; step(w2, 1 / 60); }
+    expect(w2.spilled.N2).toBeGreaterThan(0);
+    expect(e2.n!).toBeGreaterThan(10);
+  });
+  it('沈殿槽は、待っている同じ混合溶液に上乗せして、まとめて分ける', async () => {
+    const { MIXES } = await import('../src/content/ions');
+    const { sepRun } = await import('../src/content/sep');
+    const w = newWorld();
+    place(w, 'settler', 40, 160, 0);
+    const e = at(w, 40, 160)!, mix = MIXES[0].id, r = sepRun('settler', mix, 'hcl');
+    e.test = 'hcl';
+    for (const slot of [0, 2]) { const p = slotPort(e, slot); place(w, 'vent', p.tx, p.ty, p.d); }
+    for (const x of [37, 38, 39]) place(w, 'belt', x, 160, 0);
+    let fed = 0;
+    for (let i = 0; i < 60 * 60; i++) { const b = at(w, 37, 160)!; if (!b.item) { b.item = { s: mix, p: 0, m: w.tick, n: 3 }; fed += 3; } step(w, 1 / 60); }
+    sim(w, 10);
+    expect(fed).toBeGreaterThan(300);                         // ベルトは、ほぼ止まらずに流れた（毎秒 2 マス × 3 個）
+    expect(w.vented[r.main!]).toBeGreaterThan(fed * 0.95);
+    expect(w.vented[r.side!]).toBe(w.vented[r.main!]);
   });
 });

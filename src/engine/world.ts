@@ -34,19 +34,19 @@ export function freeLine(used: Iterable<number>): number {
 /** 2×2 マスを占める装置。出口が 6 か所あり、奥の面が入口の目安になる */
 export const BIG: Kind[] = ['separator', 'reactor', 'electrolyzer', 'battery', 'station', 'settler', 'funnel', 'phoresis', 'tank'];
 /** 貯蔵タンクに入る数 */
-export const TANK_CAP = 200;
+export const TANK_CAP = 2000;
 /** 沈殿槽が 1 回の操作にかける秒数 */
 export const SETTLE_TIME = 1.2;
 /** 地下ベルトが届く距離（入口から出口までのマス数） */
 export const TUNNEL_RANGE = 7;
 /** 貨物駅にためておける数と、列車 1 編成に積める数 */
-export const STATION_CAP = 60, TRAIN_CAP = 24;
+export const STATION_CAP = 600, TRAIN_CAP = 240;
 /** 1 つの積む駅が走らせられる編成の数 */
 export const MAX_CARS = 3;
 
 /** 流れている物質。p は 0〜1 の進み具合、m は最後に動いた tick、rc は搬出口から出た印 */
 /** ベルトの上の荷。n は個数（省けば 1 個）。同じ物質は、ひとまとめの荷として運ばれる */
-export interface Item { s: string; p: number; m: number; rc?: boolean; d?: Dir; n?: number }
+export interface Item { s: string; p: number; m: number; rc?: boolean; d?: Dir; n?: number; /** 先へ進めずに待っている時間（秒） */ w?: number }
 /** 1 つの荷にまとめられる個数の上限（表示が 2 桁に収まる数） */
 export const STACK_MAX = 99;
 /** 出口がふさがっている間、出すものをためておける量（ベルトが 1 マス進む時間の何倍ぶんか）。
@@ -54,6 +54,9 @@ export const STACK_MAX = 99;
 export const HOLD_TILES = 6;
 /** 採取機・試薬棚・タンク・駅が、出口のふさがっている間にためておける個数 */
 export const SOURCE_HOLD = 12;
+/** 待っている荷に、同じ物質を上乗せできる時間（秒）。先が少し遅いだけなら、荷がまとまって流れ続ける。
+ *  これより長く動けない荷は「詰まっている」とみなして上乗せを断り、後ろへ詰まっていく（行き先のない副生成物は、これで装置を止める） */
+export const JAM_SEC = 2;
 
 export interface Ent {
   kind: Kind;
@@ -250,8 +253,8 @@ export const machineRate = (w: World) => (1 + 0.4 * w.up.machine) * (has(w, 'ove
 /** いちどに引けるベルトの本数 */
 export const maxLanes = (w: World) => (has(w, 'lanes4') ? 4 : has(w, 'lanes3') ? 3 : 2);
 export const tunnelRange = (w: World) => (has(w, 'tunnel') ? 12 : TUNNEL_RANGE);
-export const stationCap = (w: World) => (has(w, 'yard') ? 120 : STATION_CAP);
-export const trainCap = (w: World) => (has(w, 'heavy') ? 40 : TRAIN_CAP);
+export const stationCap = (w: World) => (has(w, 'yard') ? 1200 : STATION_CAP);
+export const trainCap = (w: World) => (has(w, 'heavy') ? 400 : TRAIN_CAP);
 export const maxCars = (w: World) => (has(w, 'yard') ? 5 : MAX_CARS);
 /** 研究の段を開くのに要る、終えた研究の数 */
 export const tierNeed = (tier: number) => (tier - 1) * 2;
@@ -970,6 +973,9 @@ function yields(w: World, t: Ent, d: Dir): boolean {
 export const mergeDirs = (e: Ent): Dir[] => ([0, 1, 2, 3] as Dir[]).filter((q) => ((e.ins || 0) >> q) & 1 && e.dir !== (q + 2) % 4);
 
 /** (x,y) のマスへ、向き d で物質 s を押し込む */
+/** 置いてある荷 it に、物質 s を n 個、上乗せできるか。同じ物質で、流れているか、待ちはじめて JAM_SEC 秒以内のときだけ */
+const stacks = (it: Item, s: string, rc: boolean | undefined, n: number) => it.s === s && !it.rc === !rc && (it.p < 1 || (it.w || 0) < JAM_SEC) && (it.n || 1) + n <= STACK_MAX;
+
 /** 荷をとなりのマスへ渡す。n は個数。受け取れたら true（荷は、分けずに丸ごと渡る） */
 function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n = 1, dry = false): boolean {
   const N = n > 1 ? n : undefined;
@@ -979,12 +985,11 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
     case 'belt':
       if (t.dir === (d + 2) % 4) return false;
       if (t.item) {
-        // 流れている途中の同じ物質の荷には、上乗せできる（合流しても、同じ物質なら順番待ちにならない）。
-        // マスの端で止まっている荷には載せない。先が詰まれば、これまでどおり 1 マスに荷 1 つで後ろへ詰まっていく
-        const it = t.item;
-        if (it.s !== s || !it.rc !== !rc || it.p >= 1 || (it.n || 1) + n > STACK_MAX) return false;
+        // 同じ物質の荷には、上乗せできる（合流しても、先が少し遅くても、順番待ちにならない）。
+        // 長く止まっている荷には載せない。先が詰まれば、1 マスに荷 1 つで後ろへ詰まっていく
+        if (!stacks(t.item, s, rc, n)) return false;
         if (dry) return true;
-        it.n = (it.n || 1) + n;
+        t.item.n = (t.item.n || 1) + n;
         t.ins = (t.ins || 0) | (1 << d);
         return true;
       }
@@ -997,25 +1002,28 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
       return true;
     case 'splitter':
     case 'analyzer':
-      if (t.item) return false;
+      if (t.item) { if (!stacks(t.item, s, rc, n)) return false; if (!dry) t.item.n = (t.item.n || 1) + n; return true; }
       if (dry) return true;
       t.item = { s, p: 0, m: w.tick, rc, n: N };
       return true;
     case 'sensor':
     case 'gate':
-      if (t.item || t.dir === (d + 2) % 4) return false;
+      if (t.dir === (d + 2) % 4) return false;
+      if (t.item) { if (!stacks(t.item, s, rc, n)) return false; if (!dry) t.item.n = (t.item.n || 1) + n; return true; }
       if (dry) return true;
       t.item = { s, p: 0, m: w.tick, rc, n: N };
       return true;
     case 'lift':
-      if (t.role !== 'in' || t.item || t.dir === (d + 2) % 4) return false;
+      if (t.role !== 'in' || t.dir === (d + 2) % 4) return false;
+      if (t.item) { if (!stacks(t.item, s, rc, n)) return false; if (!dry) t.item.n = (t.item.n || 1) + n; return true; }
       if (dry) return true;
       t.item = { s, p: 0, m: w.tick, rc, n: N };
       return true;
     case 'settler': case 'funnel': case 'phoresis': {
       // 分ける装置：その装置が扱う混合物だけを受け取る。設定を決めるまでは動かない
       if (!sepReady(t.kind, t.test) || !sepAccepts(t.kind, s) || sepRefusal(t.kind, s, t.test)) { t.bad = s; t.badT = w.tick; return false; }
-      if (t.item) return false;
+      // 待っている（または、いま分けている）同じ混合物には、上乗せできる。分ける時間は、個数によらない
+      if (t.item) { if (t.item.s !== s || (t.item.n || 1) + n > STACK_MAX) return false; if (!dry) t.item.n = (t.item.n || 1) + n; return true; }
       if (dry) return true;
       t.item = { s, p: 0, m: w.tick, n: N };
       return true;
@@ -1032,7 +1040,8 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
       return true;
     }
     case 'tunnel':
-      if (t.item || d !== t.dir) return false;
+      if (d !== t.dir) return false;
+      if (t.item) { if (!stacks(t.item, s, rc, n)) return false; if (!dry) t.item.n = (t.item.n || 1) + n; return true; }
       if (dry) return true;
       t.item = { s, p: 0, m: w.tick, rc, n: N };
       return true;
@@ -1043,7 +1052,8 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
       return true;
     case 'bridge': {
       const slots = (t.items ??= [null, null]);
-      if (slots[d % 2]) return false;
+      const cur = slots[d % 2];
+      if (cur) { if ((cur.d ?? d % 2) !== d || !stacks(cur, s, rc, n)) return false; if (!dry) cur.n = (cur.n || 1) + n; return true; }
       if (dry) return true;
       slots[d % 2] = { s, p: 0, m: w.tick, rc, d, n: N };
       return true;
@@ -1078,13 +1088,19 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
       // 使わない物質は受け取らない。ベルトはそこで止まるので、理由がわかるように印をつける
       if (!need) { t.bad = s; t.badT = w.tick; return false; }
       // 入れすぎた分はあふれて捨てる（1 本のベルトに混ぜても詰まらない）
+      // 反応 4 回ぶんたまるまでは、荷を丸ごと受け取る。それ以上は、
+      //  - ほかの原料が足りなくて動けないとき：あふれて捨てる（1 本のベルトに混ぜても、余った方が道をふさがない）
+      //  - 原料がそろっていて動けるとき：受け取らずに待たせる（使い切れない分を捨てない。まとまった荷が着いても無駄にならない）
       const cap = need * 4, have = t.inBuf[s] || 0;
-      if (dry) return !(have >= cap && w.noSpill);
-      if (have >= cap) { if (w.noSpill) return false; w.fx.push({ x, y, type: 'spill', s }); bump(w.spilled, s, n); bucket(w).spill += n; return true; }
-      // 荷は丸ごと受け取る。入りきらない分は、あふれて捨てる（あふれを止めた課題では、少し多めに持つ）
-      const over = w.noSpill ? 0 : Math.max(0, have + n - cap);
-      if (over) { w.fx.push({ x, y, type: 'spill', s }); bump(w.spilled, s, over); bucket(w).spill += over; }
-      t.inBuf[s] = have + n - over;
+      if (have >= cap) {
+        const starved = r.inputs.some(([id, k]) => id !== s && (t.inBuf![id] || 0) < k);
+        if (w.noSpill || !starved) return false;
+        if (dry) return true;
+        w.fx.push({ x, y, type: 'spill', s }); bump(w.spilled, s, n); bucket(w).spill += n;
+        return true;
+      }
+      if (dry) return true;
+      t.inBuf[s] = have + n;
       return true;
     }
   }
@@ -1113,7 +1129,7 @@ export function step(w: World, dt: number) {
         const it = e.item;
         if (!it) break;
         it.p = Math.min(1, it.p + speed * dt);
-        if (it.p >= 1 && it.m !== w.tick && push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc, it.n)) e.item = null;
+        if (it.p >= 1 && it.m !== w.tick) { if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc, it.n)) e.item = null; else it.w = (it.w || 0) + dt; }
         break;
       }
       case 'splitter': {
@@ -1121,6 +1137,7 @@ export function step(w: World, dt: number) {
         if (!it) break;
         it.p = Math.min(1, it.p + speed * dt);
         if (it.p < 1 || it.m === w.tick) break;
+        it.w = (it.w || 0) + dt; // 配り終えれば荷はなくなるので、残っている間だけ意味を持つ
         if ((it.n || 1) === 1) {
           for (let k = 0; k < 3; k++) {
             const i = ((e.rr || 0) + k) % 3, d = portDir(e.dir, i);
@@ -1150,7 +1167,7 @@ export function step(w: World, dt: number) {
         if (it.p < 1 || it.m === w.tick) break;
         // 'is:物質' は選別：その物質だけを正面へ通す
         const d = portDir(e.dir, (e.test.startsWith('is:') ? it.s === e.test.slice(3) : isPositive(it.s, e.test)) ? 0 : 1);
-        if (push(w, e.x + DX[d], e.y + DY[d], d, it.s, it.rc, it.n)) e.item = null;
+        if (push(w, e.x + DX[d], e.y + DY[d], d, it.s, it.rc, it.n)) e.item = null; else it.w = (it.w || 0) + dt;
         break;
       }
       case 'sensor': {
@@ -1163,6 +1180,7 @@ export function step(w: World, dt: number) {
           if (e.test === `is:${it.s}`) w.sig[e.ch || 1] = Math.max(w.sig[e.ch || 1] || 0, 3);
           e.item = null; e.stuck = 0;
         } else {
+          it.w = (it.w || 0) + dt;
           e.stuck = (e.stuck || 0) + dt;
           if (e.test === 'jam' && e.stuck > 0.6) w.sig[e.ch || 1] = Math.max(w.sig[e.ch || 1] || 0, 0.5);
         }
@@ -1174,7 +1192,7 @@ export function step(w: World, dt: number) {
         if (!it) break;
         it.p = Math.min(1, it.p + speed * dt);
         if (it.p < 1 || it.m === w.tick) break;
-        if (signalOn(w, e.ch) === (e.test !== 'off') && push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc, it.n)) e.item = null;
+        if (signalOn(w, e.ch) === (e.test !== 'off') && push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc, it.n)) e.item = null; else it.w = (it.w || 0) + dt;
         break;
       }
       case 'settler': case 'funnel': case 'phoresis': {
@@ -1209,15 +1227,13 @@ export function step(w: World, dt: number) {
       }
       case 'tank': {
         if (e.bad && w.tick - (e.badT || 0) > 45) e.bad = undefined;
-        const gap = every * 0.4;
-        e.timer = Math.min((e.timer || 0) + dt, gap * SOURCE_HOLD);
         const n = (e.cnt || 0) + (e.rcn || 0);
-        if (!n || !e.sub || e.test === 'hold' || e.timer < gap) break;
-        // 正面の 2 つの口から交互に出す。試薬棚や搬出口から来たぶんを先に出す。出口が空くのを待った分は、まとめて出す
-        const rc = (e.rcn || 0) > 0, q = Math.min(Math.floor(e.timer / gap + 1e-9), rc ? e.rcn! : e.cnt!);
+        if (!n || !e.sub || e.test === 'hold') break;
+        // 正面の 2 つの口から交互に出す。試薬棚や搬出口から来たぶんを先に出す。たまっている分は、荷にまとめて、待たずに出す
+        const rc = (e.rcn || 0) > 0, q = Math.min(rc ? e.rcn! : e.cnt!, STACK_MAX);
         for (let k = 0; k < 2; k++) {
           const i = ((e.rr || 0) + k) % 2, p = slotPort(e, i);
-          if (push(w, p.tx, p.ty, p.d, e.sub, rc, q)) { if (rc) e.rcn! -= q; else e.cnt! -= q; e.rr = (i + 1) % 2; e.timer = Math.max(0, e.timer - q * gap); break; }
+          if (push(w, p.tx, p.ty, p.d, e.sub, rc, q)) { if (rc) e.rcn! -= q; else e.cnt! -= q; e.rr = (i + 1) % 2; break; }
         }
         break;
       }
@@ -1226,8 +1242,12 @@ export function step(w: World, dt: number) {
         if (!it) break;
         it.p = Math.min(1, it.p + speed * dt);
         if (it.p < 1 || it.m === w.tick) break;
-        if (e.role === 'in') { const p = liftPartner(w, e); if (p && !p.item) { p.item = { s: it.s, p: 0, m: w.tick, rc: it.rc, n: it.n }; e.item = null; } }
-        else if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc, it.n)) e.item = null;
+        if (e.role === 'in') {
+          const p = liftPartner(w, e);
+          if (p && !p.item) { p.item = { s: it.s, p: 0, m: w.tick, rc: it.rc, n: it.n }; e.item = null; }
+          else if (p?.item && stacks(p.item, it.s, it.rc, it.n || 1)) { p.item.n = (p.item.n || 1) + (it.n || 1); e.item = null; }
+          else it.w = (it.w || 0) + dt;
+        } else if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc, it.n)) e.item = null; else it.w = (it.w || 0) + dt;
         break;
       }
       case 'sampler': {
@@ -1250,7 +1270,7 @@ export function step(w: World, dt: number) {
           if (!it) continue;
           it.p = Math.min(1, it.p + speed * dt);
           const d = it.d ?? (a as Dir);
-          if (it.p >= 1 && it.m !== w.tick && push(w, e.x + DX[d], e.y + DY[d], d, it.s, it.rc, it.n)) slots[a] = null;
+          if (it.p >= 1 && it.m !== w.tick) { if (push(w, e.x + DX[d], e.y + DY[d], d, it.s, it.rc, it.n)) slots[a] = null; else it.w = (it.w || 0) + dt; }
         }
         break;
       }
@@ -1277,24 +1297,24 @@ export function step(w: World, dt: number) {
         const dist = pair ? Math.abs(pair.x - e.x) + Math.abs(pair.y - e.y) : 1;
         it.p = Math.min(1, it.p + (speed * dt) / dist);
         if (it.p < 1 || it.m === w.tick) break;
-        if (pair) { if (!pair.item) { pair.item = { s: it.s, p: 0, m: w.tick, rc: it.rc, n: it.n }; e.item = null; } }
-        else if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc, it.n)) e.item = null;
+        if (pair) {
+          if (!pair.item) { pair.item = { s: it.s, p: 0, m: w.tick, rc: it.rc, n: it.n }; e.item = null; }
+          else if (stacks(pair.item, it.s, it.rc, it.n || 1)) { pair.item.n = (pair.item.n || 1) + (it.n || 1); e.item = null; }
+          else it.w = (it.w || 0) + dt;
+        } else if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc, it.n)) e.item = null; else it.w = (it.w || 0) + dt;
         break;
       }
       case 'station': {
         const buf = (e.buf ??= []);
         if (e.role === 'out') {
           // 降ろす駅：ためたものを、正面の 2 つの口から交互に出す
-          const gap = every * 0.4;
-          e.timer = Math.min((e.timer || 0) + dt, gap * SOURCE_HOLD);
-          if (!buf.length || e.timer < gap) break;
-          // 先頭から続く同じ物質を、待った時間の分だけ、ひとまとめにして出す
+          if (!buf.length) break;
+          // 先頭から続く同じ物質を、荷にまとめて、待たずに出す
           let q = 1;
-          const most = Math.floor(e.timer / gap + 1e-9);
-          while (q < most && q < buf.length && buf[q] === buf[0]) q++;
+          while (q < STACK_MAX && q < buf.length && buf[q] === buf[0]) q++;
           for (let k = 0; k < 2; k++) {
             const i = ((e.rr || 0) + k) % 2, p = slotPort(e, i), rc = buf[0].startsWith('!');
-            if (push(w, p.tx, p.ty, p.d, rc ? buf[0].slice(1) : buf[0], rc, q)) { buf.splice(0, q); e.rr = (i + 1) % 2; e.timer = Math.max(0, e.timer - q * gap); e.n = (e.n || 0) + q; break; }
+            if (push(w, p.tx, p.ty, p.d, rc ? buf[0].slice(1) : buf[0], rc, q)) { buf.splice(0, q); e.rr = (i + 1) % 2; e.n = (e.n || 0) + q; break; }
           }
           break;
         }
@@ -1305,7 +1325,7 @@ export function step(w: World, dt: number) {
         while (e.xtr.length > Math.max(0, Math.min(maxCars(w), e.cars || 1) - 1)) { const k = e.xtr.findIndex((t2) => t2.p <= 0 && !t2.back && !t2.cargo.length); if (k < 0) break; e.xtr.splice(k, 1); }
         for (const tr of [e.tr, ...e.xtr]) {
           if (tr.p <= 0 && !tr.back) {
-            while (tr.cargo.length < trainCap(w) && buf.length) tr.cargo.push(buf.shift()!);
+            if (buf.length && tr.cargo.length < trainCap(w)) tr.cargo.push(...buf.splice(0, trainCap(w) - tr.cargo.length));
             tr.wait += dt;
             // 満載か、少し待っても増えなければ発車する
             if (tr.cargo.length && (tr.cargo.length >= trainCap(w) || tr.wait > 2.5)) {
@@ -1337,7 +1357,7 @@ export function step(w: World, dt: number) {
             if (!held) tr.p = Math.min(1, tr.p + v);
             if (tr.p >= 1) {
               const db = (dest!.buf ??= []);
-              while (tr.cargo.length && db.length < stationCap(w)) db.push(tr.cargo.shift()!);
+              if (tr.cargo.length && db.length < stationCap(w)) db.push(...tr.cargo.splice(0, stationCap(w) - db.length));
               if (!tr.cargo.length) { tr.back = true; e.n = (e.n || 0) + 1; }
             }
           } else {
