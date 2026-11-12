@@ -5,6 +5,7 @@ import { chaptersDone } from '../engine/world';
 import { deserialize, summarize } from '../engine/world';
 import { $, h } from './dom';
 import { setSound, sfx, soundOn } from './sound';
+import { emptyMore, nameOf, slotMore, slotThumb, type TitleUi } from './slots2';
 import { drawElement } from './token';
 import { applySkin, applyTheme, skinName, type Skin, type ThemeChoice } from './theme';
 
@@ -27,13 +28,20 @@ export interface Meta {
   tab?: string;
   /** 最後に保存できた時刻と、保存に失敗した時刻 */
   savedAt?: number;
+  /** 最後に開いたノート（開いたらそのまま開く設定のため） */
+  last?: number;
 }
 // セーブはこの端末のブラウザの中だけに置く。読み書きに失敗しても遊べるようにする
 export const store = {
   read(n: number): string | null { try { return localStorage.getItem(slotKey(n)); } catch { return null; } },
   /** セーブを書いたときに呼ぶもの（同期の予約に使う） */
   onWrite: null as ((n: number) => void) | null,
-  write(n: number, json: string, quiet = false): boolean { try { localStorage.setItem(slotKey(n), json); if (!quiet) store.onWrite?.(n); return true; } catch { return false; } },
+  /** セーブを書く直前に呼ぶもの（前日の控えをとる。slots2.ts） */
+  beforeWrite: null as ((n: number) => void) | null,
+  write(n: number, json: string, quiet = false): boolean {
+    try { store.beforeWrite?.(n); } catch { /* 控えがとれなくても書く */ }
+    try { localStorage.setItem(slotKey(n), json); if (!quiet) store.onWrite?.(n); return true; } catch { return false; }
+  },
   erase(n: number) { try { localStorage.removeItem(slotKey(n)); localStorage.removeItem(`chemyth-v2-album-${n}`); } catch { /* 同上 */ } },
   meta(): Meta { try { return JSON.parse(localStorage.getItem(META) || '{}'); } catch { return {}; } },
   setMeta(m: Meta) { try { localStorage.setItem(META, JSON.stringify({ ...store.meta(), ...m })); } catch { /* 同上 */ } },
@@ -78,6 +86,16 @@ export function initTitle(api: TitleApi) {
   const ctx = bg.getContext('2d')!;
   let running = false, confirmErase = 0, accountOpen = false;
   const acBtn = $<HTMLButtonElement>('title-account');
+  /** ノートの追加の操作（名前・複製・前日に戻す）から、下の欄を使う */
+  const ui: TitleUi = {
+    showPanel: (...nodes) => {
+      accountOpen = false; acBtn.classList.remove('picked'); panel.replaceChildren(...nodes.filter((x): x is Node => !!x)); panel.hidden = false;
+      // 下の欄が画面の外なら、タイトルの画面だけを送って見せる
+      const r = panel.getBoundingClientRect(), t = root.getBoundingClientRect();
+      if (r.bottom > t.bottom) root.scrollTop += Math.min(r.top - t.top - 16, r.bottom - t.bottom + 16);
+    },
+    repaint: () => paint(),
+  };
   acBtn.onclick = () => { accountOpen = !accountOpen; sfx.tap(); paint(); };
   // 同期が進んだら、一覧を描き直す（受け取ったセーブが、すぐ見えるように）
   onAccountChange(() => { if (!root.hidden) paint(); });
@@ -119,12 +137,15 @@ export function initTitle(api: TitleApi) {
           h('div', { class: 'stack tight' }, h('b', {}, slotName(n)), h('span', { class: 'muted' }, json ? '古い版のデータ（読めない）' : skinName() === 'punk' ? '未稼働' : 'まだ何も書いていない')),
           h('div', { class: 'row' },
             h('button', { class: 'primary', type: 'button', id: `slot-${n}-new`, onclick: () => { sfx.ok(); api.start(n, null); } }, 'はじめる'),
-            h('button', { class: 'ghost', type: 'button', id: `slot-${n}-import`, onclick: () => importInto(n) }, '読み込む')));
+            h('button', { class: 'ghost', type: 'button', id: `slot-${n}-import`, onclick: () => importInto(n) }, '読み込む')),
+          json ? null : emptyMore(n, ui));
       }
+      const fname = nameOf(json);
       const erase = h('button', { class: 'ghost warn', type: 'button', id: `slot-${n}-erase` }, confirmErase === n ? (signedIn() ? '本当に消す（預けた分も）' : '本当に消す') : '消す');
       erase.onclick = () => { if (confirmErase === n) { store.erase(n); slotErased(n); confirmErase = 0; sfx.erase(); } else confirmErase = n; paint(); };
       return h('div', { class: 'slotcard' },
-        h('div', { class: 'stack tight' }, h('b', {}, slotName(n)),
+        slotThumb(n, json!, sum.savedAt),
+        h('div', { class: 'stack tight' }, h('b', {}, slotName(n), fname ? h('span', { class: 'fname', id: `slot-${n}-fname` }, `「${fname}」`) : null),
           h('span', {}, sum.done >= TOTAL_GOALS ? `全 ${TOTAL_GOALS} 指令を達成` : `${CHAPTERS[sum.chapter]?.name ?? ''}　達成 ${sum.done} / ${TOTAL_GOALS}`),
           h('span', { class: 'muted' }, `${fmtTime(sum.playMs)}　研究点 ${sum.points}　${fmtDate(sum.savedAt)}`),
           h('span', { class: 'slot-learn' }, [sum.due ? `復習 ${sum.due} 問が待っている` : '待っている復習なし', sum.exam !== null ? `次の試験まで ${sum.exam} 日` : ''].filter(Boolean).join('　')),
@@ -133,7 +154,8 @@ export function initTitle(api: TitleApi) {
         h('div', { class: 'row' },
           h('button', { class: 'primary', type: 'button', id: `slot-${n}-go`, onclick: () => { sfx.ok(); api.start(n, json); } }, 'つづける'),
           h('button', { class: 'ghost', type: 'button', id: `slot-${n}-export`, onclick: () => exportFrom(n, json!) }, '書き出す'),
-          erase));
+          erase),
+        slotMore(n, json!, ui));
     }));
     const snd = $('title-sound');
     snd.textContent = soundOn() ? '音：あり' : '音：なし';

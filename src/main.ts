@@ -38,6 +38,8 @@ import { conflictSlots, flushAccount, initAccount, onAccountChange, syncState } 
 import { applySkin, applyTheme } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
 import { drawToken, elementIcon } from './ui/token';
+import { autoOpen, breakReminder, dataExtra, helpExtra, initSettings2, menuExtra, prefExtras, prefRow, started } from './ui/settings2';
+import { freeSpace, putAlbum } from './ui/slots2';
 
 type Placeable = Exclude<Kind, 'hub' | 'part'>;
 type Tool = 'pan' | 'erase' | 'area' | 'rail' | Placeable;
@@ -127,7 +129,10 @@ function boot(data: HotData) {
   let savedAt = 0, saveFailTold = 0;
   const save = () => {
     if (!slot) return;
-    if (store.write(slot, serialize(sandbox ? sandbox.home : world))) { savedAt = Date.now(); return; }
+    const json = serialize(sandbox ? sandbox.home : world);
+    if (store.write(slot, json)) { savedAt = Date.now(); return; }
+    // 入りきらなければ、アルバムの古い写真から減らして、もう一度（セーブを先に残す）
+    for (let i = 0; i < 30 && freeSpace(); i++) if (store.write(slot, json)) { savedAt = Date.now(); toast('この端末の保存領域が足りないので、アルバムの古い写真を減らして保存した。', 6000); return; }
     // 保存できなかった（容量がいっぱい・プライベートモードなど）。1 分に 1 度だけ知らせる
     if (Date.now() - saveFailTold > 60000) { saveFailTold = Date.now(); toast('保存できなかった。この端末の保存領域がいっぱいかもしれない。メニューの「すべて書き出す」でファイルに控えておけ。', 9000); }
   };
@@ -453,8 +458,8 @@ function boot(data: HotData) {
     ),
     h('p', { class: 'muted' }, '物質の絵柄は、元素ごとに決まった形の組み合わせでできている（「図鑑」で確認できる）。置いたものをタップすると、その場に「設定・回す・消す」が出る。間違えたら右上の「元に戻す」。'),
     h('p', { class: 'muted' }, '置いたものは、「見る」で長押ししてそのまま指を動かすと、ずらせる。選んだものの帯の ⇲ を押してから行き先をタップしてもよい。'),
-    first ? null : h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'help-keys', onclick: () => showKeys() }, 'キーと指の操作の一覧'), h('button', { class: 'ghost', type: 'button', id: 'help-prefs', onclick: () => showPrefs() }, '設定')),
-    first ? h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'start', onclick: closeModal }, '始める')) : null,
+    first ? null : h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'help-keys', onclick: () => showKeys() }, 'キーと指の操作の一覧'), h('button', { class: 'ghost', type: 'button', id: 'help-prefs', onclick: () => showPrefs() }, '設定'), ...helpExtra(false)),
+    first ? h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'start', onclick: closeModal }, '始める'), ...helpExtra(true)) : null,
   );
 
   // ---- 画面写真（PNG）：次に描いたコマを、見えているとおりに保存する ----
@@ -579,7 +584,7 @@ function boot(data: HotData) {
       h('button', { class: 'ghost', type: 'button', id: 'd-export', onclick: exportAll }, 'すべて書き出す（3 冊ぶんを 1 つのファイルに）'),
       h('button', { class: 'ghost', type: 'button', id: 'd-import', onclick: importAll }, 'ファイルから読み込む'),
       backupText() ? h('button', { class: 'ghost warn', type: 'button', id: 'd-restore', onclick: restoreBackup }, '読み込む前に戻す') : null,
-      h('button', { class: 'ghost', type: 'button', id: 'd-shot', onclick: () => { closeModal(); window.setTimeout(shot, 60); } }, '画面写真を保存（PNG）')),
+      h('button', { class: 'ghost', type: 'button', id: 'd-shot', onclick: () => { closeModal(); window.setTimeout(shot, 60); } }, '画面写真を保存（PNG）'), ...dataExtra()),
     h('p', { class: 'muted' }, '1 冊ずつの書き出し（文字列）は、タイトル画面の各ノートの「書き出す」から。アカウントにログインしていれば、端末どうしで自動でそろう。'));
 
   // ---- どこで作っている？：物質の名前・化学式から、作っている装置と採っている採取機を探して、そこへ移る ----
@@ -612,6 +617,8 @@ function boot(data: HotData) {
   };
   // ---- 設定：この端末の好み（振動・音量・動き・大きさ・札・休憩）と、覚える確率（セーブに入る） ----
   const showPrefs = () => {
+    // 設定を変えて描き直すときは、見ていた位置のまま
+    const keep = !modal.hidden && sheet.querySelector('.pref-row') ? sheet.scrollTop : 0;
     const p = prefs();
     const seg = <T,>(id: string, cur: T, opts: [T, string][], set: (v: T) => void) => h('span', { class: 'seg', role: 'group' }, ...opts.map(([v, name], i) => h('button', { type: 'button', id: `${id}-${i}`, class: cur === v ? 'on' : '', onclick: () => { set(v); sfx.tap(); showPrefs(); } }, name)));
     const onoff = (id: string, cur: boolean, k: keyof Prefs, on = 'あり', off = 'なし') => seg(id, cur, [[true, on], [false, off]], (v) => setPrefs({ [k]: v } as Partial<Prefs>));
@@ -622,11 +629,11 @@ function boot(data: HotData) {
       h('h3', {}, '学習（セーブに入る。端末をまたいで同じ）'),
       row('覚えておく確率の目標', '復習の間隔は、思い出せる確率がこの値に下がる日を目安に決まる。上げるほど忘れにくいが、復習が増える。標準は 90 %。', seg('p-ret', w0.ret, [[0.85, '85 %'], [0.9, '90 %'], [0.95, '95 %']], (v) => { w0.ret = v; save(); })),
       h('h3', {}, 'この端末の好み'),
-      row('振動', '置く・消す・ずらす・まちがえたとき。iPhone・iPad では震わない（ブラウザが対応していない）。', onoff('p-vib', p.vib, 'vib')),
+      prefRow('haptics', showPrefs),
       row('効果音の大きさ', '', range('p-sfx', p.sfxVol, (v) => setPrefs({ sfxVol: v }))),
       row('音楽の大きさ', '', range('p-music', p.musicVol, (v) => setPrefs({ musicVol: v }))),
       row('動きを減らす', '土ぼこり・花火・画面の滑らかな移動・窓の動きを控える。', onoff('p-calm', p.calm, 'calm', 'オン', 'オフ')),
-      row('文字を大きく', '窓・指令・通知の文字を 15 % 大きくする。', onoff('p-text', p.bigText, 'bigText', 'オン', 'オフ')),
+      prefRow('text', showPrefs),
       row('ボタンを大きく', '上の帯・道具・選んだものの帯のボタンを大きくする。', onoff('p-btn', p.bigButtons, 'bigButtons', 'オン', 'オフ')),
       row('夕暮れ', '実際の時刻に合わせて、地図が暮れていく。', onoff('p-dusk', p.dusk, 'dusk')),
       row('指令のヒント', '自分で考えたいときは隠す。', onoff('p-hints', p.hints, 'hints', '出す', '隠す')),
@@ -634,7 +641,9 @@ function boot(data: HotData) {
       row('復習の札の位置', '', seg<'left' | 'right'>('p-side', p.cardSide, [['left', '左'], ['right', '右']], (v) => setPrefs({ cardSide: v }))),
       row('休憩の知らせ', '続けて遊んだ時間で知らせる。', seg<0 | 25 | 50>('p-break', p.breakMin, [[25, '25 分'], [50, '50 分'], [0, 'なし']], (v) => setPrefs({ breakMin: v }))),
       row('放置で省電力', '5 分さわらなければ、描く回数を減らして電池をもたせる（工場は動き続ける）。', onoff('p-saver', p.saver, 'saver')),
-      row('小地図の大きさ', '', seg('p-mini', p.miniBig, [[false, '小'], [true, '大']], (v) => { setPrefs({ miniBig: v }); window.setTimeout(paintMini, 30); })));
+      row('小地図の大きさ', '', seg('p-mini', p.miniBig, [[false, '小'], [true, '大']], (v) => { setPrefs({ miniBig: v }); window.setTimeout(paintMini, 30); })),
+      ...prefExtras(showPrefs));
+    sheet.scrollTop = keep;
   };
 
   const showMenu = () => {
@@ -646,7 +655,8 @@ function boot(data: HotData) {
         item('m-chapters', '指令の一覧（章を切り替える）', () => showChapters(panel())),
         item('m-stats', '統計（納品の速さ・装置の稼働率・学習の進み）', () => showStats(statsCtx())),
         item('m-where', 'どこで作っている？（物質から装置を探す）', () => showWhere()),
-        item('m-album', 'アルバム（達成した瞬間の工場の写真）', () => showAlbum())),
+        item('m-album', 'アルバム（達成した瞬間の工場の写真）', () => showAlbum()),
+        ...menuExtra('factory')),
       h('h3', {}, '京大形式の演習'),
       h('div', { class: 'menu' },
         item('m-drills', '連鎖計算（理論の大問。数値は毎回変わる）', () => showDrills(panel())),
@@ -692,8 +702,9 @@ function boot(data: HotData) {
         item('m-notes', `通知の履歴（${toastLog.length} 件）`, () => showNotes()),
         item('m-keys', 'キーと指の操作', () => showKeys()),
         item('m-help', '遊び方', () => showHelp()),
+        ...menuExtra('settings'),
         item('m-title', '保存してタイトルへ戻る（今日のまとめ）', () => { if (sandbox) { modal.hidden = true; sheet.replaceChildren(); toTitle(); } else showToday(); })),
-      h('p', { class: 'muted' }, `${slotName(slot)}。この端末に自動で保存している（最後に保存 ${savedAt ? hm(savedAt) : '—'}）。今日遊んだ時間 ${fmtTime(world.dayMs[dayKey(Date.now())] ?? 0)}。${(() => { const st = syncState(); return st.on ? `アカウント：${st.trouble ? `同期できていない（${st.trouble}）` : st.busy ? '同期中' : st.lastSync ? `${hm(st.lastSync)} に同期` : '同期待ち'}。` : ''; })()}`),
+      h('p', { class: 'muted' }, `${slotName(slot)}${(sandbox ? sandbox.home : world).fname ? `「${(sandbox ? sandbox.home : world).fname}」` : ''}。この端末に自動で保存している（最後に保存 ${savedAt ? hm(savedAt) : '—'}）。今日遊んだ時間 ${fmtTime(world.dayMs[dayKey(Date.now())] ?? 0)}。${(() => { const st = syncState(); return st.on ? `アカウント：${st.trouble ? `同期できていない（${st.trouble}）` : st.busy ? '同期中' : st.lastSync ? `${hm(st.lastSync)} に同期` : '同期待ち'}。` : ''; })()}`),
     );
   };
 
@@ -1748,8 +1759,8 @@ function boot(data: HotData) {
       let list = album();
       const photo: Photo = { k: list.length ? key : 'first', cap, d: cvs.toDataURL('image/jpeg', 0.62), done: doneCount(world), ms: Math.round(world.playMs) };
       list = [...list.filter((p) => p.k !== photo.k), photo].slice(-26);
-      // 保存先がいっぱいなら、古いものから減らして入れ直す
-      for (let tries = 0; tries < 4; tries++) { try { localStorage.setItem(albumKey(), JSON.stringify(list)); break; } catch { list = [list[0], ...list.slice(Math.ceil(list.length / 2))].filter((p, i, a) => a.indexOf(p) === i); } }
+      // 保存先がいっぱいなら、古い写真から小さくし、それでも入らなければ古いものから減らす
+      putAlbum(albumKey(), list, (msg) => toast(msg, 5000));
     } catch { /* 撮れなくても遊べる */ }
   };
   const showAlbum = (big?: Photo) => {
@@ -1861,7 +1872,7 @@ function boot(data: HotData) {
       const t0 = store.meta().tab;
       if (t0 && GROUPS.some((g) => g.id === t0)) { tab = t0; paintTabs(); }
       began = performance.now(); warned = false;
-      save(); paintSpeed(); paintMarks(); paintSync();
+      save(); paintSpeed(); paintMarks(); paintSync(); started(n);
       if (!json) { showHelp(true); store.setMeta({ news: NEWS }); }
       else if (closedNow()) showClosing();
       else if (morningDue(world, sleepCfg(), new Date())) showMorningSet();
@@ -1949,7 +1960,7 @@ function boot(data: HotData) {
       }
       sinceSave += dt;
       if (sinceSave > 5) { sinceSave = 0; save(); saveCam(); paintSync(); }
-      if (!warned && pf.breakMin && now - began > pf.breakMin * 60000) { warned = true; toast(`${pf.breakMin} 分たった。ここで切り上げて休め。立って、遠くを見ろ。`, 8000); buzz([40, 60, 40]); }
+      if (!warned && pf.breakMin && now - began > pf.breakMin * 60000) { warned = true; breakReminder(pf.breakMin); }
       if (camTo && pf.calm) { cam.x = camTo.x; cam.y = camTo.y; cam.z = camTo.z; camTo = null; }
       if (camTo) {
         const k = 1 - Math.exp(-dt * 7);
@@ -2026,6 +2037,11 @@ function boot(data: HotData) {
   requestAnimationFrame(frame);
   document.addEventListener('visibilitychange', () => { if (document.hidden) { save(); flushAccount(); } });
 
+  initSettings2({
+    world: () => (slot ? (sandbox ? sandbox.home : world) : null), slot: () => slot, toast, show: showSheet, close: closeModal, closeBtn, save,
+    repaintTitle: () => { if (!slot) title.show(); },
+    morning: () => { if (slot && !sandbox && modal.hidden && closingEl.hidden && morningDue(world, sleepCfg(), new Date())) showMorningSet(); },
+  });
   applyPrefs();
   let errTold = 0;
   const onCrash = () => {
@@ -2061,7 +2077,7 @@ function boot(data: HotData) {
     const s = data.slot;
     title.show();
     ($(`slot-${s}-go`) as HTMLButtonElement | null)?.click();
-  } else title.show();
+  } else { title.show(); autoOpen(); }
 }
 
 if (hot?.ready) hot.ready(boot); else boot(hot?.data ?? {});

@@ -2711,3 +2711,121 @@ describe('復習の習慣：今日の数・連続日数・目標・苦手・覚�
     expect(summarize(serialize(w), T)!.morning).toBe(false);
   });
 });
+
+describe('設定・控え・休み（改善 76〜100）', () => {
+  const tm = (y: number, mo: number, d: number, hh: number, mi = 0, s = 0) => new Date(y, mo - 1, d, hh, mi, s).getTime();
+  it('古い好み（振動のあり・なし、文字を大きく）を、段階のある好みに読み替える', async () => {
+    const { textSizeOf, hapticsOf, hapticPattern } = await import('../src/engine/device');
+    expect(textSizeOf({})).toBe(0);
+    expect(textSizeOf({ bigText: true })).toBe(1);
+    expect(textSizeOf({ bigText: false })).toBe(0);
+    expect(textSizeOf({ bigText: true, textSize: 2 })).toBe(2);   // 新しい値があれば、そちら
+    expect(textSizeOf({ bigText: true, textSize: 0 })).toBe(0);
+    expect(textSizeOf({ textSize: 7 })).toBe(0);                  // 壊れた値は既定
+    expect(hapticsOf({})).toBe(1);                                 // 未設定は「弱」（これまでの「あり」と同じ）
+    expect(hapticsOf({ vib: false })).toBe(0);
+    expect(hapticsOf({ vib: true })).toBe(1);
+    expect(hapticsOf({ vib: false, haptics: 2 })).toBe(2);
+    expect(hapticPattern(12, 0)).toBeNull();
+    expect(hapticPattern(12, 1)).toBe(12);
+    expect(hapticPattern(12, 2)).toBe(24);
+    expect(hapticPattern(150, 2)).toBe(200);
+    expect(hapticPattern([30, 40, 30], 2)).toEqual([60, 40, 60]);  // 休みはそのまま
+    expect(hapticPattern([30, 40, 30], 1)).toEqual([30, 40, 30]);
+  });
+  it('前日の控え：その日（朝 4 時区切り）はじめて書くときだけ、書く前の中身を控える', async () => {
+    const { dailyPlan, parseDaily, dailyOffer } = await import('../src/engine/device');
+    const { dayKey } = await import('../src/engine/fsrs');
+    const t1 = tm(2026, 11, 12, 15), t2 = tm(2026, 11, 13, 10), save = '{"v":2}';
+    expect(dailyPlan('', save, t1)).toBe('take');                          // まだ控えていない
+    expect(dailyPlan(dayKey(t1), save, t1 + 3600000)).toBe('skip');        // 同じ日は 1 回だけ
+    expect(dailyPlan(dayKey(t1), save, t2)).toBe('take');                  // 次の日
+    expect(dailyPlan(dayKey(t1), null, t2)).toBe('mark');                  // 空の枠：控えるものはない（前の控えは残す）
+    expect(dailyPlan(dayKey(t1), save, tm(2026, 11, 13, 3, 59))).toBe('skip');   // 朝 4 時の前は、まだ前の日
+    expect(dailyPlan(dayKey(t1), save, tm(2026, 11, 13, 4, 1))).toBe('take');
+    const rec = { day: dayKey(t2), at: t2, sum: { done: 3, points: 40, playMs: 60000, savedAt: t1 }, data: 'gz:xx' };
+    const d = parseDaily(JSON.stringify(rec))!;
+    expect(d.sum.savedAt).toBe(t1);
+    expect(d.undo).toBeUndefined();
+    expect(parseDaily(JSON.stringify({ ...rec, undo: true }))!.undo).toBe(true);
+    expect(parseDaily('{"day":1}')).toBeNull();
+    expect(parseDaily('壊れた')).toBeNull();
+    expect(parseDaily(null)).toBeNull();
+    // 控えといまのノートが同じ（保存した時刻が同じ）なら、「前日に戻す」は出さない。消したノートは戻せる
+    expect(dailyOffer(d, { done: 3, points: 40, playMs: 60000, savedAt: t1 })).toBe(false);
+    expect(dailyOffer(d, { done: 5, points: 80, playMs: 90000, savedAt: t2 })).toBe(true);
+    expect(dailyOffer(d, null)).toBe(true);
+    expect(dailyOffer(null, null)).toBe(false);
+  });
+  it('寝る前の音量：就寝の 1 時間前から下げ、閉店の時間帯は最小のまま。閉店なしなら下げない', async () => {
+    const { windVolume, WIND_MIN } = await import('../src/engine/device');
+    const cfg = { on: true, bed: 23 * 60, wake: 6 * 60 + 30 };
+    const v = (hh: number, mi = 0) => windVolume(cfg, new Date(2026, 10, 12, hh, mi));
+    expect(v(21)).toBe(1);
+    expect(v(22, 0)).toBe(1);
+    expect(v(22, 30)).toBeCloseTo(WIND_MIN + (1 - WIND_MIN) / 2, 5);
+    expect(v(22, 59)).toBeLessThan(0.4);
+    expect(v(23, 30)).toBe(WIND_MIN);
+    expect(v(3)).toBe(WIND_MIN);
+    expect(v(7)).toBe(1);
+    expect(windVolume({ ...cfg, on: false }, new Date(2026, 10, 12, 22, 59))).toBe(1);
+    // 0 時をまたいだ就寝（0:30）
+    expect(windVolume({ on: true, bed: 30, wake: 7 * 60 }, new Date(2026, 10, 12, 23, 50))).toBeCloseTo(WIND_MIN + (1 - WIND_MIN) * (40 / 60), 5);
+  });
+  it('日付の切り替わり（朝 4 時）：その日かぎりの記録を片づける', async () => {
+    const { nextDay, rollDay } = await import('../src/engine/device');
+    const { dayKey } = await import('../src/engine/fsrs');
+    const t = tm(2026, 11, 13, 3, 59), k = dayKey(t);
+    expect(nextDay(k, t + 30000)).toBeNull();                              // 3:59:30 はまだ前の日
+    expect(nextDay(k, tm(2026, 11, 13, 4, 0, 5))).toBe(dayKey(tm(2026, 11, 13, 12)));
+    const w = newWorld();
+    w.today = { day: k, wrong: ['r:haber-bosch'] };
+    w.relearn = [{ id: 'r:haber-bosch', at: t - 60000 }, { id: 'k:x', at: tm(2026, 11, 13, 4, 5) }];
+    expect(rollDay(w, t + 30000)).toBe(false);                             // 日が変わる前は何もしない
+    expect(w.today.wrong).toEqual(['r:haber-bosch']);
+    const t2 = tm(2026, 11, 13, 4, 1);
+    expect(rollDay(w, t2)).toBe(true);
+    expect(w.today).toEqual({ day: dayKey(t2), wrong: [] });
+    expect(w.relearn.map((x) => x.id)).toEqual(['k:x']);                   // 前の日の出し直しは捨て、まだ先のものは残す
+    expect(rollDay(w, t2 + 1000)).toBe(false);
+  });
+  it('保存領域の集計と、アルバムの写真を減らす順（最初の 1 枚といちばん新しい 1 枚は残す）', async () => {
+    const { storeUse, dropOldest, fmtBytes } = await import('../src/engine/device');
+    const u = storeUse([
+      { key: 'chemyth-v2-slot-1', size: 1000 }, { key: 'chemyth-v2-album-1', size: 5000, photos: 4 }, { key: 'chemyth-v2-daily-1', size: 300 },
+      { key: 'chemyth-v2-slot-3', size: 200 }, { key: 'chemyth-v2-blueprints', size: 50 }, { key: 'chemyth-v2-backup', size: 70 }, { key: 'chemyth-v2-meta', size: 20 }, { key: 'chemyth-v2-slot-9', size: 5 },
+    ]);
+    expect(u.slots[0]).toEqual({ n: 1, save: 1000, album: 5000, photos: 4, daily: 300 });
+    expect(u.slots[2].save).toBe(200);
+    expect([u.blueprints, u.backup, u.other, u.total]).toEqual([50, 70, 25, 6645]);
+    expect(fmtBytes(2048)).toBe('2 KB');
+    expect(fmtBytes(3 * 1024 * 1024)).toBe('3.0 MB');
+    const list = ['first', 'c0', 'c1', 'c2'].map((k) => ({ k }));
+    expect(dropOldest(list, 1).map((p) => p.k)).toEqual(['first', 'c1', 'c2']);
+    expect(dropOldest(list, 5).map((p) => p.k)).toEqual(['first', 'c2']);
+    expect(dropOldest([{ k: 'first' }], 1)).toHaveLength(1);
+  });
+  it('設定のファイル：Chemyth の設定のファイルだけを読み、知らない値は捨てる（画質は入らない）', async () => {
+    const { parsePrefsFile } = await import('../src/engine/device');
+    expect(parsePrefsFile('{}')).toBeNull();
+    expect(parsePrefsFile('壊れた')).toBeNull();
+    expect(parsePrefsFile(JSON.stringify({ app: 'chemyth', prefs: {} }))).toBeNull();
+    const f = parsePrefsFile(JSON.stringify({ app: 'chemyth-prefs', v: 1, prefs: { textSize: 2, cvd: true }, sound: false, theme: 'dark', skin: 'punk', sleep: { on: true, bed: 1380, wake: 390 }, gfx: 'high' }))!;
+    expect(f.prefs).toEqual({ textSize: 2, cvd: true });
+    expect([f.sound, f.theme, f.skin]).toEqual([false, 'dark', 'punk']);
+    expect(f.sleep).toEqual({ on: true, bed: 1380, wake: 390 });
+    expect('gfx' in f).toBe(false);
+    const bad = parsePrefsFile(JSON.stringify({ app: 'chemyth-prefs', prefs: {}, theme: 'pink', skin: '<b>', sleep: { on: true, bed: 2000, wake: 1 } }))!;
+    expect([bad.theme, bad.skin, bad.sleep]).toEqual([undefined, undefined, undefined]);
+  });
+  it('工場の名前はセーブに入り、読み直しても残る（長すぎる名前は切り、空白だけなら名前なし）', () => {
+    const w = newWorld();
+    expect(JSON.parse(serialize(w)).fname).toBeUndefined();
+    w.fname = 'アンモニア工場';
+    expect(deserialize(serialize(w))!.fname).toBe('アンモニア工場');
+    w.fname = 'あ'.repeat(40);
+    expect(deserialize(serialize(w))!.fname).toHaveLength(20);
+    w.fname = '   ';
+    expect(deserialize(serialize(w))!.fname).toBeUndefined();
+  });
+});

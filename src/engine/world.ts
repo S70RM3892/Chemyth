@@ -238,6 +238,8 @@ export interface World {
   /** 演習（連鎖計算・構造決定）の型ごとの成績。tries：解いた回数、clean：全問正解した回数 */
   practice: Record<string, { tries: number; clean: number }>;
   playMs: number;
+  /** 工場の名前（タイトルとメニューに出す。なければ付けていない） */
+  fname?: string;
   tick: number;
   /** UI に知らせる出来事。保存しない */
   events: string[];
@@ -1647,6 +1649,8 @@ export function step(w: World, dt: number) {
 // ---- 保存 ----
 
 export const SAVE_VERSION = 2;
+/** 工場の名前の長さ（文字） */
+export const FNAME_MAX = 20;
 
 export function serialize(w: World): string {
   return JSON.stringify({
@@ -1654,6 +1658,7 @@ export function serialize(w: World): string {
     rails: [...w.rails], hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, exams: w.exams, calib: w.calib, relearn: w.relearn, hcLog: w.hcLog, side: w.side, night: w.night, dayMs: w.dayMs, tested: w.tested, today: w.today, revDays: w.revDays, ret: w.ret, bonusDay: w.bonusDay, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
     discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, research: w.research, agents: w.agents, cases: w.cases, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
     playMs: Math.round(w.playMs), savedAt: Date.now(),
+    fname: w.fname || undefined,
   });
 }
 
@@ -1738,6 +1743,7 @@ export function deserialize(json: string): World | null {
     w.fed = d.fed || {};
     w.multi = d.multi || {};
     w.playMs = d.playMs || 0;
+    w.fname = typeof d.fname === 'string' && d.fname.trim() ? d.fname.trim().slice(0, FNAME_MAX) : undefined;
     return w;
   } catch {
     return null;

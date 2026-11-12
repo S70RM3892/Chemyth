@@ -454,6 +454,23 @@ const particles: Particle[] = [];
 /** 動きを減らす設定のときは、土ぼこりを出さない */
 let calm = false;
 export const setCalm = (v: boolean) => { calm = v; };
+/** 色覚の補助：状態の印と詰まりの印を、赤と緑の色だけでなく、形と模様でも分ける（緑は青にする） */
+let cvd = false;
+export const setCvd = (v: boolean) => { cvd = v; };
+const CVD_GO = '#2f7fd8';
+/** 状態の形（0 丸＝動いている、1 三角＝待っている、2 四角＝止まっている）を道筋に足す */
+const lampShape = (c: CanvasRenderingContext2D, x: number, y: number, r: number, st: number) => {
+  if (st === 0) c.arc(x, y, r, 0, Math.PI * 2);
+  else if (st === 1) { c.moveTo(x, y - r * 1.15); c.lineTo(x + r * 1.1, y + r * 0.85); c.lineTo(x - r * 1.1, y + r * 0.85); c.closePath(); }
+  else c.rect(x - r, y - r, r * 2, r * 2);
+};
+/** 色覚の補助の印：× と、斜線の網 */
+const cross = (c: CanvasRenderingContext2D, x: number, y: number, s: number, col: string, lw: number) => { c.beginPath(); c.moveTo(x - s, y - s); c.lineTo(x + s, y + s); c.moveTo(x + s, y - s); c.lineTo(x - s, y + s); c.strokeStyle = col; c.lineWidth = lw; c.stroke(); };
+const hatch = (c: CanvasRenderingContext2D, x: number, y: number, s: number, col: string, lw: number) => {
+  c.save(); c.beginPath(); c.rect(x, y, s, s); c.clip(); c.beginPath();
+  for (let d = -s; d < s; d += s * 0.25) { c.moveTo(x + d, y); c.lineTo(x + d + s, y + s); }
+  c.strokeStyle = col; c.lineWidth = lw; c.stroke(); c.restore();
+};
 /**
  * 置いた・撤去した・ずらしたときの土ぼこり（設備の足もとから外へ散る）。
  * place：輪が広がる、erase：設備の形が薄れて消える、move：行き先で輪が広がる。x, y は設備の左上（階のずれを含む座標）
@@ -1015,7 +1032,11 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = Math.max(1, z * 0.07); ctx.strokeRect(px0, py0, ps, ps);
       const needs = (isMachine(e.kind) && !e.recipe) || ((e.kind === 'analyzer' && !e.test) || (isSep(e.kind) && !sepReady(e.kind, e.test))) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
       const jam = (e.stuck || 0) > 2.5 || !!e.bad;
-      if (needs || jam || e.busy) { ctx.fillStyle = needs || jam ? P.red : '#58e06a'; ctx.fillRect(px0 + ps * 0.3, py0 + ps * 0.3, ps * 0.4, ps * 0.4); }
+      if (needs || jam || e.busy) {
+        ctx.fillStyle = needs || jam ? P.red : cvd ? CVD_GO : '#58e06a';
+        if (cvd && !(needs || jam)) { ctx.beginPath(); ctx.arc(px0 + ps / 2, py0 + ps / 2, ps * 0.22, 0, Math.PI * 2); ctx.fill(); } else ctx.fillRect(px0 + ps * 0.3, py0 + ps * 0.3, ps * 0.4, ps * 0.4);
+        if (cvd && jam) cross(ctx, px0 + ps / 2, py0 + ps / 2, ps * 0.14, '#ffffff', Math.max(1, ps * 0.07));
+      }
       if (G && e.busy) glow(px0 + ps / 2, py0 + ps / 2, z * sz * 1.5, glowOf(e, P), 0.4);
       continue;
     }
@@ -1077,9 +1098,10 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       if (st === 0) ctx.arc(lx, ly, lr, 0, Math.PI * 2);
       else if (st === 1) { ctx.moveTo(lx, ly - lr * 1.15); ctx.lineTo(lx + lr * 1.1, ly + lr * 0.85); ctx.lineTo(lx - lr * 1.1, ly + lr * 0.85); ctx.closePath(); }
       else ctx.rect(lx - lr, ly - lr, lr * 2, lr * 2);
-      ctx.fillStyle = st === 0 ? '#3fbf63' : st === 1 ? '#e0962a' : Math.sin(t * 9) > 0 ? P.red : mix(P.red, '#000000', 0.55);
+      ctx.fillStyle = st === 0 ? (cvd ? CVD_GO : '#3fbf63') : st === 1 ? '#e0962a' : Math.sin(t * 9) > 0 ? P.red : mix(P.red, '#000000', 0.55);
       ctx.fill(); ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = Math.max(1, z * 0.03); ctx.stroke();
-      if (st === 0 && punk && !light) { ctx.globalAlpha = 0.35; ctx.beginPath(); ctx.arc(lx, ly, lr * 2.1, 0, Math.PI * 2); ctx.fillStyle = '#3fbf63'; ctx.fill(); ctx.globalAlpha = 1; }
+      if (cvd && st === 2) cross(ctx, lx, ly, lr * 0.55, '#ffffff', Math.max(1, lr * 0.3));
+      if (st === 0 && punk && !light) { ctx.globalAlpha = 0.35; ctx.beginPath(); ctx.arc(lx, ly, lr * 2.1, 0, Math.PI * 2); ctx.fillStyle = cvd ? CVD_GO : '#3fbf63'; ctx.fill(); ctx.globalAlpha = 1; }
     }
     // 採取機は、採れているあいだ、土ぼこりやしぶきを飛ばす
     if (e.kind === 'extractor' && z >= 20 && (e.u ?? 0) > 0.3 && particles.length < 260 && Math.random() < dt * 2.2) {
@@ -1106,7 +1128,10 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       const k = Math.min(1, wt / JAM_SEC), col = k >= 1 ? '214,48,49' : '235,165,35';
       rr(ctx, sx(e.x) + z * 0.06, sy(e.y) + z * 0.06, z * 0.88, z * 0.88, z * 0.14);
       ctx.fillStyle = `rgba(${col},${0.16 + 0.22 * k})`; ctx.fill();
-      ctx.strokeStyle = `rgba(${col},0.95)`; ctx.lineWidth = Math.max(1.5, z * 0.05); ctx.stroke();
+      // 色覚の補助：待ち始めは点線の枠、詰まりきったら斜線の網
+      if (cvd && k < 1) ctx.setLineDash([z * 0.12, z * 0.09]);
+      ctx.strokeStyle = `rgba(${col},0.95)`; ctx.lineWidth = Math.max(1.5, z * 0.05); ctx.stroke(); ctx.setLineDash([]);
+      if (cvd && k >= 1) hatch(ctx, sx(e.x) + z * 0.06, sy(e.y) + z * 0.06, z * 0.88, `rgba(${col},0.9)`, Math.max(1, z * 0.045));
     }
   }
   // ---- 流れをたどる：選んだベルトなどから、下流（水色）と上流（紫）を光らせ、流れが止まっている先頭に理由を出す ----
@@ -1400,6 +1425,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       ctx.fillStyle = g.ok ? (punk ? `rgba(${P.glow},0.3)` : 'rgba(255,225,77,0.45)') : 'rgba(210,63,58,0.4)';
       ctx.fillRect(gx + 2, gy + 2, gs - 4, gs - 4);
       ctx.strokeStyle = g.ok ? P.hi : P.red; ctx.lineWidth = lw(0.05); ctx.strokeRect(gx + 2, gy + 2, gs - 4, gs - 4);
+      if (cvd && !g.ok) cross(ctx, gx + gs / 2, gy + gs / 2, gs * 0.32, P.red, lw(0.08));
       if (z >= 18) { ctx.fillStyle = punk ? '#f0e9dc' : P.ink; ctx.font = `700 ${Math.min(gs * 0.45, z * 0.5)}px ${FONT_SMALL}`; ctx.textBaseline = 'middle'; ctx.fillText(g.glyph, gx + gs / 2, gy + gs / 2 + 1); ctx.textBaseline = 'alphabetic'; }
       // 出口は外向き、入口は内向きの矢印。置く前に、どこから何が出入りするかがわかる
       for (const q of g.ports ?? []) portArrow(q);
@@ -2033,8 +2059,9 @@ function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: 
   if (e.kind === 'electrolyzer' && e.big) poleMarks(ctx, P, e, cx, cy, pu, line);
   if ((e.pw || 0) > 0) powerMark(ctx, P, cx, cy, u, t);
   // 状態ランプ：緑＝稼働、橙＝待機、赤の点滅＝設定待ち・詰まり
-  const lamp = needs || jam ? (Math.sin(t * 10) > 0 ? P.red : '#3a1410') : busy ? '#58e06a' : e.recipe || e.test || e.sub || e.kind === 'extractor' ? '#ffb020' : '#3b4048';
-  ctx.beginPath(); ctx.arc(cx + a - u * 0.14, cy - a + u * 0.07, u * 0.045, 0, Math.PI * 2);
+  const lamp = needs || jam ? (Math.sin(t * 10) > 0 ? P.red : '#3a1410') : busy ? (cvd ? CVD_GO : '#58e06a') : e.recipe || e.test || e.sub || e.kind === 'extractor' ? '#ffb020' : '#3b4048';
+  // 色覚の補助：丸＝稼働、三角＝待機、四角＝設定待ち・詰まり
+  ctx.beginPath(); if (cvd) lampShape(ctx, cx + a - u * 0.14, cy - a + u * 0.07, u * 0.055, needs || jam ? 2 : busy ? 0 : 1); else ctx.arc(cx + a - u * 0.14, cy - a + u * 0.07, u * 0.045, 0, Math.PI * 2);
   ctx.fillStyle = lamp; ctx.fill();
   ctx.strokeStyle = INK; ctx.lineWidth = line * 0.5; ctx.stroke();
   if (!light && lamp !== '#3b4048' && lamp !== '#3a1410') {

@@ -849,3 +849,105 @@ html.card-right #rvcard { left: auto; right: var(--gr); }
 [data-skin="arcane"] #cover h1 { font-family: var(--font-hand); font-weight: 800; letter-spacing: 0.12em; text-shadow: 0 0 18px rgba(var(--glow), 0.55); }
 [data-skin="arcane"] #cover h1 span { box-shadow: none; }
 [data-skin="arcane"] .kicker { letter-spacing: 0.3em; color: var(--brass-dark); }
+
+/* =====================================================================
+   設定・見やすさ・休み（改善 76〜100）。
+   ノートの小さな絵と追加の操作、文字の特大、色覚の補助、高コントラスト、画面の明るさ、通知の位置、時計、
+   つながらないときの印、集中表示、目を休める、用語集、はじめての手引き、縦長のスマホ（幅 640 以下）
+   ===================================================================== */
+:root { --gt: env(safe-area-inset-top, 0px); }
+/* タイトル：ノートの小さな絵・工場の名前・追加の操作（名前・複製・前日に戻す） */
+.slotcard .slot-thumb { flex: 0 0 auto; width: 128px; height: 80px; object-fit: cover; border: 1px solid var(--ink); border-radius: 3px; background: var(--card-2); }
+.slotcard:has(> .slot-thumb) > .stack { flex: 1 1 calc(100% - 150px); }
+.slotcard .fname { margin-left: 6px; font-family: var(--font-hand); font-weight: 600; }
+.slot-more { flex: 1 1 auto; justify-content: flex-end; gap: 6px; }
+.slot-more button { min-height: 36px; padding: 2px 10px; font-size: 13px; }
+/* 文字の大きさ：特大（大は 1.15 倍、特大は 1.3 倍）。--z は拡大の倍率（拡大した札の位置を、その倍率で割って合わせる） */
+html.big-text { --z: 1.15; }
+html.huge-text { --z: 1.3; }
+html.huge-text :is(#sheet, #goal, #toast, #tip, #rvcard, #area-act) { zoom: 1.3; }
+/* 選んだものの状態の一行は、位置をずらし量（translate）で決めるので、拡大（zoom）するとずれる。文字の大きさで大きくする */
+html.big-text #act-note { zoom: 1; font-size: 15px; }
+html.huge-text #act-note { font-size: 17px; }
+/* 色覚の補助：同期の印・稼働率の棒も、形と模様で分ける（地図の印は render.ts） */
+html.cvd #sync-dot.busy { background: transparent; border: 2.5px solid #d6a020; }
+html.cvd #sync-dot.bad { border-radius: 1px; }
+html.cvd .meter.bad i { background-image: repeating-linear-gradient(-45deg, transparent 0 3px, rgba(255, 255, 255, 0.6) 3px 5px); }
+html.cvd .meter.warn i { background-image: repeating-linear-gradient(90deg, transparent 0 4px, rgba(255, 255, 255, 0.55) 4px 6px); }
+html.cvd :is(.meter.good i, .bars .bar i.ok) { background-color: #2f7fd8; }
+/* 高コントラスト：線を太く、薄い文字と罫を濃く */
+html.hc { --bw: 2.5px !important; --soft: color-mix(in srgb, var(--ink) 82%, var(--paper)) !important; --rule: color-mix(in srgb, var(--ink) 60%, transparent) !important; --shadow: color-mix(in srgb, var(--ink) 55%, transparent) !important; }
+html.hc :focus-visible { outline-width: 3px; }
+html.hc :is(#tabs button, #opts button, #tip, #act-note, .gl-name) { border-color: var(--ink); }
+html.hc .tool.on { box-shadow: inset 0 0 0 2px var(--ink); }
+/* 画面の明るさ：黒を薄く重ねる（明るさを下げたのと同じ見え方で、描く手間が少ない） */
+html.dimmed #app::after { content: ""; position: absolute; inset: 0; z-index: 40; background: #000; opacity: var(--dim, 0); pointer-events: none; }
+/* 通知を上に：指令の札の下（拡大している通知は、位置も拡大されるので倍率で割る） */
+html.toast-top #toast { bottom: auto; top: calc((var(--goal-b, 150px) + 8px) / var(--z, 1)); }
+html.toast-top #app.focus #toast { top: calc((60px + var(--gt)) / var(--z, 1)); }
+/* 上の帯：時計と、つながらないときの印 */
+#clock { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; min-height: 44px; border: 1.5px dashed var(--soft); border-radius: 5px; background: var(--card); color: var(--ink); font-size: 12px; font-weight: 700; white-space: nowrap; flex: 0 0 auto; }
+#clock b { font-family: var(--font-mono); font-size: 15px; }
+#clock.soon { border-color: var(--red); color: var(--red); }
+#topbtns #offline { color: var(--red); border-color: var(--red); border-style: dashed; }
+@media (max-width: 1000px) { #clock { min-height: 38px; padding: 0 8px; } }
+/* 集中表示：上の帯・指令・小地図を隠す */
+#app.focus :is(#goal, #topbtns, #minimap, #marks) { display: none !important; }
+#focus-exit { position: absolute; top: calc(10px + var(--gt)); right: var(--gr); z-index: 3; min-height: 40px; padding: 4px 12px; font-weight: 700; font-size: 13px; border: var(--bw) solid var(--ink); border-radius: 5px; background: var(--card); color: var(--ink); box-shadow: 2px 2px 0 var(--shadow); }
+.in-title #focus-exit { display: none; }
+#app.focus :is(#area-act, #paused) { top: calc(60px + var(--gt)); }
+/* 目を休める */
+.eye-ring { --p: 0; justify-self: center; width: 168px; height: 168px; margin: 6px 0; border-radius: 50%; display: grid; place-items: center; background: conic-gradient(var(--ink) calc(var(--p) * 360deg), var(--card-2) 0); }
+.eye-ring b { width: 134px; height: 134px; border-radius: 50%; background: var(--card); display: grid; place-items: center; font-family: var(--font-mono); font-size: 54px; font-weight: 600; }
+.eye-text { font-size: 17px; text-align: center; }
+#toast #eye-offer { display: block; margin: 6px auto 0; min-height: 38px; padding: 2px 14px; font-family: var(--font-ui); font-size: 14px; color: var(--ink); }
+/* 用語集 */
+#gl-q { min-height: 44px; background: var(--paper); border: var(--bw) solid var(--ink); border-radius: 4px; padding: 6px 12px; font-size: 16px; user-select: text; -webkit-user-select: text; }
+.gl { display: grid; gap: 10px; }
+.gl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.gl-term.open { grid-column: 1 / -1; }
+.gl-name { width: 100%; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 10px; text-align: left; background: var(--card); color: var(--ink); border: 1px solid var(--rule); border-radius: 4px; font-weight: 700; }
+.gl-name.on { background: var(--hi-soft); border-color: var(--ink); }
+.gl-chip { flex: 0 0 auto; width: 26px; height: 26px; display: grid; place-items: center; border: 1.5px solid var(--ink); border-radius: 5px; color: #fff; font-family: var(--font-hand); font-weight: 600; font-size: 14px; }
+.gl-text { display: grid; gap: 6px; margin-top: 4px; padding: 8px 12px; border-left: 3px solid var(--red); background: var(--card-2); font-size: 14px; }
+.gl-text p { margin: 0; }
+/* はじめての手引き：光らせる枠と吹き出し */
+#tour { position: absolute; inset: 0; z-index: 30; }
+#tour:has(.tour-ring[hidden]) { background: rgba(10, 14, 24, 0.55); }
+#tour .tour-ring { position: fixed; border: 3px solid var(--hi); border-radius: 8px; box-shadow: 0 0 0 9999px rgba(10, 14, 24, 0.55); pointer-events: none; transition: left 0.25s ease, top 0.25s ease, width 0.25s ease, height 0.25s ease; }
+#tour .tour-tip { position: fixed; display: grid; gap: 6px; background: var(--card); color: var(--ink); border: var(--bw) solid var(--ink); border-radius: 6px; padding: 12px 14px; box-shadow: 4px 4px 0 var(--shadow); }
+#tour .tour-tip p { margin: 0; line-height: 1.6; }
+#tour .tour-tip b { font-family: var(--font-hand); font-size: 19px; }
+#tour .tour-n { color: var(--soft); font-size: 12px; }
+#tour.calm .tour-ring { transition: none; }
+.in-title #tour { display: none; }
+/* 下の道具の段：列の幅を画面の幅までにする（道具が増えると、道具の棚が画面より広がり、右端の道具に届かなかった。いまは棚の中を横に送れる） */
+#dock { grid-template-columns: minmax(0, 1fr); }
+/* 縦長のスマホ（幅 640 以下）：上の帯をいちばん上の 1 段に、指令をその下に。範囲選択の帯・「停止中」・上に出す通知は、指令の札の下（--goal-b は settings2.ts で測る） */
+@media (max-width: 640px) {
+  #topbtns { top: calc(8px + var(--gt)); }
+  #goal { top: calc((60px + var(--gt)) / var(--z, 1)); }
+  html.big-btn #goal { top: calc((78px + var(--gt)) / var(--z, 1)); }
+  #area-act, #paused, html.toast-top #toast { top: calc(var(--goal-b, 150px) + 8px); }
+  html.toast-top #app.focus #toast { top: calc(60px + var(--gt)); }
+  /* 通知は画面の幅いっぱいまで使う（真ん中寄せのままだと、半分の幅で折り返していた） */
+  #toast { width: max-content; max-width: calc(100vw - 32px); }
+  /* 狭い画面では、通知・道具の説明・範囲選択の帯は拡大せず、文字だけ大きくする（拡大すると画面からはみ出す） */
+  html.big-text :is(#toast, #tip, #area-act) { zoom: 1; }
+  html.big-text #toast { font-size: 18px; }
+  html.huge-text #toast { font-size: 21px; }
+  html.big-text :is(#tip, #area-act) { font-size: 14.5px; }
+  html.huge-text :is(#tip, #area-act) { font-size: 16px; }
+  #area-act { width: max-content; max-width: calc(100vw - 24px); padding: 4px 6px; gap: 4px; }
+  #area-act button { min-height: 36px; padding: 4px 9px; }
+  #rvcard { max-height: 46vh; }
+  #modal { padding: 10px 10px calc(10px + env(safe-area-inset-bottom, 0px)); }
+  #sheet { padding: 14px 14px 18px; }
+  .pref-row .seg { flex-wrap: wrap; }
+  .slotcard { padding: 11px 12px; gap: 10px; }
+  .slotcard .slot-thumb { width: 96px; height: 60px; align-self: flex-start; margin-top: 4px; }
+  .slotcard:has(> .slot-thumb) > .stack { flex-basis: calc(100% - 110px); }
+  .slot-more { justify-content: flex-start; }
+  #cover { padding: 20px 18px 18px 44px; }
+  #cover::before { width: 24px; }
+}
