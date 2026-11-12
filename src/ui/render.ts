@@ -719,6 +719,15 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.beginPath(); ctx.moveTo(cx - z * 0.36, cy); ctx.lineTo(cx + z * 0.36, cy); ctx.stroke();
     pipe(cx - z / 2, cy, cx + z / 2, cy);
   }
+  /** まとまった荷の個数の札（×10 など）。荷の右下に出す。引いた視野では出さない */
+  const stack = (x: number, y: number, n: number | undefined) => {
+    if (!n || n < 2 || z < 22) return;
+    const tx = `×${n}`, fs = Math.max(9, z * 0.21), wd = fs * (0.6 * tx.length + 0.5), bx = x + z * 0.2, by = y + z * 0.21;
+    rr(ctx, bx - wd / 2, by - fs * 0.62, wd, fs * 1.24, fs * 0.35);
+    ctx.fillStyle = punk ? '#0b0d10' : P.ink; ctx.fill();
+    ctx.fillStyle = punk ? '#ffd166' : P.paper; ctx.font = `700 ${fs}px ${FONT_MONO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(tx, bx, by + fs * 0.05); ctx.textBaseline = 'alphabetic';
+  };
   for (const b of belts) {
     if (!b.e.item) continue;
     const [ox, oy] = onCurve(b.c, b.e.item.p);
@@ -726,7 +735,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       // ごく引いた視野：物質は、その色の小さな点で示す
       ctx.fillStyle = b.e.item.s === 'e' ? P.hi : sub(b.e.item.s).color;
       ctx.fillRect(sx(b.e.x + 0.5 + ox) - z * 0.2, sy(b.e.y + 0.5 + oy) - z * 0.2, z * 0.4, z * 0.4);
-    } else token(ctx, P, sx(b.e.x + 0.5 + ox), sy(b.e.y + 0.5 + oy), z, b.e.item.s, far);
+    } else { token(ctx, P, sx(b.e.x + 0.5 + ox), sy(b.e.y + 0.5 + oy), z, b.e.item.s, far); stack(sx(b.e.x + 0.5 + ox), sy(b.e.y + 0.5 + oy), b.e.item.n); }
   }
   for (const e of w.ents.values()) {
     if (e.kind !== 'bridge' || !e.items || !inView(e)) continue;
@@ -734,6 +743,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       if (!it) return;
       const d = it.d ?? a;
       token(ctx, P, sx(e.x + 0.5 + DX[d] * (it.p - 0.5)), sy(e.y + 0.5 + DY[d] * (it.p - 0.5)), z, it.s);
+      stack(sx(e.x + 0.5 + DX[d] * (it.p - 0.5)), sy(e.y + 0.5 + DY[d] * (it.p - 0.5)), it.n);
     });
   }
 

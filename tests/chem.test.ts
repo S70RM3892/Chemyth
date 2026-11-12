@@ -4,7 +4,7 @@ import { ORG_MIXES, WASHES, extract, extractReachable, extractRefusal, washById 
 import { AMINO, AMINO_MIXES, migrate, migrateReachable, poleAt } from '../src/content/phoresis';
 import { AGENTS, ION_ORDER, MIXES, MUD_CL, MUD_OH, SLUDGE, agentById, ionsId, ionsOf, reachableFrom, refusal, settle } from '../src/content/ions';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
-import { RAIL_BOOST, addRail, layRail, railRoute, removeRail, stationRoutes, STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, goalRate, reactionsPerMin, stationTargets, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
+import { DX, DY, outputBlocked, RAIL_BOOST, addRail, layRail, railRoute, removeRail, stationRoutes, STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, goalRate, reactionsPerMin, stationTargets, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { hasSub, sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
@@ -299,12 +299,17 @@ describe('工場の動作', () => {
     expect(e.outSlot).toEqual([3, 2]);
     expect(outPort(e, 0)).toMatchObject({ tx: hx, ty: hy, d: 0 });
     expect(outPort(e, 1)).toMatchObject({ tx: hx - 3, ty: hy, d: 2 });
-    e.inBuf = { H2O: 4 };
-    run(w, 10);
-    expect(w.delivered.H2).toBe(2);
+    e.inBuf = { H2O: 24 };
+    run(w, 30);
+    // 出口には、ベルトが数マス進む間にできる分（反応 hb 回ぶん）までしかためられない。O₂ の行き先がないので、そこで止まる
+    expect(e.hb).toBeGreaterThanOrEqual(1);
+    expect(e.busy).toBe(false);
+    expect(outputBlocked(e)).toBe(true);
+    expect(w.delivered.H2).toBe(2 * e.hb!);
+    expect(w.delivered.H2).toBeLessThan(24);
     place(w, 'vent', hx - 3, hy, 0);
-    run(w, 5);
-    expect(w.delivered.H2).toBe(4);
+    run(w, 30);
+    expect(w.delivered.H2).toBe(24);
   });
 
   it('空気は陸地のどこでも採れ、海では海水が採れる', () => {
@@ -1997,5 +2002,127 @@ describe('路線番号と信号の番号は、8 までに限らない', () => {
       expect(l).toBeGreaterThan(55); expect(l).toBeLessThan(205);
     }
     expect(lineColor(9999)).toMatch(/^#[0-9a-f]{6}$/);
+  });
+});
+
+describe('まとめて運ぶ：ベルトや出口の速さで詰まらない', () => {
+  const sim = (w: ReturnType<typeof newWorld>, sec: number) => { for (let i = 0; i < Math.round(sec * 60); i++) step(w, 1 / 60); };
+  /** 装置を置き、出口ごとにベルト 3 マス → 廃棄口をつなぐ */
+  const rig = (w: ReturnType<typeof newWorld>, id: string) => {
+    const r = rec(id);
+    place(w, r.machine as 'reactor', 60, 60, 0);
+    const e = at(w, 60, 60)!;
+    configure(e, r, r.outputs.map(([s]) => s).filter((s) => s !== 'e'));
+    e.inBuf = Object.fromEntries(r.inputs.map(([s]) => [s, 1e6]));
+    e.outOrder!.forEach((_, i) => {
+      const p = outPort(e, i);
+      for (let k = 0; k < 3; k++) place(w, 'belt', p.tx + DX[p.d] * k, p.ty + DY[p.d] * k, p.d);
+      place(w, 'vent', p.tx + DX[p.d] * 3, p.ty + DY[p.d] * 3, p.d);
+    });
+    return { e, r };
+  };
+  it('係数の大きい生成物（1 回に 10 個など）でも、ベルト 1 本で、装置は能力いっぱいに動く', () => {
+    for (const id of ['kmno4-oxalic', 'buffer-57', 'copper-refining', 'phosphorus', 'ostwald-1']) {
+      const w = newWorld(), { e, r } = rig(w, id);
+      sim(w, 60);
+      // 60 秒で終わるはずの反応の回数（はじめの 1 回ぶんの遅れだけ見込む）
+      expect(e.n!).toBeGreaterThanOrEqual(Math.floor(60 / r.time) - 1);
+      expect(e.ts![2]).toBeLessThan(0.5); // 「出口の詰まり」で止まっていた時間
+      // 作った数と、捨て口に着いた数が合う（途中のベルトに残る分だけ少ない）。なくなったり増えたりしない
+      for (const [s, k] of r.outputs) {
+        const onBelt = [...w.ents.values()].reduce((sum, b) => sum + (b.item?.s === s ? b.item.n || 1 : 0), 0), held = e.outBuf![e.outOrder!.indexOf(s)];
+        expect((w.vented[s] || 0) + onBelt + held).toBe(k * e.n!);
+      }
+    }
+  });
+  it('機械だけを最大まで強化し、ベルトは初期のままでも、詰まらない（電気で 2 倍にしても）', () => {
+    for (const id of ['kmno4-oxalic', 'haber-bosch', 'hall-heroult']) {
+      const w = newWorld();
+      w.up.machine = 5; w.research.push('overclock');
+      const { e, r } = rig(w, id);
+      if (r.machine === 'electrolyzer') e.pw = 1e6;
+      const speedUp = 3.75 * (r.machine === 'electrolyzer' ? 2 : 1);
+      sim(w, 40);
+      expect(e.n!).toBeGreaterThanOrEqual(Math.floor((40 * speedUp) / r.time) - 2);
+      expect(e.ts![2]).toBeLessThan(0.5);
+    }
+  });
+  it('採取機 6 台を 1 本のベルトに合流させても、6 台ぶんが流れる（ベルトは 1 マスに荷 1 つのまま）', () => {
+    const w = newWorld();
+    for (let x = 40; x < 60; x++) place(w, 'belt', x, 100, 0);
+    place(w, 'vent', 60, 100, 0);
+    for (let k = 0; k < 6; k++) place(w, 'extractor', 41 + k * 3, 99, 1);
+    sim(w, 120);
+    const res = Object.values(w.vented).reduce((a, b) => a + b, 0);
+    // 1 台は毎秒 1 個。ベルトは毎秒 2 マス進むので、1 個ずつしか運べなければ、毎秒 2 個で頭打ちになる
+    expect(res).toBeGreaterThan(120 * 6 * 0.93);
+    expect(res).toBeLessThanOrEqual(120 * 6);
+  });
+  it('分配器：まとまった荷は等分する。ふさがった出口の分は、ほかへ回る', () => {
+    const w = newWorld();
+    place(w, 'belt', 40, 110, 0); place(w, 'splitter', 41, 110, 0);
+    place(w, 'vent', 42, 110, 0); place(w, 'belt', 41, 109, 3); place(w, 'belt', 41, 111, 1);
+    // 両脇のベルトの先は、タンク（同じ物質をためる）
+    place(w, 'tank', 41, 107, 3); place(w, 'tank', 41, 112, 1);
+    at(w, 41, 107)!.test = 'hold'; at(w, 41, 112)!.test = 'hold';
+    const feed = (n: number) => { at(w, 40, 110)!.item = { s: 'N2', p: 0, m: w.tick, n }; };
+    feed(10); sim(w, 5);
+    const up = () => at(w, 41, 107)!, down = () => at(w, 41, 112)!;
+    const got = () => [w.vented.N2 || 0, up().cnt || 0, down().cnt || 0];
+    expect(got().reduce((a, b) => a + b, 0)).toBe(10);
+    expect(Math.max(...got()) - Math.min(...got())).toBeLessThanOrEqual(1);
+    // 端数は、回ごとに別の出口へ行く。3 回送れば、どの出口も同じ数になる
+    feed(10); sim(w, 5); feed(10); sim(w, 5);
+    expect(got()).toEqual([10, 10, 10]);
+    // 1 個だけの荷は、これまでどおり順番に配る
+    for (let i = 0; i < 6; i++) { feed(1); sim(w, 3); }
+    expect(got()).toEqual([12, 12, 12]);
+  });
+  it('地下ベルト・立体交差・検知器・弁・分析器を通っても、個数は変わらない', async () => {
+    const w = newWorld();
+    w.research.push('logic');
+    const line: [Parameters<typeof place>[1], number][] = [['belt', 40], ['tunnel', 41], ['tunnel', 45], ['belt', 46], ['bridge', 47], ['belt', 48], ['sensor', 49], ['gate', 50], ['belt', 51], ['analyzer', 52], ['belt', 53], ['vent', 54]];
+    for (const [k, x] of line) expect(place(w, k, x, 120, 0)).toBeNull();
+    Object.assign(at(w, 50, 120)!, { test: 'off' });        // 信号が来ていない間は通す
+    Object.assign(at(w, 52, 120)!, { test: 'is:O2' });      // O₂ だけ正面へ
+    at(w, 40, 120)!.item = { s: 'O2', p: 0, m: 0, n: 37 };
+    sim(w, 20);
+    expect(w.vented.O2).toBe(37);
+  });
+  it('納品所：まとまった荷は、個数ぶん数える。量産の指令の速さも、個数で測る', () => {
+    const w = newWorld();
+    const [hx0, hy0] = HUB_TILES[0];
+    place(w, 'belt', hx0 - 1, hy0, 0);
+    const g = currentGoal(w)!, before = w.delivered[g.s] || 0;
+    at(w, hx0 - 1, hy0)!.item = { s: g.s, p: 0, m: 0, n: 3 };
+    sim(w, 2);
+    expect((w.delivered[g.s] || 0) - before).toBe(3);
+    expect(w.stock[g.s]).toBe(3);
+  });
+  it('貨物駅：まとまった荷を積み、降ろす駅からもまとめて出る。個数は合う', () => {
+    const w = newWorld();
+    place(w, 'station', 40, 130, 0); place(w, 'station', 40, 150, 0);
+    Object.assign(at(w, 40, 130)!, { role: 'in', ch: 77 }); Object.assign(at(w, 40, 150)!, { role: 'out', ch: 77 });
+    const out = at(w, 40, 150)!;
+    for (const i of [0, 1]) { const p = slotPort(out, i); place(w, 'belt', p.tx, p.ty, p.d); place(w, 'vent', p.tx + DX[p.d], p.ty + DY[p.d], p.d); }
+    // 積む駅の入口へ、まとまった荷を直に入れる
+    const inn = at(w, 40, 130)!;
+    inn.buf = Array.from({ length: 50 }, () => 'Fe');
+    sim(w, 60);
+    expect(w.vented.Fe).toBe(50);
+  });
+  it('沈殿槽：まとまった荷は、いちどに分けて、個数ぶんの沈殿とろ液を出す', async () => {
+    const { MIXES } = await import('../src/content/ions');
+    const { sepRun } = await import('../src/content/sep');
+    const w = newWorld();
+    place(w, 'settler', 40, 160, 0);
+    const e = at(w, 40, 160)!;
+    const mix = MIXES[0].id;
+    e.test = 'hcl';
+    const r = sepRun('settler', mix, 'hcl');
+    for (const slot of [0, 2, 3]) { const p = slotPort(e, slot); place(w, 'vent', p.tx, p.ty, p.d); }
+    e.item = { s: mix, p: 0, m: 0, n: 7 };
+    sim(w, 30);
+    for (const x of [r.main, r.side, r.side2]) if (x) expect(w.vented[x]).toBe(7);
   });
 });
