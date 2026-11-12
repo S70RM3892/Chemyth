@@ -439,11 +439,13 @@ export function initBuild2(c: B2Ctx) {
         if (!e.off || floorOf(e.y) !== fl) continue;
         const s = sizeOf(e), S = s * z, x0 = sx(e.x), y0 = sy(e.y);
         if (!vis(x0, y0, S)) continue;
-        top.fillStyle = 'rgba(118,122,128,0.55)';
-        top.fillRect(x0 + z * 0.06, y0 + z * 0.06, S - z * 0.12, S - z * 0.12);
+        // 立体表示では、2×2 の装置は天面の層、1 マスの設備は地面の層（1 マスの箱の天面には、地面の絵が貼られる）
+        const c = s === 2 ? top : base;
+        c.fillStyle = 'rgba(118,122,128,0.55)';
+        c.fillRect(x0 + z * 0.06, y0 + z * 0.06, S - z * 0.12, S - z * 0.12);
         const cx = x0 + S / 2, cy = y0 + S / 2, bh = Math.max(7, S * 0.34), bw = Math.max(2.5, S * 0.1);
-        top.fillStyle = '#ffffff'; top.strokeStyle = '#2a2f36'; top.lineWidth = Math.max(1, z * 0.03);
-        for (const sgn of [-1, 1]) { top.fillRect(cx + sgn * bw * 0.85 - bw / 2, cy - bh / 2, bw, bh); top.strokeRect(cx + sgn * bw * 0.85 - bw / 2, cy - bh / 2, bw, bh); }
+        c.fillStyle = '#ffffff'; c.strokeStyle = '#2a2f36'; c.lineWidth = Math.max(1, z * 0.03);
+        for (const sgn of [-1, 1]) { c.fillRect(cx + sgn * bw * 0.85 - bw / 2, cy - bh / 2, bw, bh); c.strokeRect(cx + sgn * bw * 0.85 - bw / 2, cy - bh / 2, bw, bh); }
       }
       // ---- 設備の名前：設備の上に小さな札 ----
       if (z >= 14) for (const e of marked) {

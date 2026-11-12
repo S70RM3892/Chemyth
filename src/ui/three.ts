@@ -90,6 +90,21 @@ export function camera3(cam: { x: number; y: number; z: number }, cw: number, ch
 }
 
 /**
+ * 地面の点 (x, y) から真上へ h マス上がった点が、画面のどこに見えるか（光の柱の先）。ただし、画面の y が yTop より上へは行かない。
+ * うんと寄ると、高い点はカメラより後ろになり、project は画面の下のはるか外を返す。そのときも、柱の向き（足もとから少し上の点へ）のまま yTop で止める。
+ * 足もとがカメラより後ろ、または yTop より上なら null
+ */
+export function riseTo(project: Cam3['project'], x: number, y: number, h: number, yTop: number): [number, number] | null {
+  const [bx, by] = project(x, y, 0), [ux, uy] = project(x, y, 0.25);
+  // 上へ伸びる線は、画面でも上へ向かう。そうならないのは、足もとがカメラより後ろのとき
+  if (by < yTop || by - uy < 1e-6) return null;
+  const [tx, ty] = project(x, y, h);
+  if (ty < by && ty >= yTop) return [tx, ty];
+  const k = (by - yTop) / (by - uy);
+  return [bx + (ux - bx) * k, yTop];
+}
+
+/**
  * 画面に見えている範囲を覆うのに要る、絵の大きさ（注視点での 1 マス = cam.z ピクセルとして）。
  * 見えている範囲のマスの数は拡大率に反比例するので、この大きさは拡大率によらない。
  */

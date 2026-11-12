@@ -1851,7 +1851,7 @@ function boot(data: HotData) {
       cvs.width = W; cvs.height = H;
       // 写真は、これまでどおり近くの絵で撮る（引いた視野の戦略図にはしない）
       const fv = fitView(W, H);
-      draw(cvs.getContext('2d')!, W, H, world, { ...fv, z: Math.max(FAR_Z + 1, fv.z) }, performance.now() / 1000, 0, { floor: 0, tool: 'pan', selected: null });
+      draw(cvs.getContext('2d')!, W, H, world, { ...fv, z: Math.max(FAR_Z + 1, fv.z) }, performance.now() / 1000, 0, { floor: 0, tool: 'pan', selected: null, still: true });
       let list = album();
       const photo: Photo = { k: list.length ? key : 'first', cap, d: cvs.toDataURL('image/jpeg', 0.62), done: doneCount(world), ms: Math.round(world.playMs) };
       list = [...list.filter((p) => p.k !== photo.k), photo].slice(-26);

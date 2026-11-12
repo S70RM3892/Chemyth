@@ -122,7 +122,7 @@ function overview(json: string): string | null {
   try {
     const cv = document.createElement('canvas');
     cv.width = W; cv.height = H;
-    draw(cv.getContext('2d')!, W, H, w, { x: (x0 + x1) / 2, y: (y0 + y1) / 2, z }, performance.now() / 1000, 0, { floor: 0, tool: 'pan', selected: null });
+    draw(cv.getContext('2d')!, W, H, w, { x: (x0 + x1) / 2, y: (y0 + y1) / 2, z }, performance.now() / 1000, 0, { floor: 0, tool: 'pan', selected: null, still: true });
     return cv.toDataURL('image/jpeg', 0.75);
   } catch { return null; }
 }
