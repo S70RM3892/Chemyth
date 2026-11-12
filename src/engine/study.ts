@@ -4,6 +4,7 @@
  * - まちがえた理由（うっかり・知らなかった・取り違え）
  * - 今夜の 10 問・今朝の 10 問の結果（日ごと）
  * - 1 日の学習時間の目標、練習の順番、計算問題を解き直した時刻
+ * - 途中で閉じた今夜・今朝の 10 問の続き
  * 古いセーブには無いので、読むときは中身を確かめ、壊れた値は既定に戻す。
  */
 export type Why = 'slip' | 'unknown' | 'mixup';
@@ -16,6 +17,11 @@ export const WHY_TIP: Record<Why, string> = {
 };
 /** 今夜の 10 問（day は夜の日付）と、翌朝の結果 */
 export interface NightRec { day: string; n: number; got: number; morning?: number }
+/**
+ * 途中で閉じた今夜・今朝の 10 問。次に開いたら、続き（i 問目）から出す（答えた問いを、同じ回でもう一度数えない）。
+ * day は、今夜の 10 問ならその夜の日付、今朝の 10 問なら前の夜の日付。got は、それまでの正解の数
+ */
+export interface SetRun { kind: 'night' | 'morning'; day: string; ids: string[]; i: number; got: number }
 export interface Study {
   /** 問いごとの、答えるまでにかかった時間の合計（ミリ秒）と回数 */
   ms: Record<string, [number, number]>;
@@ -29,11 +35,15 @@ export interface Study {
   order: 'mix' | 'weak';
   /** 計算問題を解き直して正解した時刻（問題の id ごと） */
   redo: Record<string, number>;
+  /** 途中で閉じた今夜・今朝の 10 問（なければ無いか null） */
+  run?: SetRun | null;
 }
 export const GOAL_MINS = [0, 15, 30, 45, 60, 90];
 export const WHY_KEEP = 300, NIGHT_KEEP = 30;
 
 export const newStudy = (): Study => ({ ms: {}, why: [], nights: [], goalMin: 0, order: 'mix', redo: {} });
+/** 続きから出せる回（同じ種類・同じ日のもの）。なければ null */
+export const runOf = (s: Study, kind: SetRun['kind'], day: string): SetRun | null => (s.run && s.run.kind === kind && s.run.day === day ? s.run : null);
 
 const num = (x: unknown): x is number => typeof x === 'number' && isFinite(x);
 const isWhy = (x: unknown): x is Why => x === 'slip' || x === 'unknown' || x === 'mixup';
@@ -60,5 +70,10 @@ export function readStudy(d: unknown): Study {
   s.goalMin = GOAL_MINS.includes(o.goalMin as number) ? (o.goalMin as number) : 0;
   s.order = o.order === 'weak' ? 'weak' : 'mix';
   if (o.redo && typeof o.redo === 'object') for (const [k, v] of Object.entries(o.redo as Record<string, unknown>)) if (num(v)) s.redo[k] = v;
+  const r = o.run as { kind?: unknown; day?: unknown; ids?: unknown; i?: unknown; got?: unknown } | null | undefined;
+  if (r && typeof r === 'object' && (r.kind === 'night' || r.kind === 'morning') && typeof r.day === 'string' && Array.isArray(r.ids) && r.ids.every((x) => typeof x === 'string') && num(r.i) && num(r.got)) {
+    const i = Math.max(0, Math.min(r.ids.length, r.i | 0));
+    s.run = { kind: r.kind, day: r.day, ids: [...(r.ids as string[])], i, got: Math.max(0, Math.min(i, r.got | 0)) };
+  }
   return s;
 }

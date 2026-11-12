@@ -10,7 +10,7 @@ import { DAILY_BONUS, DAILY_GOAL, dailyBonus, daysToExam, streakOf, todayCount }
 import { answer, relearnReady, type World } from '../engine/world';
 import { buildQueue, groupsOf, partsFor, quizFor, type Quiz } from '../engine/quiz';
 import type { Confidence } from '../engine/fsrs';
-import { calibAdvice, hintFor, orderIds, recordTime, snapAnswer, tagWhy, undoAnswer, UNDO_MS } from '../engine/learn';
+import { calibAdvice, hintFor, practiceIds, recordTime, snapAnswer, tagWhy, undoAnswer, UNDO_MS } from '../engine/learn';
 import { WHY_NAME, WHY_TIP, type Why } from '../engine/study';
 import { openConfig } from './config';
 import { h } from './dom';
@@ -39,15 +39,29 @@ function paintGoal(el: HTMLElement, w: World) {
 }
 const goalBar = (w: World) => { const el = h('div', { class: 'rv-goal', id: 'rv-goal' }); paintGoal(el, w); return el; };
 
-/** いちばん新しく描いた問い。キーボードで答えるのに使う（数字で選択肢 → 数字で自信、Enter で次へ） */
-let active: { root: HTMLElement; choose(i: number): boolean; conf(i: number): boolean; next(): boolean } | null = null;
-/** 押されたキーで問いに答える。使ったら true */
-export function quizKey(key: string): boolean {
-  const a = active;
-  if (!a || !a.root.isConnected || a.root.closest('[hidden]')) return false;
+/** 描いた問い（新しいものが後ろ。描く場所ごとに 1 つ）。キーボードで答えるのに使う（数字で選択肢 → 数字で自信、Enter で次へ） */
+interface Active { root: HTMLElement; choose(i: number): boolean; conf(i: number): boolean; next(): boolean }
+let actives: Active[] = [];
+/** 同じ場所に描き直したら、前の問いは捨てる（工場の札は、同じ場所に次の問いを描く） */
+const setActive = (a: Active) => { actives = [...actives.filter((x) => x.root !== a.root && x.root.isConnected), a]; };
+/**
+ * 押されたキーで問いに答える。使ったら true。
+ * within を渡すと、その中の問いにだけ答える（窓を開いている間は、窓の下に残った工場の札に答えない）
+ */
+export function quizKey(key: string, within?: HTMLElement | null): boolean {
+  const a = [...actives].reverse().find((x) => x.root.isConnected && !x.root.closest('[hidden]') && (!within || within.contains(x.root)));
+  if (!a) return false;
   if (/^[1-9]$/.test(key)) { const n = Number(key) - 1; return a.choose(n) || a.conf(n); }
   if (key === 'Enter') return a.next();
   return false;
+}
+/** 練習で出す問い。すべてを組み直す問い（前回まちがえた反応）は、選ぶ問いに替える。作れなければ null */
+function choiceQuiz(w: World, id: string): Quiz | null {
+  const q = quizFor(w, id);
+  if (q?.part !== 'full') return q;
+  const r = recipeById(id.slice(2)), part = r ? partsFor(r)[0] : undefined;
+  const q2 = part ? quizFor(w, id, Math.random, part) : null;
+  return q2 && q2.part !== 'full' ? q2 : null;
 }
 /** キーボードのある端末か（選択肢に数字を添える） */
 const keyboardish = () => typeof matchMedia === 'function' && matchMedia('(hover: hover) and (pointer: fine)').matches;
@@ -61,26 +75,30 @@ export function habitLine(w: World): string {
  * 問いを 1 つ描く。choose（答え）→ 自信 → 結果。full（すべてを組み直す）は、onFull で設定の画面を開き、結果を受け取る。
  * compact：工場の画面の端に出す小さな札のとき。
  * 答える前に「ヒント」を押せる（使うと、覚え具合は「たぶん」まで）。onUndo を渡すと、答えてから 5 秒の間「取り消す」を出す（押しまちがい用）。
+ * 取り消して選び直すときは、もう正しい答えを見ているので（seen）、ヒントを使ったのと同じく「たぶん」までとする。
  * extra：結果の 1 行目のあとに足すもの（連続正解など）
  */
-export function renderQuiz(root: HTMLElement, w: World, q: Quiz, o: { compact?: boolean; practice?: boolean; onFull: (done: (ok: boolean) => void) => void; onDone: (r: QuizResult) => void; next?: { label: string; go: () => void }; onUndo?: (r: QuizResult) => void; extra?: (r: QuizResult) => HTMLElement | null }) {
+export function renderQuiz(root: HTMLElement, w: World, q: Quiz, o: { compact?: boolean; practice?: boolean; seen?: boolean; onFull: (done: (ok: boolean) => void) => void; onDone: (r: QuizResult) => void; next?: { label: string; go: () => void }; onUndo?: (r: QuizResult) => void; extra?: (r: QuizResult) => HTMLElement | null }) {
   const group = groupsOf(q.id)[0];
   const head = h('div', { class: 'rv-head' }, h('span', { class: 'pill' }, q.topic || '復習'), group ? h('span', { class: 'pill contrast', title: '取り違えやすい組。続けて相手も出る' }, `見比べ：${group.name}`) : null);
   const result = h('div', { class: 'answer rv-result', hidden: true });
   // 答えるまでの時間：問いを出してから、選択肢を選ぶまで
   const shownAt = Date.now();
-  let pickedAt = shownAt, hinted = false;
+  // 取り消したあとの選び直しは、答えを見たあと。ヒントを使ったのと同じに扱う
+  let pickedAt = shownAt, hinted = !!o.seen && !o.practice;
   const finish = (ok: boolean, conf: Confidence | undefined, picked?: string) => {
     // 練習（解き直し・図鑑から）は、予定も記録も動かさない。取り消せるように、答える前の状態を控える
     const snap = !o.practice && q.part !== 'full' && o.onUndo ? snapAnswer(w, q.id) : null;
     const p0 = w.points;
-    if (!o.practice) { answer(w, q.id, ok, conf, Date.now(), hinted); if (q.part !== 'full') recordTime(w, q.id, pickedAt - shownAt); }
+    // 答えを見てからの選び直しは、思い出すのにかかった時間ではないので数えない
+    if (!o.practice) { answer(w, q.id, ok, conf, Date.now(), hinted); if (q.part !== 'full' && !o.seen) recordTime(w, q.id, pickedAt - shownAt); }
     const hc = !ok && conf === 'sure', lucky = ok && conf === 'guess';
     if (!ok && q.part !== 'full' && !o.practice) w.mistakes.push({ machine: q.id.startsWith('k:') ? 'quiz' : (recipeById(q.id.slice(2))?.machine ?? 'quiz'), recipe: q.id.slice(2), part: q.part === 'k' ? 'quiz' : q.part === 'coef' ? 'coefficients' : q.part === 'cond' ? 'condition' : q.part === 'pole' ? 'electrodes' : 'products', t: Date.now() });
     ok && !lucky ? sfx.ok() : sfx.bad();
     if (!ok) buzz([30, 40, 30]);
-    // 取り違えやすい組の相手：まちがえたら、相手の問いも続けて解いて見比べる（練習）
-    const mate = !ok || lucky ? group?.ids.find((x) => x !== q.id && quizFor(w, x)) : undefined;
+    // 取り違えやすい組の相手：まちがえたら、相手の問いも続けて解いて見比べる（練習）。
+    // 反応は覚えたものだけ（まだ組んでいない反応の答えを見せない）。組み直す問いは、選ぶ問いに替えて出す
+    const mate = !ok || lucky ? group?.ids.find((x) => x !== q.id && (x.startsWith('k:') || w.learned.includes(x.slice(2))) && choiceQuiz(w, x)) : undefined;
     if (ok && conf !== 'guess' && !o.practice) w.points += 3;
     const bonus = !o.practice && dailyBonus(w);
     if (snap) snap.gain = w.points - p0;
@@ -98,12 +116,12 @@ export function renderQuiz(root: HTMLElement, w: World, q: Quiz, o: { compact?: 
       })) : null;
     const undoBtn = snap ? h('button', { class: 'ghost rv-undo', type: 'button', id: 'rv-undo' }, '取り消す') : null;
     // 「もう一度」「見比べ」はわき道の練習：呼び出し元の正解の数や連続正解には数えない
-    const side = { ...o, practice: true, onDone: () => undefined, onUndo: undefined, extra: undefined };
+    const side = { ...o, practice: true, seen: undefined, onDone: () => undefined, onUndo: undefined, extra: undefined };
     const parts: (HTMLElement | null)[] = [
       h('p', { class: hc ? 'rv-hc' : '' }, h('b', {}, hc ? '自信を持ってまちがえた。ここがいちばん伸びる所' : ok ? (lucky ? '当たったが、勘' : '正解') : '不正解'),
         picked !== undefined && !ok ? `　正しくは「${q.choices[0]}」` : ''),
       lucky && !o.practice ? h('p', { class: 'muted' }, '勘で当てたものは、覚えたことにしない。今日のうちに、もう一度出す。') : null,
-      hinted && !o.practice ? h('p', { class: 'muted' }, 'ヒントを見たので、覚え具合は「たぶん」までとして記録した。自信ごとの正答率には入れない。') : null,
+      hinted && !o.practice ? h('p', { class: 'muted' }, o.seen ? '答えを見てから選び直したので、覚え具合は「たぶん」までとして記録した。自信ごとの正答率には入れない。' : 'ヒントを見たので、覚え具合は「たぶん」までとして記録した。自信ごとの正答率には入れない。') : null,
       !ok && !o.practice ? h('p', { class: 'muted' }, hc ? '1 分後に、もう一度出す。紙に正しい答えを書いて、なぜ思い込んだかも書け。' : '今日のうちに、正解するまで戻ってくる。') : null,
       r ? h('p', { class: 'rv-eq' }, h('span', { class: 'muted' }, '反応式　'), h('b', {}, ...linkText(equationOf(r), [...r.inputs, ...r.outputs].map(([x]) => x), subBox)), r.accept[0] && r.accept[0] !== 'なし' ? h('span', { class: 'muted' }, `　条件：${r.accept[0]}`) : null) : null,
       h('p', { class: 'note' }, ...linkText(q.why, w.discovered, subBox)),
@@ -113,7 +131,8 @@ export function renderQuiz(root: HTMLElement, w: World, q: Quiz, o: { compact?: 
       o.practice ? h('p', { class: 'muted' }, '練習なので、復習の予定と記録は動かさない。') : null,
       h('div', { class: 'row' },
         !ok || lucky ? h('button', { class: 'ghost', type: 'button', id: 'rv-again', onclick: () => renderQuiz(root, w, q, side) }, 'もう一度（練習）') : null,
-        mate ? h('button', { class: 'ghost', type: 'button', id: 'rv-mate', onclick: () => renderQuiz(root, w, quizFor(w, mate)!, side) }, `見比べ：${group!.name}の相手も解く`) : null,
+        // 相手の問いは組み直す問いにならないので、呼び出し元の onFull（この問いの反応を組み直す）は渡さない
+        mate ? h('button', { class: 'ghost', type: 'button', id: 'rv-mate', onclick: () => { const mq = choiceQuiz(w, mate); if (mq) renderQuiz(root, w, mq, { ...side, onFull: () => undefined }); } }, `見比べ：${group!.name}の相手も解く`) : null,
         undoBtn,
         o.next ? h('button', { class: 'primary', type: 'button', id: 'rv-next', onclick: o.next.go }, o.next.label) : null)];
     result.replaceChildren(...parts.filter((x): x is HTMLElement => !!x));
@@ -135,14 +154,17 @@ export function renderQuiz(root: HTMLElement, w: World, q: Quiz, o: { compact?: 
         if (!undoAnswer(w, snap)) { undoBtn.remove(); return; }
         o.onUndo!(res);
         sfx.tap();
-        renderQuiz(root, w, q, o);
+        renderQuiz(root, w, q, { ...o, seen: true });
       };
     }
   };
+  const next = () => { const b = result.hidden ? null : result.querySelector<HTMLButtonElement>('#rv-next'); if (!b) return false; b.click(); return true; };
   if (q.part === 'full') {
     root.replaceChildren(head, h('p', { class: 'qtext' }, q.q),
       h('p', { class: 'muted' }, '前回まちがえた反応は、原料・生成物・係数・条件を、すべて組み直す。'),
       h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'rv-full', onclick: () => o.onFull((ok) => finish(ok, undefined)) }, '設定の画面で組み直す')), result);
+    // 選ぶものはない。前に同じ場所へ描いた問いのキーが、残って効かないようにする（Enter は組み直したあとの「次へ」だけ）
+    setActive({ root, choose: () => false, conf: () => false, next });
     return;
   }
   const choices = shuffled(q.choices);
@@ -153,7 +175,7 @@ export function renderQuiz(root: HTMLElement, w: World, q: Quiz, o: { compact?: 
   // 答える前のヒント：問いに出ていない手がかりを 1 つ。使うと、覚え具合は「たぶん」まで
   const hint = hintFor(q);
   const hintText = h('p', { class: 'rv-hint', id: 'rv-hint-text', hidden: true });
-  const hintBtn = hint ? h('button', { class: 'ghost mini rv-hint-btn', type: 'button', id: 'rv-hint' }, o.practice ? 'ヒント' : 'ヒント（使うと「たぶん」まで）') : null;
+  const hintBtn = hint && !hinted ? h('button', { class: 'ghost mini rv-hint-btn', type: 'button', id: 'rv-hint' }, o.practice ? 'ヒント' : 'ヒント（使うと「たぶん」まで）') : null;
   if (hint && hintBtn) hintBtn.onclick = () => {
     if (picked || hinted) return;
     hinted = true;
@@ -185,14 +207,16 @@ export function renderQuiz(root: HTMLElement, w: World, q: Quiz, o: { compact?: 
     for (const x of opts.children) { const el = x as HTMLButtonElement; el.classList.toggle('picked', el.dataset.v === q.choices[0]); el.classList.toggle('wrong', el.dataset.v === picked && !ok); }
     finish(ok, c, picked);
   } }, keys ? h('kbd', {}, String(ci + 1)) : null, name));
-  const nodes: (HTMLElement | null)[] = [head, o.practice ? h('p', { class: 'muted' }, '練習（予定は動かさない）') : null, h('p', { class: 'qtext' }, q.q), hintBtn ? h('div', { class: 'row rv-hint-row' }, hintBtn) : null, hintText, opts, confRow, result];
+  const nodes: (HTMLElement | null)[] = [head, o.practice ? h('p', { class: 'muted' }, '練習（予定は動かさない）') : null,
+    hinted ? h('p', { class: 'muted', id: 'rv-seen' }, '選び直し（答えを見たので「たぶん」まで）') : null,
+    h('p', { class: 'qtext' }, q.q), hintBtn ? h('div', { class: 'row rv-hint-row' }, hintBtn) : null, hintText, opts, confRow, result];
   root.replaceChildren(...nodes.filter((x): x is HTMLElement => !!x));
-  active = {
+  setActive({
     root,
     choose: (i) => { if (picked) return false; const b = opts.children[i] as HTMLButtonElement | undefined; if (!b) return false; b.click(); return true; },
     conf: (i) => { if (!picked || !result.hidden) return false; const b = confRow.querySelectorAll('button')[i]; if (!b) return false; b.click(); return true; },
-    next: () => { const b = result.hidden ? null : result.querySelector<HTMLButtonElement>('#rv-next'); if (!b) return false; b.click(); return true; },
-  };
+    next,
+  });
 }
 /**
  * 決まった問いの一覧を、その場で解く（苦手の一覧・間違いの記録・図鑑から）。practice なら予定を動かさない。
@@ -201,8 +225,9 @@ export function renderQuiz(root: HTMLElement, w: World, q: Quiz, o: { compact?: 
 export function solveList(c: PanelCtx, title: string, ids: string[], practice: boolean, done?: (right: number) => void) {
   const { w } = c;
   // 練習では、すべてを組み直す問い（前回まちがえた反応）も、選ぶ問いとして出す
-  const pick = (id: string): Quiz | null => { const q = quizFor(w, id); if (q?.part !== 'full') return q; const r = recipeById(id.slice(2)); const part = r ? partsFor(r)[0] : undefined; return part ? quizFor(w, id, Math.random, part) : null; };
-  const list = (practice ? orderIds(w, ids) : ids).filter((id) => pick(id)).slice(0, 10);
+  const pick = (id: string): Quiz | null => choiceQuiz(w, id);
+  // 10 問は、渡された並び（まちがえたもの・苦手なものが先）で選んでから、練習の順番に並べる
+  const list = practice ? practiceIds(w, ids, (id) => !!pick(id)) : ids.filter((id) => pick(id)).slice(0, 10);
   let right = 0;
   const closeBtn = () => h('button', { class: 'ghost', type: 'button', id: 'sheet-close', onclick: c.close }, '閉じる');
   const step = (i: number) => {
@@ -231,7 +256,8 @@ export function showReview(c: PanelCtx) {
   const list = [...queue, ...fresh].slice(0, 10);
   // combo：続けて思い出せた数（表示だけ。勘で当たったものと、まちがえたもので 0 に戻る）
   let right = 0, combo = 0, best = 0;
-  const hcs: string[] = [];
+  // 自信を持ってまちがえた問い（出したときのまま。答えたあとに作り直すと、組み直す問いになって答えが消える）
+  const hcs: Quiz[] = [];
   const closeBtn = () => h('button', { class: 'ghost', type: 'button', id: 'sheet-close', onclick: c.close }, '閉じる');
   const finish = () => {
     const next = Object.values(w.srs).map((x) => x.due).sort((a, b) => a - b)[0];
@@ -241,7 +267,7 @@ export function showReview(c: PanelCtx) {
       best >= 3 ? h('p', { class: 'rv-combo', id: 'rv-best' }, `いちばん長く続いた正解：${best} 問`) : null,
       h('p', { class: 'rv-habit' }, habitLine(w)),
       goalBar(w),
-      hcs.length ? h('div', { class: 'rv-hclist' }, h('b', {}, '自信を持ってまちがえたもの'), ...hcs.map((id) => { const q = quizFor(w, id); return h('p', {}, q ? `${q.q.replace(/→ できるものは？$/, '→ ？')}　正しくは「${q.choices[0] ?? ''}」` : id); })) : null,
+      hcs.length ? h('div', { class: 'rv-hclist' }, h('b', {}, '自信を持ってまちがえたもの'), ...hcs.map((q) => h('p', {}, `${q.q.replace(/→ できるものは？$/, '→ ？')}　正しくは「${q.choices[0]}」`))) : null,
       h('p', { class: 'muted' }, `自信ごとの正答率　${calibLine(w)}`),
       h('p', { class: 'rv-advice', id: 'rv-advice' }, calibAdvice(w).text),
       h('p', { class: 'muted' }, `次の問いが来るのは ${mins < 60 ? `${mins} 分後` : mins < 1440 ? `${Math.round(mins / 60)} 時間後` : `${Math.round(mins / 1440)} 日後`}。間隔は、問題ごとの覚え具合で決まる（覚えているものほど長く、まちがえたものは今日のうちに戻ってくる）。試験日をまたぐ間隔は作らない。`));
@@ -268,7 +294,7 @@ export function showReview(c: PanelCtx) {
         before = { right, combo, best, hcs: hcs.length };
         if (r.ok && r.conf !== 'guess') { right++; combo++; } else combo = 0;
         best = Math.max(best, combo);
-        if (r.hc) hcs.push(id);
+        if (r.hc) hcs.push(q);
         paintGoal(bar, w);
       },
       onUndo: () => { right = before.right; combo = before.combo; best = before.best; hcs.length = before.hcs; paintGoal(bar, w); },

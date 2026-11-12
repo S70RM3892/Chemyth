@@ -20,6 +20,7 @@ import { showLog, showSyllabus, unitProgress, type PanelCtx } from './panels';
 import { sfx } from './sound';
 import { DAILY_GOAL, lastDays, streakOf } from '../engine/habit';
 import { dayKey } from '../engine/fsrs';
+import { setupMissed } from '../engine/learn';
 
 /** 縦の棒グラフ（値・棒の下の名前・2 本目の値は濃い色で重ねる） */
 function bars(id: string, rows: { name: string; v: number; v2?: number; note?: string }[], max: number): HTMLElement {
@@ -221,7 +222,8 @@ export function showStats(c: StatsCtx) {
 
   // ---- 学習 ----
   const learned = RECIPES.filter((r) => w.learned.includes(r.id));
-  const missed = new Set(w.mistakes.filter((m) => isMachine(m.machine as Ent['kind']) && m.recipe).map((m) => m.recipe));
+  // 覚えたあとの間違い（復習の問いなど）は、一発で書けたかどうかに数えない
+  const missed = setupMissed(w);
   const firstTry = learned.filter((r) => !missed.has(r.id)).length;
   const kStage = (id: string) => w.srs[`k:${id}`]?.iv;
   // 定着：3 日以上空けて思い出せた

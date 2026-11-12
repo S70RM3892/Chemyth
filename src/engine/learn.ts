@@ -74,6 +74,9 @@ export function snapAnswer(w: World, id: string, now = Date.now()): AnswerSnap {
 /** 答えを取り消して、答える前に戻す（予定・自信ごとの正答率・日ごとの数・出し直し・間違いの記録・研究点・答えた時間・理由）。時間を過ぎていたら false */
 export function undoAnswer(w: World, s: AnswerSnap, now = Date.now()): boolean {
   if (now - s.at > UNDO_MS || now < s.at) return false;
+  // あとでほかの問いに答えていたら（工場の札で答えてすぐ、復習の窓で答えたなど）、取り消さない。控えに戻すと、その答えの記録まで消える
+  const k = dayKey(s.at);
+  if ((w.revDays[k]?.[0] ?? 0) !== (s.revDays[k]?.[0] ?? 0) + 1) return false;
   if (s.card) w.srs[s.id] = s.card; else delete w.srs[s.id];
   w.calib = s.calib; w.revDays = s.revDays; w.relearn = s.relearn; w.hcLog = s.hcLog; w.today = s.today;
   // この答えで足した記録だけを除く（間違いの記録は時刻の順に並んでいる）
@@ -165,6 +168,19 @@ export function quizIdOf(m: Mistake): string | null {
   if (m.machine === 'quiz') return KNOWLEDGE.some((k) => k.id === m.recipe) ? `k:${m.recipe}` : recipeById(m.recipe) ? `r:${m.recipe}` : null;
   return RX_MACHINES.includes(m.machine) && recipeById(m.recipe) ? `r:${m.recipe}` : null;
 }
+/**
+ * 初めて正しく設定できるまでに、設定でまちがえた反応（記録の「一発で書けたもの」に数えない）。
+ * 覚えたあと（t0 より後）の間違い（復習の問い・組み直し）は、一発で書けたかどうかと関係ないので除く。覚えた時刻のない古いセーブは、すべての間違いで数える
+ */
+export function setupMissed(w: World): Set<string> {
+  const out = new Set<string>();
+  for (const m of w.mistakes) {
+    if (!m.recipe || !RX_MACHINES.includes(m.machine)) continue;
+    const t0 = w.srs[`r:${m.recipe}`]?.t0;
+    if (t0 === undefined || m.t <= t0) out.add(m.recipe);
+  }
+  return out;
+}
 /** 単元の名前。反応は教科書の単元（頭の「化学：」「化学基礎：」は除く） */
 export const unitOf = (id: string) => topicOf(id).replace(/^化学(基礎)?：/, '');
 /** 単元の問い：知識問題はすべて、反応は覚えたものだけ（まだ組んでいない反応の答えを見せない） */
@@ -239,6 +255,13 @@ export function orderIds(w: World, ids: string[], rnd: () => number = Math.rando
   const seen = uniq.filter((id) => w.srs[id]), fresh = uniq.filter((id) => !w.srs[id]);
   seen.sort((a, b) => recallNow(w.srs[a], now) - recallNow(w.srs[b], now) || w.srs[b].l - w.srs[a].l);
   return [...seen, ...fresh];
+}
+/**
+ * 練習で解く問い（max 問まで）。渡された並び（まちがえたもの・苦手なものが先）のまま、解けるもの（ok）を選んでから、練習の順番に並べる。
+ * 並べてから選ぶと、混ぜたときに、まちがえた問いが 10 問からこぼれる
+ */
+export function practiceIds(w: World, ids: string[], ok: (id: string) => boolean, max = 10, rnd: () => number = Math.random, now = Date.now()): string[] {
+  return orderIds(w, [...new Set(ids)].filter(ok).slice(0, max), rnd, now);
 }
 
 // ---------------- 計算問題の解き直し ----------------
