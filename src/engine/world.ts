@@ -243,6 +243,8 @@ export interface World {
   noSpill?: boolean;
   /** 課題「限られた原料」での予想。保存しない */
   pred?: { out: number; rest: number };
+  /** 課題の工場：学習で得た研究点を足す先（本編の工場）。課題の工場は、やめると捨てるため。保存しない */
+  bank?: World;
   /** 正解した計算問題 */
   solved: string[];
   /** 演習（連鎖計算・構造決定）の型ごとの成績。tries：解いた回数、clean：全問正解した回数 */
@@ -889,6 +891,9 @@ export function flowStats(w: World): FlowStats {
   };
 }
 
+/** 学習で得た研究点を足す。課題の工場では、本編の工場（bank）に足す */
+export function credit(w: World, n: number) { (w.bank ?? w).points += n; }
+
 /** 初めて正しく設定できた反応に研究点を出す。もらえた点を返す */
 export function learn(w: World, r: Recipe, firstTry: boolean): number {
   for (const [s] of r.outputs) discover(w, s);
@@ -897,7 +902,7 @@ export function learn(w: World, r: Recipe, firstTry: boolean): number {
   // はじめて覚えた：一度でできたなら「思い出せた」、まちがえながらなら「忘れた」から始める。10 分後に一度確かめる
   w.srs[`r:${r.id}`] = firstCard(firstTry ? 3 : 1, Date.now());
   const gain = firstTry ? 15 : 8;
-  w.points += gain;
+  credit(w, gain);
   return gain;
 }
 
@@ -1140,8 +1145,14 @@ function deliver(w: World, s: string, x: number, y: number, rc?: boolean, quiet 
     // 仕分け課題で、同じ試料の別の物質を納めたら減点
     if (g.strict && setById(g.strict)?.members.includes(s)) {
       w.counts[ch] = Math.max(0, w.counts[ch] - 2);
-      w.mistakes.push({ machine: 'analysis', recipe: g.s, part: 'isomer', t: Date.now() });
-      w.events.push('wrong-sample');
+      // 減点は 1 個ずつ。間違いの記録と知らせは、ひと山（quiet は同じ山の 2 個目から）に 1 回。
+      // 同じ仕分けの誤りが続いている間（前の誤りから 1 分以内）は、記録を 1 件にまとめる（ほかの間違いの記録を押し出さないように）
+      if (!quiet) {
+        const now = Date.now(), last = w.mistakes[w.mistakes.length - 1];
+        if (last && last.machine === 'analysis' && last.part === 'isomer' && last.recipe === g.s && now - last.t < 60000) last.t = now;
+        else w.mistakes.push({ machine: 'analysis', recipe: g.s, part: 'isomer', t: now });
+        w.events.push('wrong-sample');
+      }
     }
     return;
   }

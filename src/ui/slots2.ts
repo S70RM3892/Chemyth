@@ -222,14 +222,23 @@ export async function shrinkAlbums(): Promise<number> {
   }
   return freed;
 }
-/** 保存領域を少し空ける（すぐに）：いちばん大きいアルバムから、古い写真を 1 枚落とす。落とせたら true */
-export function freeSpace(): boolean {
+const del = (k: string): boolean => { try { if (localStorage.getItem(k) === null) return false; localStorage.removeItem(k); return true; } catch { return false; } };
+/**
+ * 保存領域を少し空ける（すぐに）。セーブを先に残すため、なくても遊べるものから 1 つ手放す：
+ * 読み込む前の控え → 前日の控え（大きいものから）→ アルバムの古い写真（いちばん大きいアルバムから 1 枚）。
+ * 手放したものの種類を返す。もう手放せるものがなければ ''
+ */
+export function freeSpace(): 'backup' | 'daily' | 'album' | '' {
+  if (del('chemyth-v2-backup')) return 'backup';
+  const daily = Array.from({ length: SLOTS }, (_, i) => dailyKey(i + 1)).map((k) => ({ k, size: get(k)?.length ?? 0 })).filter((d) => d.size).sort((a, b) => b.size - a.size);
+  // 消した控えは、次にその枠をその日はじめて書くときに、また取る（入りきれば）
+  for (const d of daily) if (del(d.k)) return 'daily';
   const all = albums().map((a) => ({ ...a, size: JSON.stringify(a.list).length })).sort((a, b) => b.size - a.size);
   for (const a of all) {
     const next = dropOldest(a.list, 1);
-    if (next.length < a.list.length && put(a.key, JSON.stringify(next))) return true;
+    if (next.length < a.list.length && put(a.key, JSON.stringify(next))) return 'album';
   }
-  return false;
+  return '';
 }
 /**
  * アルバムを保存する。入りきらなければ、古い写真から小さくし、それでも入らなければ古いものから落とす

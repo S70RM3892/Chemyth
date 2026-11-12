@@ -40,12 +40,14 @@ import { DAILY_GOAL, daysToExam, streakOf, todayCount } from './engine/habit';
 import { showReview, renderQuiz, calibLine, quizKey } from './ui/review';
 import { showWeek, todayExtras } from './ui/learn2';
 import { logNight } from './engine/learn';
-import { conflictSlots, flushAccount, initAccount, onAccountChange, syncState } from './ui/account';
+import { conflictSlots, flushAccount, initAccount, onAccountChange, slotErased, syncState } from './ui/account';
 import { applySkin, applyTheme } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
 import { drawToken, elementIcon } from './ui/token';
 import { autoOpen, breakReminder, dataExtra, helpExtra, initSettings2, menuExtra, prefExtras, prefRow, started } from './ui/settings2';
 import { freeSpace, putAlbum } from './ui/slots2';
+import { SHELF_MAX, cleanShelf, makeBackup, mergeShelf, parseBackup, restorePlan, type Shelf } from './engine/backup';
+import { summarize } from './engine/world';
 import { initBuild2 } from './ui/build2';
 
 type Placeable = Exclude<Kind, 'hub' | 'part'>;
@@ -132,21 +134,32 @@ function boot(data: HotData) {
   applySkin(store.meta().skin ?? 'note');
   /** 課題を開いているあいだ、本編の工場は home に預けておく。world は課題の小さな工場 */
   let sandbox: { c: Case; home: World; done: boolean } | null = null;
+  /** 本編の工場（課題の最中は、預けてある方）。保存と、学習・記録は、いつもこちらに書く */
+  const home = () => (sandbox ? sandbox.home : world);
   /** 時刻を「15:04」の形に */
   const hm = (t: number) => { const d = new Date(t); return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; };
   let savedAt = 0, saveFailTold = 0;
+  /** 保存領域を空けるために手放したもの（freeSpace の返り値ごとの呼び名） */
+  const FREED = { backup: '読み込む前の控え', daily: '前日の控え', album: 'アルバムの古い写真' } as const;
   const save = () => {
     if (!slot) return;
-    const json = serialize(sandbox ? sandbox.home : world);
+    const json = serialize(home());
     if (store.write(slot, json)) { savedAt = Date.now(); return; }
-    // 入りきらなければ、アルバムの古い写真から減らして、もう一度（セーブを先に残す）
-    for (let i = 0; i < 30 && freeSpace(); i++) if (store.write(slot, json)) { savedAt = Date.now(); toast('この端末の保存領域が足りないので、アルバムの古い写真を減らして保存した。', 6000); return; }
+    // 入りきらなければ、読み込む前の控え・前日の控え・アルバムの古い写真の順に手放して、もう一度（セーブを先に残す）
+    const freed = new Set<string>();
+    for (let i = 0; i < 30; i++) {
+      const what = freeSpace();
+      if (!what) break;
+      freed.add(FREED[what]);
+      if (store.write(slot, json)) { savedAt = Date.now(); toast(`この端末の保存領域が足りないので、${[...freed].join('と')}を消して保存した。`, 6000); return; }
+    }
     // 保存できなかった（容量がいっぱい・プライベートモードなど）。1 分に 1 度だけ知らせる
     if (Date.now() - saveFailTold > 60000) { saveFailTold = Date.now(); toast('保存できなかった。この端末の保存領域がいっぱいかもしれない。メニューの「すべて書き出す」でファイルに控えておけ。', 9000); }
   };
   /** セーブ枠ごとに、見ていた場所を覚える（次に開いたとき、同じ場所から始める） */
   const saveCam = () => { if (slot && !sandbox) store.setMeta({ cams: { ...(store.meta().cams ?? {}), [String(slot)]: { x: +cam.x.toFixed(2), y: +cam.y.toFixed(2), z: +cam.z.toFixed(2) } } }); };
-  hot?.snapshot?.(() => (slot ? { slot, save: serialize(world) } : {}));
+  // 課題の最中でも、本編の工場を渡す（課題の工場で枠を上書きしないように）
+  hot?.snapshot?.(() => (slot ? { slot, save: serialize(home()) } : {}));
 
   // ---- WebGL の合成段：地図の絵（#cv）を素材にして、光・発光・ゆらぎをかけた結果を #gl に出す ----
   const glCv = $<HTMLCanvasElement>('gl');
@@ -387,6 +400,8 @@ function boot(data: HotData) {
     memo: (e: Ent) => b2.memoRow(e),
   };
   const panel = (): PanelCtx => ({ w: world, show: showSheet, close: closeModal, toast, sheet, actions: sheetActions });
+  /** 学習と記録の窓（復習・演習・図鑑・強化・指令の一覧・ふり返り）。課題の最中でも、本編の工場に書く（課題の工場は、やめると捨てる） */
+  const homePanel = (): PanelCtx => ({ ...panel(), w: home() });
   const statsBtn = $('b-stats');
   const paintOverlay = () => statsBtn.classList.toggle('hot', overlay);
   const statsCtx = (): StatsCtx => ({
@@ -427,7 +442,7 @@ function boot(data: HotData) {
         })),
         h('p', { class: 'muted' }, g?.rate ? `いまの指令：${sub(g.s).name} を毎分 ${g.rate} 個の速さで ${g.n} 秒間納め続ける。いまの速さは毎分 ${Math.round(goalRate(world))} 個。` : g ? `いまの指令：${sub(g.s).name} を ${requiredOf(world, g)} 個（${goalCount(world)} 個 納品済み）` : 'この章の指令は終えた。'),
         h('p', { class: 'muted' }, `いまの大きさは ${world.hubSize}×${world.hubSize} マス。指令を達成していくと大きくなり、受け取れる口が増える。そのぶん 1 つの指令で求められる数も増える。`),
-        h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', onclick: () => showChapters(panel()) }, '指令の一覧を開く')));
+        h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', onclick: () => showChapters(homePanel()) }, '指令の一覧を開く')));
       return;
     }
     const kind = e.kind as Placeable;
@@ -553,11 +568,11 @@ function boot(data: HotData) {
     save(); saveCam();
     const slots: Record<string, string | null> = {};
     for (const n of [1, 2, 3]) slots[String(n)] = store.read(n);
-    let blueprints: unknown = [];
-    try { blueprints = JSON.parse(localStorage.getItem(BP_KEY) || '[]'); } catch { /* なくてよい */ }
-    const blob = new Blob([JSON.stringify({ app: 'chemyth', v: 2, at: Date.now(), slots, blueprints })], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ app: 'chemyth', v: 2, at: Date.now(), slots, blueprints: library() })], { type: 'application/json' });
     void saveFile(stampName('json'), blob).then((ok) => { if (ok) toast('3 冊ぶんを 1 つのファイルに書き出した（アルバムの写真は含まない）。', 3000); });
   };
+  /** ノートの中身を短く（達成数・研究点・保存した時刻） */
+  const noteLine = (json: string | null) => { const s0 = summarize(json); return s0 ? `達成 ${s0.done} / ${TOTAL_GOALS}・研究点 ${s0.points}・${fmtDate(s0.savedAt)} に保存` : '読めない中身'; };
   const importAll = () => {
     const inp = h('input', { type: 'file', accept: '.json,application/json' }) as HTMLInputElement;
     inp.onchange = () => {
@@ -566,25 +581,36 @@ function boot(data: HotData) {
       f.text().then((text) => {
         let d: { app?: string; slots?: Record<string, string | null>; blueprints?: unknown };
         try { d = JSON.parse(text); } catch { toast('読めないファイルだった。', 3000); return; }
-        if (d.app !== 'chemyth' || !d.slots) { toast('Chemyth の書き出したファイルではない。', 3000); return; }
+        if (!d || d.app !== 'chemyth' || !d.slots) { toast('Chemyth の書き出したファイルではない。', 3000); return; }
         const ok = [1, 2, 3].filter((n) => { const j = d.slots![String(n)]; return typeof j === 'string' && !!deserialize(j); });
         if (!ok.length) { toast('読めるノートが入っていなかった。', 3000); return; }
+        // 設計図は、文字列での受け渡しと同じ検査を通したものだけ
+        const bps = cleanShelf(d.blueprints);
         showSheet(h('header', {}, h('h2', {}, 'ファイルから読み込む'), closeBtn()),
           h('p', {}, `読み込むと、${ok.map((n) => slotName(n)).join('・')}が、ファイルの中身に置き換わる。`),
-          h('p', { class: 'muted' }, '置き換える前の中身は控えておく。メニューの「データ」から、読み込む前に戻せる（控えは 1 回ぶん）。'),
+          bps.list.length ? h('p', {}, `ファイルの設計図 ${bps.list.length} 個は、この端末の設計図に足す（いまある設計図は消えない）。`) : null,
+          h('p', { class: 'muted' }, '置き換える前の中身は控えておく。メニューの「データ」から、読み込む前に戻せる（控えは 1 回ぶん）。アルバムの写真はファイルに入っていないので、この端末のものがそのまま残る。'),
           h('div', { class: 'row' },
             h('button', { class: 'primary', type: 'button', id: 'imp-go', onclick: () => {
-              const prev: Record<string, string | null> = {};
-              for (const n of [1, 2, 3]) prev[String(n)] = store.read(n);
-              memBackup = JSON.stringify(prev);
-              try { localStorage.setItem(BACKUP, memBackup); } catch { toast('控えはこの画面を閉じるまでしか残せない（保存領域がいっぱい）。', 4000); }
-              // 遊んでいる枠を置き換えるなら、先にタイトルへ戻る（あとで上書きしないように）
+              // 遊んでいる枠を置き換えるなら、先にタイトルへ戻る（いまの中身を保存してから控え、あとで上書きしないように）
               modal.hidden = true; sheet.replaceChildren();
               toTitle();
-              for (const n of ok) store.write(n, d.slots![String(n)]!);
-              if (Array.isArray(d.blueprints)) try { localStorage.setItem(BP_KEY, JSON.stringify(d.blueprints)); } catch { /* 設計図は入らなくてもよい */ }
+              // 置き換える枠だけを控える（戻すときも、その枠だけを戻す）
+              const prev: Record<string, string | null> = {};
+              for (const n of ok) prev[String(n)] = store.read(n);
+              memBackup = makeBackup(Date.now(), prev);
+              try { localStorage.setItem(BACKUP, memBackup); } catch { toast('控えはこの画面を閉じるまでしか残せない（保存領域がいっぱい）。', 4000); }
+              const bad = ok.filter((n) => !store.write(n, d.slots![String(n)]!));
+              let more = '';
+              if (bps.list.length) {
+                const m = mergeShelf(library(), bps.list);
+                if (m.added && !saveLibrary(m.list)) more += '設計図は、保存領域がいっぱいで足せなかった。';
+                else more += (m.added ? `設計図を ${m.added} 個足した。` : '') + (m.full ? `設計図 ${m.full} 個は、棚がいっぱい（${SHELF_MAX} 個まで）で入らなかった。` : '');
+              }
+              if (bps.dropped) more += `読めない設計図 ${bps.dropped} 個は外した。`;
               title.show();
-              toast(`${ok.length} 冊を読み込んだ。`, 2600);
+              const done = ok.length - bad.length;
+              toast((done ? `${done} 冊を読み込んだ。` : '') + (bad.length ? `${bad.map((n) => slotName(n)).join('・')}は、この端末の保存領域がいっぱいで書き込めなかった。` : '') + more, bad.length ? 8000 : 3200);
             } }, '置き換えて読み込む'),
             h('button', { class: 'ghost', type: 'button', onclick: closeModal }, 'やめる')));
       }, () => toast('ファイルを読めなかった。', 3000));
@@ -592,18 +618,30 @@ function boot(data: HotData) {
     inp.click();
   };
   const backupText = () => { try { return localStorage.getItem(BACKUP) ?? memBackup; } catch { return memBackup; } };
+  const dropBackup = () => { try { localStorage.removeItem(BACKUP); } catch { /* 消せなくてもよい */ } memBackup = null; };
+  /** 読み込む前に戻す：どのノートがどうなるかを見せ、確かめてから戻す。読み込みで置き換えた枠だけを戻す */
   const restoreBackup = () => {
-    const t = backupText();
-    if (!t) return;
-    let prev: Record<string, string | null>;
-    try { prev = JSON.parse(t); } catch { return; }
-    modal.hidden = true; sheet.replaceChildren();
-    toTitle();
-    for (const n of [1, 2, 3]) { const j = prev[String(n)]; if (typeof j === 'string') store.write(n, j); else store.erase(n); }
-    try { localStorage.removeItem(BACKUP); } catch { /* 消せなくてもよい */ }
-    memBackup = null;
-    title.show();
-    toast('読み込む前の状態に戻した。', 2600);
+    save();
+    const b = parseBackup(backupText()), plan = b ? restorePlan(b, (n) => store.read(n)) : [];
+    if (!b || !plan.length) { dropBackup(); toast('戻すものはない（読み込んだノートは、読み込む前と同じ中身）。', 3000); showData(); return; }
+    showSheet(h('header', {}, h('h2', {}, '読み込む前に戻す'), closeBtn()),
+      h('p', {}, `${b.at ? `${fmtDate(b.at)} に` : ''}ファイルから読み込む前の状態に戻す。`),
+      h('ul', { id: 'restore-list' }, ...plan.map(({ n, json }) => h('li', {}, `${slotName(n)}：${json ? `読み込む前の中身（${noteLine(json)}）に戻る` : '消える（読み込む前は空だった）'}`))),
+      h('p', { class: 'muted' }, 'いまの中身は消える（読み込んだあとに進めた分も）。ほかのノートは変わらない。'),
+      h('div', { class: 'row' },
+        h('button', { class: 'ghost warn', type: 'button', id: 'd-restore-go', onclick: () => {
+          modal.hidden = true; sheet.replaceChildren();
+          toTitle();
+          const bad: number[] = [];
+          for (const { n, json } of restorePlan(b, (k) => store.read(k))) {
+            // 消した枠は、預けてある側にも「消した」印を送る（送らないと、同期で戻ってくる）
+            if (json === null) { store.erase(n); slotErased(n); } else if (!store.write(n, json)) bad.push(n);
+          }
+          if (!bad.length) dropBackup();
+          title.show();
+          toast(bad.length ? `${bad.map((n) => slotName(n)).join('・')}は、この端末の保存領域がいっぱいで戻せなかった。` : '読み込む前の状態に戻した。', bad.length ? 8000 : 2600);
+        } }, '戻す'),
+        h('button', { class: 'ghost', type: 'button', onclick: () => showData() }, 'やめる')));
   };
   const showData = () => showSheet(
     h('header', {}, h('h2', {}, 'データ'), closeBtn()),
@@ -611,7 +649,7 @@ function boot(data: HotData) {
     h('div', { class: 'menu' },
       h('button', { class: 'ghost', type: 'button', id: 'd-export', onclick: exportAll }, 'すべて書き出す（3 冊ぶんを 1 つのファイルに）'),
       h('button', { class: 'ghost', type: 'button', id: 'd-import', onclick: importAll }, 'ファイルから読み込む'),
-      backupText() ? h('button', { class: 'ghost warn', type: 'button', id: 'd-restore', onclick: restoreBackup }, '読み込む前に戻す') : null,
+      (() => { const b = parseBackup(backupText()); return b ? h('button', { class: 'ghost warn', type: 'button', id: 'd-restore', onclick: restoreBackup }, b.at ? `読み込む前に戻す（${fmtDate(b.at)} に読み込んだ分）` : '読み込む前に戻す') : null; })(),
       h('button', { class: 'ghost', type: 'button', id: 'd-shot', onclick: () => { closeModal(); window.setTimeout(shot, 60); } }, '画面写真を保存（PNG）'), ...dataExtra()),
     h('p', { class: 'muted' }, '1 冊ずつの書き出し（文字列）は、タイトル画面の各ノートの「書き出す」から。アカウントにログインしていれば、端末どうしで自動でそろう。'));
 
@@ -681,32 +719,32 @@ function boot(data: HotData) {
       h('header', {}, h('h2', {}, 'メニュー'), closeBtn()),
       h('h3', {}, '工場'),
       h('div', { class: 'menu' },
-        item('m-chapters', '指令の一覧（章を切り替える）', () => showChapters(panel())),
+        item('m-chapters', '指令の一覧（章を切り替える）', () => showChapters(homePanel())),
         item('m-stats', '統計（納品の速さ・装置の稼働率・学習の進み）', () => showStats(statsCtx())),
         item('m-chain', '生産の流れ（いまの指令を原料までたどる）', () => showChain(statsCtx())),
-        item('m-goals', '終えた指令（評価・かかった時間・見込み）', () => showGoalLog(panel())),
+        item('m-goals', '終えた指令（評価・かかった時間・見込み）', () => showGoalLog(homePanel())),
         item('m-where', 'どこで作っている？（物質から装置を探す）', () => showWhere()),
         ...b2.menuItems(item),
         item('m-album', 'アルバム（達成した瞬間の工場の写真）', () => showAlbum()),
         ...menuExtra('factory')),
       h('h3', {}, '京大形式の演習'),
       h('div', { class: 'menu' },
-        item('m-drills', '連鎖計算（理論の大問。数値は毎回変わる）', () => showDrills(panel())),
-        item('m-structure', '構造決定（異性体の数え上げ・構造の特定・ペプチドの配列）', () => showStructure(panel())),
-        item('m-passages', 'リード文課題（空欄補充）', () => showPassages(panel())),
-        item('m-essays', '論述（紙に書いて、要点で自己採点）', () => showEssays(panel())),
-        item('m-mock', '模試（自分の工場がそのまま問題文になる）', () => showMock(panel()))),
+        item('m-drills', '連鎖計算（理論の大問。数値は毎回変わる）', () => showDrills(homePanel())),
+        item('m-structure', '構造決定（異性体の数え上げ・構造の特定・ペプチドの配列）', () => showStructure(homePanel())),
+        item('m-passages', 'リード文課題（空欄補充）', () => showPassages(homePanel())),
+        item('m-essays', '論述（紙に書いて、要点で自己採点）', () => showEssays(homePanel())),
+        item('m-mock', '模試（自分の工場がそのまま問題文になる）', () => showMock(homePanel()))),
       h('h3', {}, '課題'),
       h('div', { class: 'menu' },
         item('m-cases', `課題（壊れた工場を直せ・限られた原料・中身の見えない装置）　${(sandbox ? sandbox.home : world).cases.length} / ${CASES.length}`, () => showCases()),
         sandbox ? item('m-case-leave', '課題をやめて、自分の工場に戻る', () => { leaveCase(); closeModal(); }) : null),
       h('h3', {}, 'ふり返り'),
       h('div', { class: 'menu' },
-        item('m-syllabus', '範囲表（入試範囲のどこまで進んだか）', () => showSyllabus(panel())),
-        item('m-log', '記録（間違えたところ）', () => showLog(panel())),
-        item('m-week', '週の報告（直近 7 日・試験までの復習の見込み）', () => showWeek(panel())),
-        item('m-ach', '実績（工場・納品・指令・学習の節目）', () => showAchievements(panel())),
-        item('m-rank', 'ランキング', () => showRanking(panel()))),
+        item('m-syllabus', '範囲表（入試範囲のどこまで進んだか）', () => showSyllabus(homePanel())),
+        item('m-log', '記録（間違えたところ）', () => showLog(homePanel())),
+        item('m-week', '週の報告（直近 7 日・試験までの復習の見込み）', () => showWeek(homePanel())),
+        item('m-ach', '実績（工場・納品・指令・学習の節目）', () => showAchievements(homePanel())),
+        item('m-rank', 'ランキング', () => showRanking(homePanel()))),
       h('h3', {}, '設定'),
       h('div', { class: 'menu' },
         h('div', { class: 'row' }, h('span', { class: 'muted' }, '見た目'), h('span', { class: 'seg' }, ...skinButtons(showMenu)), h('span', { class: 'seg' }, ...themeButtons(showMenu))),
@@ -738,14 +776,14 @@ function boot(data: HotData) {
         item('m-help', '遊び方', () => showHelp()),
         ...menuExtra('settings'),
         item('m-title', '保存してタイトルへ戻る（今日のまとめ）', () => { if (sandbox) { modal.hidden = true; sheet.replaceChildren(); toTitle(); } else showToday(); })),
-      h('p', { class: 'muted' }, `${slotName(slot)}${(sandbox ? sandbox.home : world).fname ? `「${(sandbox ? sandbox.home : world).fname}」` : ''}。この端末に自動で保存している（最後に保存 ${savedAt ? hm(savedAt) : '—'}）。今日遊んだ時間 ${fmtTime(world.dayMs[dayKey(Date.now())] ?? 0)}。${(() => { const st = syncState(); return st.on ? `アカウント：${st.trouble ? `同期できていない（${st.trouble}）` : st.busy ? '同期中' : st.lastSync ? `${hm(st.lastSync)} に同期` : '同期待ち'}。` : ''; })()}`),
+      h('p', { class: 'muted' }, `${slotName(slot)}${(sandbox ? sandbox.home : world).fname ? `「${(sandbox ? sandbox.home : world).fname}」` : ''}。この端末に自動で保存している（最後に保存 ${savedAt ? hm(savedAt) : '—'}）。今日遊んだ時間 ${fmtTime(home().dayMs[dayKey(Date.now())] ?? 0)}。${(() => { const st = syncState(); return st.on ? `アカウント：${st.trouble ? `同期できていない（${st.trouble}）` : st.busy ? '同期中' : st.lastSync ? `${hm(st.lastSync)} に同期` : '同期待ち'}。` : ''; })()}`),
     );
   };
 
   $('b-menu').onclick = showMenu;
-  $('b-up').onclick = () => showUpgrades(panel());
-  $('b-book').onclick = () => showBook(panel());
-  $('b-review').onclick = () => showReview(panel());
+  $('b-up').onclick = () => showUpgrades(homePanel());
+  $('b-book').onclick = () => showBook(homePanel());
+  $('b-review').onclick = () => showReview(homePanel());
   // ---- 指令カード：たたむと細い帯。組む道具を持っている間は、自動でたたむ（押せば開く） ----
   const goalEl = $('goal');
   let foldPref = store.meta().goalFold === true, foldPeek = false;
@@ -874,7 +912,9 @@ function boot(data: HotData) {
     const set = (patch: Partial<SleepCfg>) => { if (locked) return; store.setMeta({ sleep: { ...cfg, ...patch } }); sfx.tap(); showSleepSettings(); };
     const stepBtn = (id: string, text: string, f: () => void) => h('button', { class: 'ghost', type: 'button', id, disabled: locked, onclick: f }, text);
     const md = (t: number) => { const d = new Date(t); return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; };
-    const moveExam = (i: number, days: number) => { world.exams[i] += days * 86400000; const t = Date.now(); for (const k of Object.keys(world.srs)) world.srs[k].due = capByExams(world.srs[k].due, t, world.exams, k); save(); sfx.tap(); showSleepSettings(); };
+    // 試験日は本編の工場のもの（課題の最中でも）
+    const w = home();
+    const moveExam = (i: number, days: number) => { w.exams[i] += days * 86400000; const t = Date.now(); for (const k of Object.keys(w.srs)) w.srs[k].due = capByExams(w.srs[k].due, t, w.exams, k); save(); sfx.tap(); showSleepSettings(); };
     showSheet(h('header', {}, h('h2', {}, '睡眠と試験日'), closeBtn()),
       h('p', { class: 'muted' }, '就寝の 4 時間前から 1 時間前までに「今夜の 10 問」が出る。翌朝、最初に開いたときに同じ問いを出す（覚えた夜と思い出す朝の間に、睡眠をはさむ）。就寝から起床までは工場を閉める。10 代に勧められている睡眠は 8〜10 時間。'),
       locked ? h('p', { class: 'feedback bad' }, '閉店中は変えられない。朝になってから変えろ。') : null,
@@ -883,8 +923,8 @@ function boot(data: HotData) {
       h('div', { class: 'row' }, h('span', {}, `起床 ${hhmm(cfg.wake)}`), stepBtn('sl-wake-dn', '− 15 分', () => set({ wake: (cfg.wake + 1440 - 15) % 1440 })), stepBtn('sl-wake-up', '＋ 15 分', () => set({ wake: (cfg.wake + 15) % 1440 }))),
       h('p', { class: 'muted', id: 'sl-hours' }, `睡眠 ${(((cfg.wake - cfg.bed + 1440) % 1440) / 60).toFixed(1)} 時間`),
       h('h3', {}, '試験日（復習の間隔は、これをまたがない）'),
-      h('div', { class: 'row' }, h('span', {}, `共通テスト ${md(world.exams[0])}`), h('button', { class: 'ghost', type: 'button', id: 'ex0-dn', onclick: () => moveExam(0, -1) }, '− 1 日'), h('button', { class: 'ghost', type: 'button', id: 'ex0-up', onclick: () => moveExam(0, 1) }, '＋ 1 日')),
-      h('div', { class: 'row' }, h('span', {}, `2 次 ${md(world.exams[1])}`), h('button', { class: 'ghost', type: 'button', id: 'ex1-dn', onclick: () => moveExam(1, -1) }, '− 1 日'), h('button', { class: 'ghost', type: 'button', id: 'ex1-up', onclick: () => moveExam(1, 1) }, '＋ 1 日')),
+      h('div', { class: 'row' }, h('span', {}, `共通テスト ${md(w.exams[0])}`), h('button', { class: 'ghost', type: 'button', id: 'ex0-dn', onclick: () => moveExam(0, -1) }, '− 1 日'), h('button', { class: 'ghost', type: 'button', id: 'ex0-up', onclick: () => moveExam(0, 1) }, '＋ 1 日')),
+      h('div', { class: 'row' }, h('span', {}, `2 次 ${md(w.exams[1])}`), h('button', { class: 'ghost', type: 'button', id: 'ex1-dn', onclick: () => moveExam(1, -1) }, '− 1 日'), h('button', { class: 'ghost', type: 'button', id: 'ex1-up', onclick: () => moveExam(1, 1) }, '＋ 1 日')),
       h('p', { class: 'muted' }, '共通テストの 1/16 は大学入試センターの実施要項による。2 次の 2/25 は例年の日付で仮に置いてある。京大の募集要項が出たら合わせろ。'));
   };
 
@@ -1542,8 +1582,19 @@ function boot(data: HotData) {
   // ---- 範囲：まとめてコピー・貼りつけ・消去。設計図は回せて、保存できる ----
   const areaAct = $('area-act');
   const BP_KEY = 'chemyth-v2-blueprints';
-  const library = (): { name: string; stamps: Stamp[] }[] => { try { return JSON.parse(localStorage.getItem(BP_KEY) || '[]'); } catch { return []; } };
-  const saveLibrary = (l: { name: string; stamps: Stamp[] }[]) => { try { localStorage.setItem(BP_KEY, JSON.stringify(l.slice(0, 16))); } catch { /* 保存できなくても遊べる */ } };
+  // 棚の設計図は、文字列での受け渡しと同じ検査を通してから使う（読めないものは外す。前の版で読み込んだものが壊れていても、棚が開けるように）。
+  // 検査し直すのは、保存してある文字列が、この画面で書いたものから変わったときだけ
+  let shelfRaw: string | null = null, shelfOk = '[]';
+  const library = (): Shelf[] => {
+    try {
+      const raw = localStorage.getItem(BP_KEY) || '[]';
+      if (raw !== shelfRaw) { shelfOk = JSON.stringify(cleanShelf(JSON.parse(raw)).list); shelfRaw = raw; }
+      return JSON.parse(shelfOk);
+    } catch { return []; }
+  };
+  const saveLibrary = (l: Shelf[]) => {
+    try { const s0 = JSON.stringify(l.slice(0, SHELF_MAX)); localStorage.setItem(BP_KEY, s0); shelfRaw = shelfOk = s0; return true; } catch { return false; /* 保存できなくても遊べる */ }
+  };
   const sizeOfKind = (k: Placeable) => (BIG.includes(k) ? 2 : 1);
   const areaRect = (): [number, number, number, number] | null => (areaA && areaB ? [Math.min(areaA[0], areaB[0]), Math.min(areaA[1], areaB[1]), Math.max(areaA[0], areaB[0]), Math.max(areaA[1], areaB[1])] : null);
   const inArea = () => {
@@ -1740,6 +1791,8 @@ function boot(data: HotData) {
     const w = c.build((Date.now() % 9973) + 1);
     // 覚えたこと・間違いの記録・研究は、本編と同じものを使う
     w.learned = home.learned; w.srs = home.srs; w.mistakes = home.mistakes; w.agents = home.agents; w.research = home.research; w.discovered = home.discovered; w.solved = home.solved;
+    // 装置の設定を初めて正しくできたときの研究点なども、本編の工場に足す（覚えた印は共有なので、課題の工場に足すと二度ともらえない）
+    w.bank = home;
     sandbox = { c, home, done: false };
     world = w;
     speed = 1; paintSpeed();
@@ -2016,8 +2069,11 @@ function boot(data: HotData) {
       }
       if (sandbox && !sandbox.done && modal.hidden) { const st = sandbox.c.check(world); if (st.done) finishCase(st); }
       if (!world.events.length) chapterBefore = world.chapter;
+      // 出来事のあとの保存は、1 フレームに 1 回にまとめる。違う物質の納品（減点）は、5 秒ごとの保存と、画面を隠すときの保存に任せる
+      let evSave = false;
       for (const ev of world.events.splice(0)) {
         if (sandbox) continue;   // 課題の工場の出来事は、本編の進み具合に数えない
+        if (ev !== 'wrong-sample') evSave = true;
         if (ev === 'goal-done' || ev === 'chapter-done') {
           // 操業評価：指令を終えた時点の納品の速さ
           const gr = world.lastGrade;
@@ -2054,8 +2110,8 @@ function boot(data: HotData) {
         if (ev === 'chapter-done' && canTestOut(world, world.chapter)) window.setTimeout(() => toast(`次は「${CHAPTERS[world.chapter].name}」。知っている章なら、指令の札を押して章の一覧から「確認テスト」（10 問、9 割で章を短縮）。`, 8000), 4500);
         if (ev === 'wrong-sample' && now - lastWrong > 2500) { lastWrong = now; toast('違う物質が納品所に入った。2 個減点。検査を見直せ。', 3200); sfx.bad(); }
         if (ev === 'all-done') { toast('すべての指令を終えた。', 6000); sfx.goal(); }
-        save();
       }
+      if (evSave) save();
       if (!sandbox) statsTick(world); // 指令の見込みの記録と、実績（半秒に 1 回）
       sinceSave += dt;
       if (sinceSave > 5) { sinceSave = 0; save(); saveCam(); paintSync(); }

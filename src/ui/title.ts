@@ -1,4 +1,4 @@
-import { accountAvailable, accountLine, conflictSlots, onAccountChange, renderAccount, signedIn, slotErased, syncIfStale } from './account';
+import { accountAvailable, accountLine, conflictSlots, onAccountChange, openSlot, renderAccount, signedIn, slotErased, syncIfStale, syncState, whenSynced } from './account';
 import { ELEMENTS } from '../content/elements';
 import { CHAPTERS, TOTAL_GOALS } from '../content/goals';
 import { chaptersDone } from '../engine/world';
@@ -85,6 +85,8 @@ export function initTitle(api: TitleApi) {
   const root = $('title'), list = $('slots'), bg = $<HTMLCanvasElement>('title-bg'), panel = $('title-panel');
   const ctx = bg.getContext('2d')!;
   let running = false, confirmErase = 0, accountOpen = false;
+  /** 同期が終わるのを待ってから開こうとしている枠 */
+  let waiting = 0;
   const acBtn = $<HTMLButtonElement>('title-account');
   /** ノートの追加の操作（名前・複製・前日に戻す）から、下の欄を使う */
   const ui: TitleUi = {
@@ -124,6 +126,26 @@ export function initTitle(api: TitleApi) {
     requestAnimationFrame(tick);
   };
 
+  /**
+   * 枠を開く。同期の最中なら、終わるのを待ってから（長くても 6 秒）。開くときに枠を読み直す（同期で受け取ったセーブで始めるため。
+   * 古い中身で始めると、受け取ったセーブを上書きしてしまう）。fresh：はじめる（空の枠）。待つ間に中身が届いたら、始めずに一覧を見せる
+   */
+  const go = (n: number, fresh: boolean) => {
+    if (waiting) return;
+    sfx.ok();
+    const open = () => {
+      waiting = 0;
+      if (root.hidden) return;
+      const json = store.read(n);
+      if (fresh === !!summarize(json)) { paint(); return; }
+      openSlot(n);
+      api.start(n, fresh ? null : json);
+    };
+    if (!syncState().busy) { open(); return; }
+    waiting = n; paint();
+    void whenSynced(6000).then(open);
+  };
+
   const paint = () => {
     acBtn.hidden = !accountAvailable();
     acBtn.textContent = accountLine();
@@ -136,7 +158,7 @@ export function initTitle(api: TitleApi) {
         return h('div', { class: 'slotcard empty' },
           h('div', { class: 'stack tight' }, h('b', {}, slotName(n)), h('span', { class: 'muted' }, json ? '古い版のデータ（読めない）' : skinName() === 'punk' ? '未稼働' : skinName() === 'lab' ? 'まだ何も記録していない' : 'まだ何も書いていない')),
           h('div', { class: 'row' },
-            h('button', { class: 'primary', type: 'button', id: `slot-${n}-new`, onclick: () => { sfx.ok(); api.start(n, null); } }, 'はじめる'),
+            h('button', { class: 'primary', type: 'button', id: `slot-${n}-new`, disabled: waiting === n, onclick: () => go(n, true) }, waiting === n ? '同期を待っている…' : 'はじめる'),
             h('button', { class: 'ghost', type: 'button', id: `slot-${n}-import`, onclick: () => importInto(n) }, '読み込む')),
           json ? null : emptyMore(n, ui));
       }
@@ -152,7 +174,7 @@ export function initTitle(api: TitleApi) {
           sum.morning ? h('span', { class: 'slot-morning' }, '今朝の 10 問：昨夜の問いが、寝ている間に残ったかを確かめる。開くとすぐ出る。') : null,
           shelf(sum.progress, sum.grades)),
         h('div', { class: 'row' },
-          h('button', { class: 'primary', type: 'button', id: `slot-${n}-go`, onclick: () => { sfx.ok(); api.start(n, json); } }, 'つづける'),
+          h('button', { class: 'primary', type: 'button', id: `slot-${n}-go`, disabled: waiting === n, onclick: () => go(n, false) }, waiting === n ? '同期を待っている…' : 'つづける'),
           h('button', { class: 'ghost', type: 'button', id: `slot-${n}-export`, onclick: () => exportFrom(n, json!) }, '書き出す'),
           erase),
         slotMore(n, json!, ui));
@@ -185,7 +207,7 @@ export function initTitle(api: TitleApi) {
         h('button', { class: 'primary', type: 'button', id: 'io-load', onclick: () => {
           const text = area.value.trim();
           if (!deserialize(text)) { note.textContent = '読めない。書き出した文字列を最初から最後まで貼り付けろ。'; return; }
-          store.write(n, text);
+          if (!store.write(n, text)) { note.textContent = '書き込めなかった。この端末の保存領域がいっぱいかもしれない。'; sfx.bad(); return; }
           sfx.ok();
           paint();
         } }, '読み込む'),
@@ -196,7 +218,7 @@ export function initTitle(api: TitleApi) {
   $('title-sound').onclick = () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); paint(); };
 
   return {
-    show() { confirmErase = 0; root.hidden = false; paint(); syncIfStale(); if (!running) { running = true; requestAnimationFrame(tick); } },
+    show() { confirmErase = 0; root.hidden = false; openSlot(0); paint(); syncIfStale(); if (!running) { running = true; requestAnimationFrame(tick); } },
     hide() { root.hidden = true; running = false; },
   };
 }

@@ -9,7 +9,7 @@ import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
 import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
-import { TANK_CAP, RESEARCH, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { TANK_CAP, RESEARCH, credit, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { applyTestOut, canTestOut, paceOf, testOutPass, testOutQuiz } from '../engine/pace';
 import { quizFor } from '../engine/quiz';
 import { calibLine, solveList } from './review';
@@ -420,7 +420,7 @@ function askAgent(c: PanelCtx, e: Ent, ag: AgentView, extra: HTMLElement, fails 
       return;
     }
     w.agents.push(ag.id);
-    w.points += fails === 0 ? 12 : 6;
+    credit(w, fails === 0 ? 12 : 6);
     e.test = ag.id; e.bad = undefined;
     sfx.ok();
     c.toast(`正解。${ag.name} が使えるようになった。研究点 +${fails === 0 ? 12 : 6}。`, 3200);
@@ -450,7 +450,7 @@ export function showPhoresis(c: PanelCtx, e: Ent, extra: HTMLElement, draft?: nu
       return;
     }
     const first = !w.agents.includes('phoresis');
-    if (first) { w.agents.push('phoresis'); w.points += 12; }
+    if (first) { w.agents.push('phoresis'); credit(w, 12); }
     e.test = String(pH); e.bad = undefined;
     sfx.ok();
     c.toast(first ? '正解。電気泳動槽が使えるようになった。研究点 +12。' : `正解。pH ${pH} にした。`, 2800);

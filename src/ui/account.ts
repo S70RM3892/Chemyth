@@ -30,8 +30,12 @@ const conflicts = new Set<number>();
 const seq: number[] = [];
 const timers: number[] = [];
 let busy = false, trouble = '', lastSync = 0;
+/** いま開いて遊んでいる枠（タイトルでは 0）。この枠には、受け取ったセーブを書かない */
+let open = 0;
 const listeners = new Set<() => void>();
 const emit = () => { for (const f of listeners) f(); };
+/** 同期が終わるのを待っているもの */
+const waiters: (() => void)[] = [];
 
 export const accountAvailable = online;
 export const signedIn = () => !!st;
@@ -41,6 +45,13 @@ export const accountName = () => st?.name ?? '';
 export const onAccountChange = (f: () => void) => { listeners.add(f); };
 /** 食い違っている枠（どちらを残すか、人が選ぶ） */
 export const conflictSlots = () => [...conflicts].sort();
+/** 枠を開いた（0 はタイトルへ戻った）。タイトルが呼ぶ */
+export const openSlot = (n: number) => { open = n; };
+/** 同期の最中なら、終わるまで待つ（長くても ms まで）。タイトルの「つづける」が、受け取ったセーブで開くために使う */
+export function whenSynced(ms: number): Promise<void> {
+  if (!busy) return Promise.resolve();
+  return new Promise((done) => { const t = window.setTimeout(done, ms); waiters.push(() => { clearTimeout(t); done(); }); });
+}
 
 const brief = (json: string | null): SaveBrief | null => { const s = summarize(json); return s ? { done: s.done, points: s.points, playMs: s.playMs, savedAt: s.savedAt, chapter: s.chapter } : null; };
 
@@ -110,14 +121,17 @@ async function upload(slot: number, force = false, keepalive = false): Promise<s
 /** 預けてあるセーブを、この端末へ受け取る（この端末のその枠は、置き換わる） */
 async function download(slot: number): Promise<string> {
   if (!st) return 'signed_out';
+  const n0 = seq[slot] || 0;
   const r = await call<{ data: string; rev: number; at: number; device: string; summary: Partial<SaveBrief> }>('chemyth_save_get', { p_token: st.token, p_slot: slot });
   if (!st) return 'signed_out';
   if (!r.ok) { trouble = r.error; return r.error; }
   const json = await unpack(r.data);
   if (!json || !deserialize(json)) { trouble = 'broken'; return 'broken'; }
+  cloud[slot] = { slot, rev: r.rev, at: r.at, device: r.device, bytes: r.data.length, summary: r.summary };
+  // 受け取っている間に、この端末でその枠を書いた・開いて遊んでいるなら、上書きしない（両方で進めたので、どちらを残すか人に選ばせる）
+  if (slot === open || (seq[slot] || 0) !== n0) { conflicts.add(slot); persist(); return 'conflict'; }
   if (!store.write(slot, json, true)) return 'offline';
   st.sync[slot] = { rev: r.rev, dirty: false };
-  cloud[slot] = { slot, rev: r.rev, at: r.at, device: r.device, bytes: r.data.length, summary: r.summary };
   conflicts.delete(slot); trouble = '';
   persist();
   return '';
@@ -127,28 +141,34 @@ async function download(slot: number): Promise<string> {
 export async function syncAll(): Promise<void> {
   if (!st || busy || !online()) return;
   busy = true; emit();
-  const r = await call<{ name: string; saves: CloudSave[] }>('chemyth_save_list', { p_token: st.token });
-  if (r.ok && st) {
-    trouble = '';
-    cloud = {};
-    for (const c of r.saves) cloud[c.slot] = c;
-    for (let n = 1; n <= SLOTS; n++) {
-      if (!st) break;
-      const local = brief(store.read(n)), c = cloud[n];
-      // つながりがわからなくても、中身が同じなら、そろっているものとして覚える
-      if (!st.sync[n] && c && local && sameSave(local, c.summary)) st.sync[n] = { rev: c.rev, dirty: false };
-      if (!c && !local) delete st.sync[n];
-      const plan = syncPlan(local, st.sync[n], c);
-      if (plan === 'upload') await upload(n, !!c?.summary.gone);
-      else if (plan === 'download') await download(n);
-      else if (plan === 'erase') { store.erase(n); st.sync[n] = { rev: c.rev, dirty: false }; conflicts.delete(n); }
-      else if (plan === 'conflict') conflicts.add(n);
-      else conflicts.delete(n);
-    }
-    persist();
-  } else if (!r.ok) trouble = r.error;
-  busy = false; lastSync = Date.now();
-  emit();
+  try {
+    const r = await call<{ name: string; saves: CloudSave[] }>('chemyth_save_list', { p_token: st.token });
+    if (r.ok && st) {
+      trouble = '';
+      cloud = {};
+      for (const c of r.saves) cloud[c.slot] = c;
+      for (let n = 1; n <= SLOTS; n++) {
+        if (!st) break;
+        const local = brief(store.read(n)), c = cloud[n];
+        // つながりがわからなくても、中身が同じなら、そろっているものとして覚える
+        if (!st.sync[n] && c && local && sameSave(local, c.summary)) st.sync[n] = { rev: c.rev, dirty: false };
+        if (!c && !local) delete st.sync[n];
+        const plan = syncPlan(local, st.sync[n], c);
+        if (plan === 'upload') await upload(n, !!c?.summary.gone);
+        else if (plan === 'download') await download(n);
+        // 開いて遊んでいる枠は消さない（次の同期で、もう一度見比べる）
+        else if (plan === 'erase') { if (n !== open) { store.erase(n); st.sync[n] = { rev: c.rev, dirty: false }; conflicts.delete(n); } }
+        else if (plan === 'conflict') conflicts.add(n);
+        else conflicts.delete(n);
+      }
+      persist();
+    } else if (!r.ok) trouble = r.error;
+  } finally {
+    // 途中で失敗しても、同期中のままにしない
+    busy = false; lastSync = Date.now();
+    emit();
+    for (const f of waiters.splice(0)) f();
+  }
 }
 /** タイトルを開くたびに呼ぶ。続けて何度も問い合わせない */
 export function syncIfStale() { if (st && Date.now() - lastSync > 15000) void syncAll(); }
