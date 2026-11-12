@@ -97,10 +97,11 @@ export function stockSeries(w: World, p: Period, top = 4): { subs: string[]; ser
 
 /** 詰まりの元。why：jam 出口が詰まっている、bad 使わない物質が入口に来ている、starve 原料が来ない */
 export interface Neck { e: Ent; why: 'jam' | 'bad' | 'starve'; score: number }
-/** 出口が詰まって長く止まっている装置（受け取れない物質が来ているものを含む）と、原料が来ずに遊んでいる装置。それぞれ上位 n 台 */
+/** 出口が詰まって長く止まっている装置（受け取れない物質が来ているものを含む）と、原料が来ずに遊んでいる装置。それぞれ上位 n 台。一時停止している装置は入れない */
 export function bottlenecks(w: World, n = 3): { jammed: Neck[]; starved: Neck[] } {
   const jammed: Neck[] = [], starved: Neck[] = [];
   for (const e of w.ents.values()) {
+    if (e.off) continue;
     if (isMachine(e.kind) && e.recipe) {
       const st = machineState(e);
       if (e.bad && !e.busy) jammed.push({ e, why: 'bad', score: 1000 + (e.stuck || 0) });
@@ -115,16 +116,18 @@ export function bottlenecks(w: World, n = 3): { jammed: Neck[]; starved: Neck[] 
   return { jammed: top(jammed), starved: top(starved) };
 }
 
-/** 装置の種類ごとの台数と稼働。util は直近の稼働率の平均（分ける装置は記録がないので null）。run・wait・jam はいまの状態ごとの台数 */
-export interface TypeRow { kind: Kind; name: string; n: number; set: number; util: number | null; run: number; wait: number; jam: number }
+/** 装置の種類ごとの台数と稼働。util は直近の稼働率の平均（分ける装置は記録がないので null）。run・wait・jam はいまの状態ごとの台数、off は一時停止している台数（稼働率には入れない） */
+export interface TypeRow { kind: Kind; name: string; n: number; set: number; util: number | null; run: number; wait: number; jam: number; off: number }
 export const TYPE_ORDER: Kind[] = ['extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'settler', 'funnel', 'phoresis'];
 export function machineTypes(w: World): TypeRow[] {
   const rows = new Map<Kind, TypeRow & { us: number; un: number }>();
   for (const e of w.ents.values()) {
     if (!TYPE_ORDER.includes(e.kind)) continue;
     let r = rows.get(e.kind);
-    if (!r) { r = { kind: e.kind, name: MACHINES[e.kind as keyof typeof MACHINES].name, n: 0, set: 0, util: null, run: 0, wait: 0, jam: 0, us: 0, un: 0 }; rows.set(e.kind, r); }
+    if (!r) { r = { kind: e.kind, name: MACHINES[e.kind as keyof typeof MACHINES].name, n: 0, set: 0, util: null, run: 0, wait: 0, jam: 0, off: 0, us: 0, un: 0 }; rows.set(e.kind, r); }
     r.n++;
+    const ready = e.kind === 'extractor' || (isMachine(e.kind) ? !!e.recipe : isSep(e.kind) && sepReady(e.kind, e.test));
+    if (e.off) { if (ready) { r.set++; r.off++; } continue; }
     if (e.kind === 'extractor') {
       // 採取機の稼働率は「ためる所が満杯でない」割合。満杯なら、出口の先が詰まっている
       r.set++; r.us += e.u ?? 1; r.un++;
@@ -142,16 +145,17 @@ export function machineTypes(w: World): TypeRow[] {
   return TYPE_ORDER.filter((k) => rows.has(k)).map((k) => { const { us, un, ...r } = rows.get(k)!; return { ...r, util: un ? us / un : null }; });
 }
 
-/** 止まっている理由：設定済みの装置の、いまの状態ごとの台数（受け取れない物質が来ているものは別に数える）と未設定の台数。
+/** 止まっている理由：設定済みの装置の、いまの状態ごとの台数（受け取れない物質が来ているもの・一時停止しているものは別に数える）と未設定の台数。
  *  time：置いてからの [動いていた秒, 原料を待っていた秒, 出口が詰まっていた秒] の合計 */
-export interface StopReasons { run: number; wait: number; jam: number; bad: number; unset: number; time: [number, number, number] }
+export interface StopReasons { run: number; wait: number; jam: number; bad: number; off: number; unset: number; time: [number, number, number] }
 export function stopReasons(w: World): StopReasons {
-  const out: StopReasons = { run: 0, wait: 0, jam: 0, bad: 0, unset: 0, time: [0, 0, 0] };
+  const out: StopReasons = { run: 0, wait: 0, jam: 0, bad: 0, off: 0, unset: 0, time: [0, 0, 0] };
   for (const e of w.ents.values()) {
     if (!isMachine(e.kind)) continue;
     if (!e.recipe) { out.unset++; continue; }
     const st = machineState(e);
-    if (e.bad && !e.busy) out.bad++;
+    if (st === 3) out.off++;
+    else if (e.bad && !e.busy) out.bad++;
     else if (st === 0) out.run++; else if (st === 1) out.wait++; else out.jam++;
     if (e.ts) for (let i = 0; i < 3; i++) out.time[i] += e.ts[i];
   }
@@ -216,8 +220,8 @@ export function statsCsv(w: World, p: Period): string {
   const { rows: bal, min } = balanceOf(w, p);
   rows.push([`物質ごとの収支（1 分あたり・${periodName(p)}・記録 ${min.toFixed(1)} 分）`], ['物質', '化学式', '作った（採取を含む）', '使った', '納品', '捨てた', '差']);
   for (const r of bal) rows.push([sub(r.s).name, label(r.s), r.made, r.used, r.deliver, r.lost, r.net]);
-  rows.push([], ['装置の種類ごと'], ['種類', '台数', '設定済み', '平均の稼働率（%）', '稼働', '原料待ち', '出口詰まり']);
-  for (const t of machineTypes(w)) rows.push([t.name, t.n, t.set, t.util === null ? '' : Math.round(t.util * 100), t.run, t.wait, t.jam]);
+  rows.push([], ['装置の種類ごと'], ['種類', '台数', '設定済み', '平均の稼働率（%）', '稼働', '原料待ち', '出口詰まり', '一時停止']);
+  for (const t of machineTypes(w)) rows.push([t.name, t.n, t.set, t.util === null ? '' : Math.round(t.util * 100), t.run, t.wait, t.jam, t.off]);
   rows.push([], ['装置ごと'], ['反応', '装置', 'x', 'y', '階', '稼働率（%）', '反応の回数', '稼働（秒）', '原料待ち（秒）', '出口詰まり（秒）']);
   for (const e of w.ents.values()) {
     const r = isMachine(e.kind) ? recipeById(e.recipe) : undefined;

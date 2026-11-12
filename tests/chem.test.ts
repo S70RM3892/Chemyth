@@ -701,7 +701,7 @@ describe('工場の動作', () => {
       const give = (s: string, n: number) => { for (let i = 0; i < n; i++) { at(f, hx - 1, hy)!.item = { s, p: 1, m: 0 }; run(f, 0.1); } };
       give('NaOH', need + 5);
       expect(goalCount(f)).toBe(0);            // ほかの 2 つがまだ 0
-      expect(f.multi.NaOH).toBe(need);         // 必要な数を超えた分は数えない
+      expect(f.multi[`${ch}:0`]?.NaOH).toBe(need);   // 必要な数を超えた分は数えない（指令ごとに数える）
       give('Cl2', need);
       expect(f.progress[ch]).toBe(0);
       give('H2', need - 1);
@@ -3135,7 +3135,7 @@ describe('組み立ての道具：自動ベルト・回す・鏡・一時停止�
     expect(r1.ok).toBe(true);
     if (!r1.ok) return;
     expect(r1.steps.map((s) => [s.x, s.y, s.dir])).toEqual([10, 11, 12, 13, 14, 15].map((x) => [x, 10, 0]));
-    place(w, 'splitter', 12, 10, 0);
+    place(w, 'vent', 12, 10, 0);
     const r2 = findRoute(w, [10, 10], [15, 10]);
     expect(r2.ok).toBe(true);
     if (!r2.ok) return;

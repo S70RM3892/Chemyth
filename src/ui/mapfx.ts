@@ -201,16 +201,16 @@ export function mapStats(ctx: CanvasRenderingContext2D, P: Palette, w: World, st
       const cfg = isMachine(e.kind) && !!e.recipe;
       if ((!cfg && e.kind !== 'extractor') || !inView(e)) continue;
       const u = Math.max(0, Math.min(1, e.u ?? (e.kind === 'extractor' ? 1 : 0))), sz = sizeOf(e), pad = z * 0.08;
-      // 赤（0 %）→ 黄（50 %）→ 緑（100 %）
+      // 赤（0 %）→ 黄（50 %）→ 緑（100 %）。一時停止している装置は灰色で「‖」（遊んでいる装置と分ける）
       const hue = Math.round(u * 120), x = sx(e.x) + pad, y = sy(e.y) + pad, s = sz * z - pad * 2;
-      ctx.fillStyle = `hsla(${hue},78%,${light(P) ? 48 : 52}%,0.42)`; ctx.fillRect(x, y, s, s);
-      ctx.strokeStyle = `hsla(${hue},80%,${light(P) ? 38 : 60}%,0.95)`; ctx.lineWidth = Math.max(2, z * 0.07); ctx.strokeRect(x, y, s, s);
+      ctx.fillStyle = e.off ? 'rgba(128,132,140,0.42)' : `hsla(${hue},78%,${light(P) ? 48 : 52}%,0.42)`; ctx.fillRect(x, y, s, s);
+      ctx.strokeStyle = e.off ? 'rgba(118,122,128,0.95)' : `hsla(${hue},80%,${light(P) ? 38 : 60}%,0.95)`; ctx.lineWidth = Math.max(2, z * 0.07); ctx.strokeRect(x, y, s, s);
       // 色だけに頼らない：近づけば割合を書く
       if (z >= 18 && !stats) {
-        const fs = Math.max(10, Math.min(14, z * 0.26));
+        const fs = Math.max(10, Math.min(14, z * 0.26)), tx = e.off ? '‖' : `${Math.round(u * 100)}%`;
         ctx.font = `700 ${fs}px ${FONT_MONO}`;
-        ctx.lineWidth = 3; ctx.strokeStyle = punk ? '#0b0d10' : P.paper; ctx.strokeText(`${Math.round(u * 100)}%`, x + s / 2, y + s - fs * 0.7);
-        ctx.fillStyle = punk ? '#eef0ea' : P.ink; ctx.fillText(`${Math.round(u * 100)}%`, x + s / 2, y + s - fs * 0.7);
+        ctx.lineWidth = 3; ctx.strokeStyle = punk ? '#0b0d10' : P.paper; ctx.strokeText(tx, x + s / 2, y + s - fs * 0.7);
+        ctx.fillStyle = punk ? '#eef0ea' : P.ink; ctx.fillText(tx, x + s / 2, y + s - fs * 0.7);
       }
     }
     ctx.textBaseline = 'alphabetic';

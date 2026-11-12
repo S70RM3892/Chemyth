@@ -9,7 +9,7 @@ import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
 import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
-import { TANK_CAP, RESEARCH, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { TANK_CAP, RESEARCH, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, setStationRole, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { applyTestOut, canTestOut, paceOf, testOutPass, testOutQuiz } from '../engine/pace';
 import { quizFor } from '../engine/quiz';
 import { calibLine, solveList } from './review';
@@ -559,7 +559,7 @@ export function showSignal(c: PanelCtx, e: Ent, extra: HTMLElement) {
 
 export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
   const again = () => showStation(c, e, extra);
-  const role = (id: 'in' | 'out', text: string) => h('button', { class: 'ghost' + (e.role === id ? ' picked on' : ''), type: 'button', id: `st-role-${id}`, onclick: () => { e.role = id; e.buf = []; e.tr = undefined; e.xtr = undefined; sfx.ok(); again(); } }, text);
+  const role = (id: 'in' | 'out', text: string) => h('button', { class: 'ghost' + (e.role === id ? ' picked on' : ''), type: 'button', id: `st-role-${id}`, onclick: () => { setStationRole(e, id); sfx.ok(); again(); } }, text);
   const routes = e.role === 'in' ? stationRoutes(c.w, e) : [], route = routes[0] ?? null, to = route?.dest ?? null, laid = !!route?.custom;
   const speedOn = (custom: boolean) => trainSpeed(c.w) * (custom ? RAIL_BOOST : 1);
   const held = [e.tr, ...(e.xtr ?? [])].filter((t) => t?.held).length;
@@ -571,7 +571,7 @@ export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
     h('div', { class: 'row' }, role('in', '積む駅（ここから運び出す）'), role('out', '降ろす駅（ここへ届く）')),
     h('h3', {}, '② 路線番号'),
     h('p', { class: 'muted' }, '同じ番号の「積む駅」と「降ろす駅」が結ばれる。積む駅は、同じ番号のいちばん近い降ろす駅へ運ぶ。'),
-    linePicker({ id: 'st-line', unit: '番線', cur: e.ch || 1, used: [...c.w.ents.values()].filter((n) => n.kind === 'station').map((n) => n.ch || 1), pick: (n) => { e.ch = n; e.tr = undefined; e.xtr = undefined; sfx.tap(); again(); }, again }),
+    linePicker({ id: 'st-line', unit: '番線', cur: e.ch || 1, used: [...c.w.ents.values()].filter((n) => n.kind === 'station').map((n) => n.ch || 1), pick: (n) => { e.ch = n; sfx.tap(); again(); }, again }),
     h('p', { class: 'status' }, e.role === 'in'
       ? (to && route ? `行き先：線路 ${Math.round(route.len)} マス先の降ろす駅（${route.custom ? '敷いた線路' : '自動の仮線路'}）。片道 約 ${(route.len / speedOn(route.custom)).toFixed(1)} 秒、1 編成 ${trainCap(c.w)} 個で、1 分あたり およそ ${Math.round(((e.cars || 1) * trainCap(c.w) * 60) / ((2 * route.len) / speedOn(route.custom) + 1))} 個まで運べる。${held ? `いま ${held} 編成が、前の列車を待って止まっている。幹線が混んでいる。` : ''}` : `${e.ch} 番線の「降ろす駅」がまだない。届け先に貨物駅を置き、同じ番線の「降ろす駅」にしろ。`)
       : `${e.ch} 番線の積む駅：${feeders} か所。届いたものは、正面の 2 つの口から出る。${(e.buf?.length ?? 0) >= stationCap(c.w) ? '満杯で、列車が降ろせずに待っている。出口にベルトをつなげ。' : ''}`),

@@ -47,11 +47,15 @@ import { drawToken, elementIcon } from './ui/token';
 import { autoOpen, breakReminder, dataExtra, helpExtra, initSettings2, menuExtra, prefExtras, prefRow, started } from './ui/settings2';
 import { freeSpace, putAlbum } from './ui/slots2';
 import { initBuild2 } from './ui/build2';
+import { relocate, type Xform } from './engine/shape';
+import { multiOf } from './engine/world';
 
 type Placeable = Exclude<Kind, 'hub' | 'part'>;
 type Tool = 'pan' | 'erase' | 'area' | 'rail' | 'route' | Placeable;
 /** 範囲コピーした設計図。左上からのずれで持つ */
-type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir } | { t: 'rails'; snap: [string, number | undefined][] } | { t: 'ch'; x: number; y: number; ch: number };
+type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir } | { t: 'rails'; snap: [string, number | undefined][] } | { t: 'ch'; x: number; y: number; ch: number }
+  // move：いま置かれている設備 ents を、左上が to のマスへ移す（how があれば向きも付け替える。back ならその逆）。ずらす・回す・鏡を、中身ごと元に戻すのに使う
+  | { t: 'move'; ents: Ent[]; to: [number, number][]; how?: Xform; back?: boolean };
 const BUILD: Placeable[] = ['belt', 'bridge', 'tunnel', 'lift', 'splitter', 'analyzer', 'sensor', 'gate', 'station', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'settler', 'funnel', 'phoresis', 'sampler', 'depot', 'tank', 'vent'];
 /** 道具の分類。道具が多いので、棚を分けて出す */
 const GROUPS: { id: string; name: string; tools: Tool[] }[] = [
@@ -62,7 +66,7 @@ const GROUPS: { id: string; name: string; tools: Tool[] }[] = [
 ];
 const SPEEDS = [1, 2, 4, 0];
 /** 複製：同じ設定の装置を続けて置く */
-interface Clone { kind: Placeable; recipe?: string; outOrder?: string[]; outSlot?: number[]; big?: boolean; test?: string; sub?: string }
+interface Clone { kind: Placeable; recipe?: string; outOrder?: string[]; outSlot?: number[]; big?: boolean; test?: string; sub?: string; ch?: number }
 
 const TOOLS: { id: Tool; glyph: string; name: string; tip: string; color?: string; need: { done?: number; chapter?: number; research?: string } }[] = [
   { id: 'pan', glyph: '☝', name: '見る', need: {}, tip: 'タップで選ぶ。装置やベルトから指を引くとベルトが伸びる。何もない所を引くと地図が動く。' },
@@ -256,10 +260,12 @@ function boot(data: HotData) {
   const undo: Op[][] = [], redo: Op[][] = [];
   let group: Op[] | null = null;
   const undoBtn = $<HTMLButtonElement>('b-undo'), redoBtn = $<HTMLButtonElement>('b-redo');
-  const OP_NAME = { add: '置いた', del: '消した', dir: '回した', rails: '線路', ch: '番号' } as const;
+  const OP_NAME = { add: '置いた', del: '消した', dir: '回した', rails: '線路', ch: '番号', move: 'ずらした' } as const;
   /** 手の組の中身を短く言う（元に戻すボタンの説明に使う） */
   const describe = (g: Op[] | undefined) => {
     if (!g?.length) return '';
+    const mv = g.find((o) => o.t === 'move');
+    if (mv?.t === 'move') return `${mv.how === 'rot' ? '回した' : mv.how ? '鏡に映した' : 'ずらした'} ${mv.ents.length} 個`;
     const adds = g.filter((o) => o.t === 'add').length, dels = g.filter((o) => o.t === 'del').length;
     if (adds && dels && adds === dels) return `ずらした ${adds} 個`;
     const kinds = [...new Set(g.map((o) => o.t))];
@@ -310,7 +316,7 @@ function boot(data: HotData) {
     e.dir = dir;
   };
   /**
-   * 置いたものをずらす。ずらせたら true。元の設備を消した手と、新しく置いた手として 1 組に記録する（元に戻すと、元の場所に戻る）。
+   * 置いたものをずらす。ずらせたら true。ずらした設備を元の場所へ移す手として記録する（元に戻すと、いまの中身のまま元の場所に戻る）。
    * rect：範囲選択でずらすときの範囲。その中の線路も一緒にずらす
    */
   const doMove = (es: Ent[], dx: number, dy: number, quiet = false, rect?: [number, number, number, number] | null): boolean => {
@@ -319,8 +325,7 @@ function boot(data: HotData) {
     const r = moveEnts(world, es, dx, dy);
     if (!r.ok) { if (!quiet) { toast(r.why, 2200); sfx.bad(); buzz(30); } return false; }
     if (!r.added.length) return true;
-    for (const e of r.removed) record({ t: 'del', ent: e });
-    for (const e of r.added) record({ t: 'add', x: e.x, y: e.y });
+    record({ t: 'move', ents: r.added, to: r.removed.map((e) => [e.x, e.y]) });
     if (rect) { const snap = moveRails(world, rect, dx, dy); if (snap.length) record({ t: 'rails', snap }); }
     group = null;
     if (selected && r.removed.includes(selected)) selected = r.added[r.removed.indexOf(selected)];
@@ -343,12 +348,16 @@ function boot(data: HotData) {
         remove(world, op.x, op.y);
       } else if (op.t === 'del') {
         if (restore(world, op.ent)) inv.push({ t: 'add', x: op.ent.x, y: op.ent.y });
+      } else if (op.t === 'move') {
+        // 動かす前にしまった設備ではなく、いま置かれている設備を中身ごと戻す（流れた物・できた物が二重にならない）
+        const r = relocate(world, op.ents, op.to, op.how, op.back);
+        if (r.ok && r.added.length) inv.push({ t: 'move', ents: r.added, to: r.removed.map((e) => [e.x, e.y]), how: op.how, back: !op.back });
       } else if (op.t === 'rails') {
         inv.push({ t: 'rails', snap: op.snap.map(([k]) => [k, world.rails.get(k)] as [string, number | undefined]) });
         for (const [k, m] of op.snap) setRailMask(world, k, m);
       } else if (op.t === 'ch') {
         const e = at(world, op.x, op.y);
-        if (e) { inv.push({ t: 'ch', x: op.x, y: op.y, ch: e.ch ?? 1 }); e.ch = op.ch; e.tr = undefined; e.xtr = undefined; }
+        if (e) { inv.push({ t: 'ch', x: op.x, y: op.y, ch: e.ch ?? 1 }); e.ch = op.ch; }
       } else {
         const e = at(world, op.x, op.y);
         if (e) { inv.push({ t: 'dir', x: op.x, y: op.y, dir: e.dir }); e.dir = op.dir; }
@@ -1139,10 +1148,9 @@ function boot(data: HotData) {
     placeDir: () => placeDir, setPlaceDir: (d) => { placeDir = d; paintOpts(); }, placeAt: (x, y) => placeAt(x, y),
     selected: () => selected, select: (e) => { selected = e; }, hover: () => hover, toast,
     place: (k, x, y, d) => doPlace(k as Placeable, x, y, d), erase: doErase, turn: doTurn, cut: () => { group = null; },
-    recordMove: (removed, added, snap) => {
+    recordMove: (removed, added, snap, how) => {
       group = null;
-      for (const e of removed) record({ t: 'del', ent: e });
-      for (const e of added) record({ t: 'add', x: e.x, y: e.y });
+      record({ t: 'move', ents: added, to: removed.map((e) => [e.x, e.y]), how, back: true });
       if (snap.length) record({ t: 'rails', snap });
       group = null;
       if (selected && removed.includes(selected)) selected = added[removed.indexOf(selected)];
@@ -1233,7 +1241,7 @@ function boot(data: HotData) {
   actCopy.onclick = () => {
     if (!selected || !copyable(selected)) return;
     const e = selected;
-    clone = { kind: e.kind as Placeable, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, big: e.big, test: e.test, sub: e.sub };
+    clone = { kind: e.kind as Placeable, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, big: e.big, test: e.test, sub: e.sub, ch: e.kind === 'sensor' || e.kind === 'gate' ? e.ch : undefined };
     selected = null;
     pick(clone.kind, true);
     sfx.ok();
@@ -1323,6 +1331,7 @@ function boot(data: HotData) {
       }
       placed.test = clone.test;
       placed.sub = clone.sub;
+      if (clone.ch !== undefined) placed.ch = clone.ch;
       return;
     }
     if (isMachine(tool) || tool === 'depot' || tool === 'sampler' || tool === 'analyzer' || tool === 'station' || tool === 'sensor' || tool === 'gate' || isSep(tool)) inspect(placed);
@@ -1599,7 +1608,7 @@ function boot(data: HotData) {
         h('p', { class: 'muted', id: 'num-preview' }, `付く番号：${nums.slice(0, 12).join('、')}${nums.length > 12 ? ' …' : ''}${seq && s0 + es.length - 1 > LINE_MAX ? `（${LINE_MAX} を超える分は ${LINE_MAX} になる）` : ''}`),
         h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'num-ok', onclick: () => {
           group = null;
-          es.forEach((e, i) => { if ((e.ch || 1) === nums[i]) return; record({ t: 'ch', x: e.x, y: e.y, ch: e.ch ?? 1 }); e.ch = nums[i]; e.tr = undefined; e.xtr = undefined; });
+          es.forEach((e, i) => { if ((e.ch || 1) === nums[i]) return; record({ t: 'ch', x: e.x, y: e.y, ch: e.ch ?? 1 }); e.ch = nums[i]; });
           group = null;
           sfx.ok(); closeModal(); toast(`${es.length} 個に番号を振った。`, 2200); save();
         } }, `${es.length} 個に振る`)));
@@ -1627,7 +1636,7 @@ function boot(data: HotData) {
   };
   $('area-left').onclick = () => nudgeArea(-1, 0); $('area-right').onclick = () => nudgeArea(1, 0);
   $('area-up').onclick = () => nudgeArea(0, -1); $('area-down').onclick = () => nudgeArea(0, 1);
-  const toStamps = (r: [number, number, number, number], es: Ent[]): Stamp[] => es.map((e) => ({ kind: e.kind as Placeable, dx: e.x - r[0], dy: e.y - r[1], dir: e.dir, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, test: e.test, sub: e.sub, ch: e.ch, role: e.role }));
+  const toStamps = (r: [number, number, number, number], es: Ent[]): Stamp[] => es.map((e) => ({ kind: e.kind as Placeable, dx: e.x - r[0], dy: e.y - r[1], dir: e.dir, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, test: e.test, sub: e.sub, ch: e.ch, role: e.role, cars: e.kind === 'station' && e.cars ? e.cars : undefined }));
   $('area-copy').onclick = () => {
     const r = areaRect(), es = inArea();
     if (!r || !es.length) return;
@@ -1718,7 +1727,10 @@ function boot(data: HotData) {
       if (r && b.outOrder) { configure(placed, r, b.outOrder.filter((s) => s !== 'e')); placed.outOrder = [...b.outOrder]; placed.outBuf = b.outOrder.map(() => 0); if (b.outSlot) placed.outSlot = [...b.outSlot]; }
       placed.test = b.test;
       placed.sub = b.sub;
-      if (b.kind === 'station') { placed.ch = b.ch ?? 1; placed.role = b.role ?? 'in'; }
+      if (b.kind === 'station') { placed.ch = b.ch ?? 1; placed.role = b.role ?? 'in'; if (b.cars) placed.cars = b.cars; }
+      if (b.kind === 'sensor' || b.kind === 'gate') placed.ch = b.ch ?? 1;
+      // 昇降機は、置いた側が入口になる。写したのが出口なら、相方と入れ替える
+      if (b.kind === 'lift' && b.role === 'out') { const p = liftPartner(world, placed); if (p) { placed.role = 'out'; p.role = 'in'; } }
     }
     if (ok < blueprint.length) toast(`${blueprint.length} 個のうち ${ok} 個を置いた。残りは場所がふさがっていた。`); else toast(`${ok} 個を置いた。続けて別の場所にも置ける。`, 1800);
     ok ? sfx.place() : sfx.bad();
@@ -1920,7 +1932,7 @@ function boot(data: HotData) {
     if (g && Math.abs(world.tick - rateTick) >= 30) {
       rateTick = world.tick;
       const f = flowStats(world);
-      const each = g.rate ? `速さを保てた時間 ${goalCount(world)} / ${g.n} 秒（下回ると戻る）　` : g.also ? [g.s, ...g.also].map((x) => `${label(x)} ${world.multi[x] || 0}`).join('　') + '　' : '';
+      const each = g.rate ? `速さを保てた時間 ${goalCount(world)} / ${g.n} 秒（下回ると戻る）　` : g.also ? [g.s, ...g.also].map((x) => `${label(x)} ${multiOf(world)[x] || 0}`).join('　') + '　' : '';
       $('goal-rate').textContent = g.rate ? each.trim() : each || f.goalPerMin > 0 ? each + (f.goalPerMin <= 0 ? '' : `${f.goalPerMin.toFixed(1)} 個/分${f.etaSec !== null && f.etaSec > 0 ? `　あと約 ${f.etaSec >= 90 ? `${Math.round(f.etaSec / 60)} 分` : `${Math.max(5, Math.round(f.etaSec / 5) * 5)} 秒`}` : ''}`) : '';
     } else if (!g) $('goal-rate').textContent = '';
     $('goal-bar').style.width = g ? `${Math.min(100, (goalCount(world) / requiredOf(world, g)) * 100)}%` : '100%';

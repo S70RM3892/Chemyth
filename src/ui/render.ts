@@ -1115,8 +1115,9 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
         ctx.fillText(PLATING[plate], mx2, my2 + 0.5); ctx.textBaseline = 'alphabetic';
       }
     }
-    // 状態灯：動いていれば緑、原料待ちは橙、出口の詰まりは赤の点滅。色だけに頼らないよう、形も変える（丸・三角・四角）
-    if (z >= 26 && isMachine(e.kind) && e.recipe) {
+    // 状態灯：動いていれば緑、原料待ちは橙、出口の詰まりは赤の点滅。色だけに頼らないよう、形も変える（丸・三角・四角）。
+    // 一時停止している装置は灯さない（上に灰色の ‖ の印が付く）
+    if (z >= 26 && isMachine(e.kind) && e.recipe && !e.off) {
       // 2×2 の装置は上辺の真ん中（出口と入口の間で、どの向きでも空いている）。1 マスの装置は左下の角
       const st = machineState(e), lx = sz === 2 ? sx(e.x + 1) : sx(e.x) + z * 0.2, ly = sz === 2 ? sy(e.y) + z * 0.2 : sy(e.y + 1) - z * 0.2, lr = Math.max(3, z * 0.085);
       ctx.beginPath();
@@ -1380,9 +1381,9 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     for (const e of w.ents.values()) {
       const cfg = isMachine(e.kind) && !!e.recipe;
       if (!(cfg || e.kind === 'extractor') || !inView(e)) continue;
-      const u = e.u ?? 0, sz = sizeOf(e), st = cfg ? machineState(e) : u >= 0.5 ? 0 : 2;
-      // 色だけに頼らない：稼働は ●、原料待ちは ▲、詰まりは ✕
-      const color = u >= 0.7 ? GOOD : u >= 0.35 ? WARN : P.red, mark = st === 0 ? '●' : st === 1 ? '▲' : '✕';
+      const u = e.u ?? 0, sz = sizeOf(e), st = e.off ? 3 : cfg ? machineState(e) : u >= 0.5 ? 0 : 2;
+      // 色だけに頼らない：稼働は ●、原料待ちは ▲、詰まりは ✕、一時停止は ‖（灰色）
+      const color = st === 3 ? P.soft : u >= 0.7 ? GOOD : u >= 0.35 ? WARN : P.red, mark = st === 0 ? '●' : st === 1 ? '▲' : st === 3 ? '‖' : '✕';
       const fs = Math.max(10, Math.min(15, z * 0.3)), tx = `${mark} ${Math.round(u * 100)}%`;
       ctx.font = `700 ${fs}px ${FONT_MONO}`;
       const wd = ctx.measureText(tx).width + fs * 0.9, hh = fs * 1.5;

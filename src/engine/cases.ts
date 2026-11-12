@@ -211,7 +211,7 @@ function limited(id: string, recipeId: string, target: string, note: string): Ca
     check(w) {
       const stock = r.inputs.map(([s]) => [...w.ents.values()].find((e) => e.kind === 'sampler' && e.sub === s)!), e = at(w, x, HY)!;
       // はじめの数：いま棚に残る数 ＋ すでに出したぶん（運ばれている途中・装置の中・反応に使った数）
-      const first = r.inputs.map(([s, n], i) => (stock[i].left || 0) + (e.inBuf?.[s] || 0) + (e.n || 0) * n + (e.busy ? n : 0) + [...w.ents.values()].reduce((sum, b) => sum + (b.item?.s === s ? b.item.n || 1 : 0), 0));
+      const first = r.inputs.map(([s, n], i) => (stock[i].left || 0) + (e.inBuf?.[s] || 0) + (e.n || 0) * n + (e.busy || e.offProg !== undefined ? n : 0) + [...w.ents.values()].reduce((sum, b) => sum + (b.item?.s === s ? b.item.n || 1 : 0), 0));
       const ans = limitAnswer(recipeId, target, first), got = delivered(w, target);
       if (!w.pred) return { done: false, ok: false, text: '先に予想を答えろ' };
       const done = got >= ans.out, ok = w.pred.out === ans.out && w.pred.rest === ans.rest;
