@@ -136,6 +136,10 @@ export interface Ent {
   /** 積む駅：走らせる編成の数（1〜3）と、2 編成目以降の列車 */
   cars?: number;
   xtr?: Train[];
+  /** 一時停止：止めている装置。step が飛ばし、物も受け取らない（保存する） */
+  off?: boolean;
+  /** 設備の名前（プレイヤーが付ける短いメモ。12 文字まで。地図に小さく出す。保存する） */
+  memo?: string;
 }
 /** 列車。p：0 が自分の駅、1 が行き先。back：戻り。to：行き先の駅のキー。held：前の列車を待って止まっている */
 export interface Train { p: number; back: boolean; cargo: string[]; wait: number; to?: string; held?: boolean }
@@ -275,7 +279,11 @@ export interface World {
   buckets: Bucket[];
   /** 画面効果のきっかけ。保存しない */
   fx: { x: number; y: number; type: 'react' | 'deliver' | 'spill' | 'vent'; s: string }[];
+  /** 地図の旗（20 本まで）。y は階のずれを含む。note はひと言 */
+  pins: { x: number; y: number; note: string }[];
 }
+/** 地図の旗の上限と、ひと言の長さ */
+export const PIN_MAX = 20, PIN_NOTE = 16;
 
 export const beltSpeed = (w: World) => 2 * (1 + 0.35 * w.up.belt);
 /** 研究を終えているか */
@@ -549,6 +557,7 @@ export function newWorld(): World {
     ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, exams: [...EXAMS_DEFAULT], calib: { sure: [0, 0], maybe: [0, 0], guess: [0, 0] }, relearn: [], hcLog: [], side: null, night: null, dayMs: {}, tested: [], today: { day: '', wrong: [] }, revDays: {}, ret: RETENTION, bonusDay: '', cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
     up: { extract: 0, belt: 0, machine: 0 }, research: [], agents: [], cases: [], solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, sig: [], rails: new Map(), railRev: 0, occ: new Map(), buckets: [], playMs: 0, tick: 0, events: [], fx: [],
+    pins: [],
   };
   for (const [x, y] of hubTiles(2)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
   return w;
@@ -1208,6 +1217,8 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
   const N = n > 1 ? n : undefined;
   const t = at(w, x, y);
   if (!t) return false;
+  // 一時停止している装置は、何も受け取らない（ベルトはそこで待つ）
+  if (t.off) return false;
   switch (t.kind) {
     case 'belt':
       if (t.dir === (d + 2) % 4) return false;
@@ -1351,6 +1362,8 @@ export function step(w: World, dt: number) {
   if (w.tick % 600 === 0 && w.occ.size) for (const [k, o] of w.occ) if (o.t < w.tick - 2) w.occ.delete(k);
   const speed = beltSpeed(w), every = extractInterval(w), rate = machineRate(w), kU = 1 - Math.exp(-dt / UTIL_TAU);
   for (const e of w.ents.values()) {
+    // 一時停止している装置は、反応も採取も出すことも止める（途中の反応・ためた物はそのまま残る）
+    if (e.off) continue;
     switch (e.kind) {
       case 'belt': {
         const it = e.item;
@@ -1666,6 +1679,7 @@ export function serialize(w: World): string {
     playMs: Math.round(w.playMs), savedAt: Date.now(),
     fname: w.fname || undefined,
     study: w.study,
+    pins: w.pins,
   });
 }
 
@@ -1688,6 +1702,9 @@ export function deserialize(json: string): World | null {
       if (e.item && !hasSub(e.item.s)) e.item = null;
       if (e.item) e.item.m = 0;
       if (e.items) e.items = e.items.map((it) => (it && hasSub(it.s) ? { ...it, m: 0 } : null));
+      // 一時停止と名前（古いセーブにはない）
+      if (e.off !== undefined && e.off !== true) delete e.off;
+      if (e.memo !== undefined) { const m = typeof e.memo === 'string' ? e.memo.trim().slice(0, 12) : ''; if (m) e.memo = m; else delete e.memo; }
     }
     if (Array.isArray(d.progress)) {
       w.progress = CHAPTERS.map((c, i) => Math.min(c.goals.length, d.progress[i] | 0));
@@ -1752,6 +1769,7 @@ export function deserialize(json: string): World | null {
     w.multi = d.multi || {};
     w.playMs = d.playMs || 0;
     w.fname = typeof d.fname === 'string' && d.fname.trim() ? d.fname.trim().slice(0, FNAME_MAX) : undefined;
+    w.pins = Array.isArray(d.pins) ? d.pins.filter((p: { x?: unknown; y?: unknown }) => Number.isInteger(p?.x) && Number.isInteger(p?.y)).slice(0, PIN_MAX).map((p: { x: number; y: number; note?: unknown }) => ({ x: p.x, y: p.y, note: typeof p.note === 'string' ? p.note.slice(0, PIN_NOTE) : '' })) : [];
     return w;
   } catch {
     return null;

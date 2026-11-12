@@ -139,7 +139,7 @@ export function diagram(e: Ent, swap?: () => void): HTMLElement {
   return g;
 }
 
-export interface SheetActions { close(): void; rotate(e: Ent): void; erase(e: Ent): void; toast(msg: string): void; stamp(text: string): void }
+export interface SheetActions { close(): void; rotate(e: Ent): void; erase(e: Ent): void; toast(msg: string): void; stamp(text: string): void; /** 設備の名前を付ける欄（src/ui/build2.ts） */ memo?(e: Ent): HTMLElement | null }
 
 /** 物質の選択チップ */
 export function chip(id: string, extra = ''): HTMLButtonElement {
@@ -162,6 +162,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
       e.outOrder && !isCell && !isCol ? h('p', { class: 'muted tiny' }, '出口をタップしてから、移したい場所をタップすると入れ替わる。') : null,
       h('button', { class: 'ghost', type: 'button', id: 'cfg-rotate', onclick: () => { act.rotate(e); paint(); } }, '↻ 向きを変える'),
       h('button', { class: 'ghost warn', type: 'button', id: 'cfg-erase', onclick: () => { act.erase(e); act.close(); } }, '✕ この装置を消す'),
+      act.memo?.(e) ?? null,
     ].filter((n): n is HTMLElement => n !== null));
     paint();
     return box;

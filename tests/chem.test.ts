@@ -3124,3 +3124,222 @@ describe('学習の補助：ヒント・取り消し・答える時間・助言�
     expect(answerRow('r:haber-bosch')).toEqual({ q: 'ハーバー・ボッシュ法', a: 'N₂ + 3H₂ ⇄ 2NH₃（触媒・条件：Fe₃O₄）' });
   });
 });
+
+describe('組み立ての道具：自動ベルト・回す・鏡・一時停止・名前・旗・逆向き・つなぎ忘れ', () => {
+  /** 道筋がつながっているか（隣り合うマスを、向きのとおりにたどれる） */
+  const linked = (steps: { x: number; y: number; dir: number }[]) => steps.every((s, i) => i === steps.length - 1 || (steps[i + 1].x === s.x + DX[s.dir] && steps[i + 1].y === s.y + DY[s.dir]));
+  it('自動ベルト：空いたマスどうしを最短で結び、置いてある設備は避ける。同じ長さなら曲がりの少ない道', async () => {
+    const { findRoute } = await import('../src/engine/route');
+    const w = newWorld();
+    const r1 = findRoute(w, [10, 10], [15, 10]);
+    expect(r1.ok).toBe(true);
+    if (!r1.ok) return;
+    expect(r1.steps.map((s) => [s.x, s.y, s.dir])).toEqual([10, 11, 12, 13, 14, 15].map((x) => [x, 10, 0]));
+    place(w, 'splitter', 12, 10, 0);
+    const r2 = findRoute(w, [10, 10], [15, 10]);
+    expect(r2.ok).toBe(true);
+    if (!r2.ok) return;
+    expect(r2.steps.some((s) => s.x === 12 && s.y === 10)).toBe(false);
+    expect(r2.steps.length).toBe(8);   // 2 マスの回り道
+    expect(linked(r2.steps)).toBe(true);
+    expect(r2.steps[r2.steps.length - 1]).toMatchObject({ x: 15, y: 10 });
+    // 斜めの行き先：曲がりは 1 回だけ
+    const r3 = findRoute(w, [20, 20], [24, 23]);
+    expect(r3.ok && r3.steps.length).toBe(8);
+    if (r3.ok) expect(r3.steps.slice(1).filter((s, i) => s.dir !== r3.steps[i].dir).length).toBe(1);
+    // 囲まれていれば、見つからない
+    for (const [x, y] of [[29, 30], [31, 30], [30, 29], [30, 31]]) place(w, 'vent', x, y, 0);
+    const r4 = findRoute(w, [30, 30], [40, 30]);
+    expect(r4.ok).toBe(false);
+  });
+  it('自動ベルト：採取機の出口から納品所まで敷くと、物が届く。まっすぐのベルトは立体交差で横切る', async () => {
+    const { findRoute } = await import('../src/engine/route');
+    const w = newWorld();
+    const hub = [...w.ents.values()].find((e) => e.kind === 'hub')!;
+    expect(place(w, 'extractor', hub.x - 12, hub.y, 2)).toBeNull();   // 左向き（納品所に背を向ける）
+    // 間に、縦に流れるベルトの列
+    for (let y = hub.y - 8; y <= hub.y + 8; y++) place(w, 'belt', hub.x - 6, y, 1);
+    const r = findRoute(w, [hub.x - 12, hub.y], [hub.x, hub.y]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const ex = at(w, hub.x - 12, hub.y)!;
+    expect([r.steps[0].x, r.steps[0].y]).toEqual([ex.x - 1, ex.y]);   // 出口の前から
+    const bridges = r.steps.filter((s) => s.bridge);
+    expect(bridges.length).toBe(1);   // 回り道（20 マス近く）より、立体交差 1 か所
+    expect(bridges[0].x).toBe(hub.x - 6);
+    expect(linked(r.steps)).toBe(true);
+    const last = r.steps[r.steps.length - 1];
+    expect(at(w, last.x + DX[last.dir], last.y + DY[last.dir])?.kind).toBe('hub');
+    for (const s of r.steps) { if (s.bridge) { remove(w, s.x, s.y); place(w, 'bridge', s.x, s.y, 0); } else expect(place(w, 'belt', s.x, s.y, s.dir)).toBeNull(); }
+    // 縦のベルトにも流して、両方とも流れ続けることを確かめる
+    place(w, 'vent', hub.x - 6, hub.y + 9, 0);
+    const before = Object.values(w.stock).reduce((a, n) => a + n, 0);
+    for (let i = 0; i < 60 * 30; i++) { const top = at(w, hub.x - 6, hub.y - 8)!; if (!top.item) top.item = { s: 'N2', p: 0, m: w.tick }; step(w, 1 / 60); }
+    expect(Object.values(w.stock).reduce((a, n) => a + n, 0)).toBeGreaterThan(before + 5);
+    expect(w.vented.N2).toBeGreaterThan(5);
+  });
+  it('一時停止：止めた装置は採らず・反応せず・受け取らない。動かすと続きから。保存して読み直しても残る', async () => {
+    const w = newWorld();
+    place(w, 'extractor', 10, 10, 0); place(w, 'belt', 11, 10, 0); place(w, 'vent', 12, 10, 0);
+    const ex = at(w, 10, 10)!;
+    ex.off = true;
+    for (let i = 0; i < 120; i++) step(w, 1 / 60);
+    expect(Object.values(w.vented).reduce((a, n) => a + n, 0)).toBe(0);
+    ex.off = undefined;
+    for (let i = 0; i < 180; i++) step(w, 1 / 60);
+    expect(Object.values(w.vented).reduce((a, n) => a + n, 0)).toBeGreaterThan(0);
+    // 止めた反応器は、原料を受け取らない（ベルトの上で待つ）
+    place(w, 'reactor', 20, 10, 0);
+    const re = at(w, 20, 10)!;
+    configure(re, RECIPES.find((r) => r.id === 'haber-bosch')!, ['NH3']);
+    place(w, 'belt', 19, 10, 0);
+    re.off = true;
+    at(w, 19, 10)!.item = { s: 'N2', p: 0, m: w.tick };
+    for (let i = 0; i < 120; i++) step(w, 1 / 60);
+    expect(re.inBuf?.N2 ?? 0).toBe(0);
+    expect(at(w, 19, 10)!.item?.s).toBe('N2');
+    re.off = undefined;
+    for (let i = 0; i < 60; i++) step(w, 1 / 60);
+    expect(re.inBuf?.N2).toBe(1);
+    // 保存：止めた印と名前は残り、おかしな値は捨てる。古いセーブ（印も旗もない）も読める
+    re.off = true; re.memo = '  アンモニア1号のとても長い名前  ';
+    ex.off = 'yes' as unknown as boolean;
+    w.pins.push({ x: 5, y: 6, note: '入り江' });
+    const w2 = deserialize(serialize(w))!;
+    expect(at(w2, 20, 10)!.off).toBe(true);
+    expect(at(w2, 20, 10)!.memo).toBe('アンモニア1号のとても長'.slice(0, 12));
+    expect(at(w2, 10, 10)!.off).toBeUndefined();
+    expect(w2.pins).toEqual([{ x: 5, y: 6, note: '入り江' }]);
+    const old = JSON.parse(serialize(newWorld()));
+    delete old.pins;
+    expect(deserialize(JSON.stringify(old))!.pins).toEqual([]);
+  });
+  it('設計図を回す・鏡に映す：4 回回すと元どおり、鏡は 2 回で元どおり。鏡に映すと右手と左手の出口が入れ替わる', async () => {
+    const { xStamps } = await import('../src/engine/shape');
+    const bp: Parameters<typeof xStamps>[0] = [
+      { kind: 'belt', dx: 0, dy: 0, dir: 0 },
+      { kind: 'reactor', dx: 1, dy: 0, dir: 0, recipe: 'ostwald-1', outOrder: ['NO', 'H2O'], outSlot: [0, 2] },
+      { kind: 'splitter', dx: 3, dy: 2, dir: 1 },
+    ];
+    let r = bp;
+    for (let i = 0; i < 4; i++) r = xStamps(r, 'rot');
+    expect(r).toEqual(bp);
+    expect(xStamps(xStamps(bp, 'flipX'), 'flipX')).toEqual(bp);
+    const m = xStamps(bp, 'flipX');
+    expect(m.map((b) => [b.kind, b.dx, b.dy, b.dir])).toEqual([['belt', 3, 0, 2], ['reactor', 1, 0, 2], ['splitter', 0, 2, 1]]);
+    expect(m[1].outSlot).toEqual([1, 3]);
+    const v = xStamps(bp, 'flipY');
+    expect(v.map((b) => [b.dx, b.dy, b.dir])).toEqual([[0, 2, 0], [1, 1, 0], [3, 0, 3]]);
+  });
+  it('囲んだものを、その場で回す・鏡に映す：設定と中身はそのまま、つながりも保つ。ふさがっていれば動かさない', async () => {
+    const { xEnts } = await import('../src/engine/shape');
+    const w = newWorld();
+    // 反応器（右向き）の右手・手前の出口から、ベルト 1 マス
+    place(w, 'reactor', 10, 10, 0);
+    const re = at(w, 10, 10)!;
+    configure(re, RECIPES.find((r) => r.id === 'ostwald-1')!, ['NO', 'H2O']);
+    re.inBuf = { NH3: 3 };
+    const p1 = outPort(re, 1);
+    place(w, 'belt', p1.tx, p1.ty, p1.d);
+    const es = () => [...w.ents.values()].filter((e) => e.kind !== 'part' && e.kind !== 'hub' && e.x >= 8 && e.x <= 16 && e.y >= 8 && e.y <= 16);
+    const connected = () => { const r0 = es().find((e) => e.kind === 'reactor')!, q = outPort(r0, 1), b = at(w, q.tx, q.ty); return b?.kind === 'belt' && b.dir === q.d; };
+    expect(connected()).toBe(true);
+    const sig = () => es().map((e) => `${e.kind}:${e.x},${e.y},${e.dir}`).sort().join(' ');
+    const start = sig();
+    let rect: [number, number, number, number] = [10, 10, 11, 12];
+    for (let i = 0; i < 4; i++) {
+      const res = xEnts(w, es(), 'rot', rect);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      rect = res.box;
+      expect(connected()).toBe(true);
+      expect(es().find((e) => e.kind === 'reactor')!.inBuf?.NH3).toBe(3);
+    }
+    expect(sig()).toBe(start);
+    for (const how of ['flipX', 'flipY'] as const) {
+      const res = xEnts(w, es(), how, rect);
+      expect(res.ok).toBe(true);
+      expect(connected()).toBe(true);
+    }
+    // ふさがっている：動かさないもの（廃棄口）が行き先にある
+    place(w, 'vent', 12, 10, 0);
+    const before = sig();
+    const bad = xEnts(w, es().filter((e) => e.kind !== 'vent'), 'rot', [10, 10, 13, 12]);
+    expect(bad.ok).toBe(false);
+    expect(sig()).toBe(before);
+  });
+  it('囲みの中の線路も回る（つながりの向きも回る）。控えを書き戻せば元どおり', async () => {
+    const { xEnts } = await import('../src/engine/shape');
+    const w = newWorld();
+    place(w, 'belt', 30, 30, 0);
+    addRail(w, [30, 31], [31, 31]); addRail(w, [31, 31], [32, 31]);
+    const res = xEnts(w, [at(w, 30, 30)!], 'rot', [30, 30, 32, 31]);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // 幅 3・高さ 2 → 回すと幅 2・高さ 3。横の線路は縦になる
+    expect(res.box).toEqual([30, 30, 31, 32]);
+    expect(at(w, 31, 30)?.dir).toBe(1);
+    expect([...w.rails.keys()].sort()).toEqual(['30,30', '30,31', '30,32']);
+    expect(w.rails.get('30,31')).toBe((1 << 1) | (1 << 3));
+    for (const [k, m] of res.snap) { if (m) w.rails.set(k, m); else w.rails.delete(k); }
+    expect([...w.rails.keys()].sort()).toEqual(['30,31', '31,31', '32,31']);
+  });
+  it('ベルトの一続きを見つけ、逆向きにする。合流点で切れる', async () => {
+    const { beltLine, reversedDirs } = await import('../src/engine/shape');
+    const w = newWorld();
+    place(w, 'extractor', 9, 10, 0);
+    for (let x = 10; x <= 14; x++) place(w, 'belt', x, 10, 0);
+    const line = beltLine(w, at(w, 12, 10)!);
+    expect(line.map((b) => b.x)).toEqual([10, 11, 12, 13, 14]);
+    expect(reversedDirs(w, line)).toEqual([2, 2, 2, 2, 2]);
+    // 角：上から来て右へ曲がる線は、逆にすると左へ行って上へ戻る
+    for (let y = 20; y <= 21; y++) place(w, 'belt', 20, y, 1);
+    place(w, 'belt', 20, 22, 0); place(w, 'belt', 21, 22, 0);
+    const l2 = beltLine(w, at(w, 21, 22)!);
+    expect(l2.map((b) => [b.x, b.y])).toEqual([[20, 20], [20, 21], [20, 22], [21, 22]]);
+    expect(reversedDirs(w, l2)).toEqual([3, 3, 3, 2]);
+    // 合流：(12,10) に上からもう 1 本
+    place(w, 'belt', 12, 9, 1);
+    expect(beltLine(w, at(w, 13, 10)!).map((b) => b.x)).toEqual([12, 13, 14]);
+  });
+  it('つなぎ忘れ：出口の先に何もない（受け取れない向きの）設備を挙げる。駅とタンクは、どちらかの口がつながっていればよい', async () => {
+    const { looseOutputs, stockOf } = await import('../src/engine/shape');
+    const w = newWorld();
+    place(w, 'extractor', 10, 10, 0);
+    expect(looseOutputs(w).map((l) => l.e.kind)).toEqual(['extractor']);
+    place(w, 'belt', 11, 10, 2);   // 向かい合うベルト
+    expect(looseOutputs(w).length).toBe(1);
+    remove(w, 11, 10); place(w, 'belt', 11, 10, 0);
+    expect(looseOutputs(w).length).toBe(0);
+    place(w, 'reactor', 20, 10, 0);
+    const re = at(w, 20, 10)!;
+    configure(re, RECIPES.find((r) => r.id === 'ostwald-1')!, ['NO', 'H2O']);
+    const q0 = outPort(re, 0);
+    place(w, 'belt', q0.tx, q0.ty, q0.d);
+    expect(looseOutputs(w).map((l) => [l.e.kind, l.what])).toEqual([['reactor', ['H2O']]]);
+    place(w, 'tank', 30, 10, 0);
+    const tk = at(w, 30, 10)!;
+    tk.sub = 'N2'; tk.cnt = 120;
+    expect(stockOf(tk)).toBe(120);
+    expect(looseOutputs(w).some((l) => l.e === tk)).toBe(true);
+    const t0 = slotPort(tk, 0);
+    place(w, 'belt', t0.tx, t0.ty, t0.d);
+    expect(looseOutputs(w).some((l) => l.e === tk)).toBe(false);
+  });
+  it('置けない理由と、隣に複製する場所（正面 → 右手 → 左手 → 背中側）', async () => {
+    const { whyNot, dupSpot } = await import('../src/engine/shape');
+    const { FLOOR_DY } = await import('../src/engine/world');
+    const w = newWorld();
+    place(w, 'splitter', 10, 10, 0);
+    expect(whyNot(w, 'extractor', 10, 10)).toMatch(/分配器がある/);
+    expect(whyNot(w, 'extractor', 12, 10)).toBeNull();
+    expect(whyNot(w, 'extractor', 12, 10 + FLOOR_DY)).toMatch(/1 階/);
+    for (const [x, y] of [[20, 20], [22, 20], [20, 22], [22, 22], [21, 19], [19, 21], [23, 21], [21, 23]]) place(w, 'vent', x, y, 0);
+    expect(whyNot(w, 'reactor', 21, 21)).toMatch(/2×2/);
+    place(w, 'reactor', 40, 10, 1);   // 下向き
+    const re = at(w, 40, 10)!;
+    expect(dupSpot(w, re)).toEqual({ x: 40, y: 12, side: 0 });
+    place(w, 'vent', 40, 12, 0);
+    expect(dupSpot(w, re)).toEqual({ x: 38, y: 10, side: 1 });   // 下向きの右手は西
+  });
+});

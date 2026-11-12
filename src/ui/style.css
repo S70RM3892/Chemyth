@@ -999,3 +999,50 @@ table.week td.n { color: var(--ink); }
   #print-sheet td:first-child { width: 2.2em; text-align: right; }
   #print-sheet tr { break-inside: avoid; }
 }
+/* ==== 組み立ての道具（改善 26〜50。src/ui/build2.ts） ==== */
+/* 最近の道具と「もう一度」：棚の右端 */
+#recent { display: flex; align-items: stretch; gap: 0; padding-left: 5px; border-left: 1px solid var(--rule); flex: 0 0 auto; }
+#recent .tool { width: 46px; }
+#recent .tool .g { width: 24px; height: 24px; font-size: 13px; }
+#recent .tool .l { font-size: 8.5px; max-width: 45px; overflow: hidden; text-overflow: ellipsis; }
+#recent .tool.again .l { color: var(--red); }
+/* ★ をつけた道具と ★ の棚 */
+.tool { position: relative; }
+.tool.fav::after { content: "★"; position: absolute; top: 1px; right: 3px; font-size: 10px; line-height: 1; color: var(--red); }
+#tabs:has(#tab-fav:not([hidden])) { grid-template-columns: auto auto auto; }
+#tabs #tab-fav { color: var(--red); }
+#tabs #tab-fav.on { color: var(--on-ink); }
+/* 拡大・縮小のボタン（片手で使う）と、道具の棚の寄せ */
+#zoom2 { position: absolute; right: var(--gr); top: 50%; transform: translateY(-50%); z-index: 2; display: grid; gap: 8px; }
+#zoom2 button { width: 52px; height: 52px; border: var(--bw) solid var(--ink); border-radius: 50%; background: var(--card); color: var(--ink); font-size: 26px; font-weight: 700; line-height: 1; box-shadow: 2px 2px 0 var(--shadow); }
+html.big-btn #zoom2 button { width: 64px; height: 64px; }
+html.hand-left #zoom2 { right: auto; left: var(--gl); }
+html.hand-left #dock { justify-items: start; }
+html.hand-right #dock { justify-items: end; }
+.in-title #zoom2, .in-title #clone-bar { visibility: hidden; }
+/* 操作のロック：見るだけ */
+#b-lock { display: inline-grid; place-items: center; }
+#b-lock.hot { background: var(--ink); color: var(--on-ink); }
+#app.locked .tool:not(#tool-pan), #app.locked #recent { opacity: 0.35; }
+/* 確かめの窓（設定の窓が閉じても残る） */
+#ask2 { position: absolute; inset: 0; z-index: 9; display: grid; place-items: center; padding: 16px; background: color-mix(in srgb, var(--paper) 55%, transparent); }
+#ask2 .ask-box { width: min(420px, 100%); background: var(--card); color: var(--ink); border: var(--bw) solid var(--ink); border-radius: 6px; padding: 16px 18px; box-shadow: 4px 4px 0 var(--shadow); display: grid; gap: 8px; }
+#ask2 .ask-msg { margin: 0; font-family: var(--font-hand); font-weight: 600; font-size: 19px; }
+#ask2 .muted { margin: 0; }
+.primary.danger { background: var(--red); border-color: var(--red); color: #fff; }
+/* コピー中の帯 */
+#clone-bar { position: absolute; left: 50%; top: 72px; transform: translateX(-50%); z-index: 3; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 32px); background: var(--hi-soft); color: var(--ink); border: var(--bw) solid var(--ink); border-radius: 5px; padding: 6px 8px 6px 14px; box-shadow: 2px 2px 0 var(--shadow); font-size: 14px; font-weight: 700; line-height: 1.4; }
+#clone-bar button { border: var(--bw) solid var(--ink); background: var(--card); color: var(--ink); border-radius: 4px; padding: 4px 12px; min-height: 38px; font-weight: 700; white-space: nowrap; }
+#app:has(#modal:not([hidden])) #clone-bar { display: none; }
+html.big-text #clone-bar { zoom: 1.15; }
+/* 設備の名前の欄・設計図の見本と並べ替え・一時停止中・絞り込み */
+.memo-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 13px; font-weight: 700; }
+.memo-row input { flex: 1; min-width: 0; font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--rule); border-bottom: 1.5px solid var(--ink); border-radius: 3px; padding: 4px 6px; }
+.memo-row input:focus { outline: 2px solid var(--hi); }
+.bp-thumb { flex: 0 0 auto; border: 1px solid var(--rule); border-radius: 3px; }
+.ghost.tiny-btn { min-height: 36px; min-width: 36px; padding: 2px 8px; }
+#act #act-pause.hot { background: var(--hi-soft); }
+#act #act-dup { font-size: 14px; }
+#area-act #area-filter.on { background: var(--hi-soft); }
+[data-skin="punk"] #zoom2 button, [data-skin="punk"] #clone-bar button { border-radius: 0; background: var(--key); color: var(--key-ink); border-color: var(--key-edge); }
+[data-skin="punk"] #clone-bar, [data-skin="punk"] #ask2 .ask-box { background: var(--panel); color: #f0e9dc; border-radius: 0; border-color: #000; }
