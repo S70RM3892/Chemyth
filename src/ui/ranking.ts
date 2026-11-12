@@ -19,9 +19,9 @@ function device(): string {
   return d;
 }
 
-async function rpc<T>(fn: string, body: Record<string, unknown>): Promise<T> {
+export async function rpc<T>(fn: string, body: Record<string, unknown>, keepalive = false): Promise<T> {
   const res = await fetch(`${RANKING.url}/rest/v1/rpc/${fn}`, {
-    method: 'POST',
+    method: 'POST', keepalive,
     headers: { 'content-type': 'application/json', apikey: RANKING.key, authorization: `Bearer ${RANKING.key}` },
     body: JSON.stringify(body),
   });

@@ -1,3 +1,4 @@
+import { accountAvailable, accountLine, conflictSlots, onAccountChange, renderAccount, signedIn, slotErased, syncIfStale } from './account';
 import { ELEMENTS } from '../content/elements';
 import { CHAPTERS, TOTAL_GOALS } from '../content/goals';
 import { chaptersDone } from '../engine/world';
@@ -14,14 +15,16 @@ const META = 'chemyth-v2-meta';
 // セーブはこの端末のブラウザの中だけに置く。読み書きに失敗しても遊べるようにする
 export const store = {
   read(n: number): string | null { try { return localStorage.getItem(slotKey(n)); } catch { return null; } },
-  write(n: number, json: string): boolean { try { localStorage.setItem(slotKey(n), json); return true; } catch { return false; } },
+  /** セーブを書いたときに呼ぶもの（同期の予約に使う） */
+  onWrite: null as ((n: number) => void) | null,
+  write(n: number, json: string, quiet = false): boolean { try { localStorage.setItem(slotKey(n), json); if (!quiet) store.onWrite?.(n); return true; } catch { return false; } },
   erase(n: number) { try { localStorage.removeItem(slotKey(n)); localStorage.removeItem(`chemyth-v2-album-${n}`); } catch { /* 同上 */ } },
   meta(): { sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string; overlay?: boolean; music?: boolean; gfx?: 'high' | 'plain'; view3d?: 'on' | 'off' } { try { return JSON.parse(localStorage.getItem(META) || '{}'); } catch { return {}; } },
   setMeta(m: { sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string; overlay?: boolean; music?: boolean; gfx?: 'high' | 'plain'; view3d?: 'on' | 'off' }) { try { localStorage.setItem(META, JSON.stringify({ ...store.meta(), ...m })); } catch { /* 同上 */ } },
 };
 
-const fmtTime = (ms: number) => { const m = Math.floor(ms / 60000); return m >= 60 ? `${Math.floor(m / 60)} 時間 ${m % 60} 分` : `${m} 分`; };
-const fmtDate = (t: number) => { if (!t) return ''; const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; };
+export const fmtTime = (ms: number) => { const m = Math.floor(ms / 60000); return m >= 60 ? `${Math.floor(m / 60)} 時間 ${m % 60} 分` : `${m} 分`; };
+export const fmtDate = (t: number) => { if (!t) return ''; const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
 export interface TitleApi { start(slot: number, json: string | null): void }
 
@@ -57,7 +60,11 @@ function shelf(progress: number[], grades: Record<string, string>): HTMLElement 
 export function initTitle(api: TitleApi) {
   const root = $('title'), list = $('slots'), bg = $<HTMLCanvasElement>('title-bg'), panel = $('title-panel');
   const ctx = bg.getContext('2d')!;
-  let running = false, confirmErase = 0;
+  let running = false, confirmErase = 0, accountOpen = false;
+  const acBtn = $<HTMLButtonElement>('title-account');
+  acBtn.onclick = () => { accountOpen = !accountOpen; sfx.tap(); paint(); };
+  // 同期が進んだら、一覧を描き直す（受け取ったセーブが、すぐ見えるように）
+  onAccountChange(() => { if (!root.hidden) paint(); });
 
   // 背景：元素の形がゆっくり漂う
   const floats = Array.from({ length: 34 }, (_, i) => ({
@@ -84,7 +91,11 @@ export function initTitle(api: TitleApi) {
   };
 
   const paint = () => {
-    panel.hidden = true;
+    acBtn.hidden = !accountAvailable();
+    acBtn.textContent = accountLine();
+    acBtn.classList.toggle('picked', accountOpen);
+    acBtn.classList.toggle('warn', conflictSlots().length > 0);
+    if (accountOpen) { panel.hidden = false; renderAccount(panel, () => { accountOpen = false; paint(); }, paint); } else panel.hidden = true;
     list.replaceChildren(...Array.from({ length: SLOTS }, (_, i) => {
       const n = i + 1, json = store.read(n), sum = summarize(json);
       if (!sum) {
@@ -94,8 +105,8 @@ export function initTitle(api: TitleApi) {
             h('button', { class: 'primary', type: 'button', id: `slot-${n}-new`, onclick: () => { sfx.ok(); api.start(n, null); } }, 'はじめる'),
             h('button', { class: 'ghost', type: 'button', id: `slot-${n}-import`, onclick: () => importInto(n) }, '読み込む')));
       }
-      const erase = h('button', { class: 'ghost warn', type: 'button', id: `slot-${n}-erase` }, confirmErase === n ? '本当に消す' : '消す');
-      erase.onclick = () => { if (confirmErase === n) { store.erase(n); confirmErase = 0; sfx.erase(); } else confirmErase = n; paint(); };
+      const erase = h('button', { class: 'ghost warn', type: 'button', id: `slot-${n}-erase` }, confirmErase === n ? (signedIn() ? '本当に消す（預けた分も）' : '本当に消す') : '消す');
+      erase.onclick = () => { if (confirmErase === n) { store.erase(n); slotErased(n); confirmErase = 0; sfx.erase(); } else confirmErase = n; paint(); };
       return h('div', { class: 'slotcard' },
         h('div', { class: 'stack tight' }, h('b', {}, slotName(n)),
           h('span', {}, sum.done >= TOTAL_GOALS ? `全 ${TOTAL_GOALS} 指令を達成` : `${CHAPTERS[sum.chapter]?.name ?? ''}　達成 ${sum.done} / ${TOTAL_GOALS}`),
@@ -113,6 +124,7 @@ export function initTitle(api: TitleApi) {
   };
 
   const exportFrom = (n: number, json: string) => {
+    accountOpen = false; acBtn.classList.remove('picked');
     const area = h('textarea', { id: 'io-text', readOnly: true, value: json, rows: 5 });
     const note = h('p', { class: 'muted' }, '');
     panel.replaceChildren(h('b', {}, `${slotName(n)}の書き出し`),
@@ -125,6 +137,7 @@ export function initTitle(api: TitleApi) {
     panel.hidden = false;
   };
   const importInto = (n: number) => {
+    accountOpen = false; acBtn.classList.remove('picked');
     const area = h('textarea', { id: 'io-text', rows: 5, placeholder: '書き出した文字列をここに貼り付ける' });
     const note = h('p', { class: 'feedback' }, '');
     panel.replaceChildren(h('b', {}, `${slotName(n)}に読み込む`), area,
@@ -143,7 +156,7 @@ export function initTitle(api: TitleApi) {
   $('title-sound').onclick = () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); paint(); };
 
   return {
-    show() { confirmErase = 0; root.hidden = false; paint(); if (!running) { running = true; requestAnimationFrame(tick); } },
+    show() { confirmErase = 0; root.hidden = false; paint(); syncIfStale(); if (!running) { running = true; requestAnimationFrame(tick); } },
     hide() { root.hidden = true; running = false; },
   };
 }

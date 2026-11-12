@@ -2126,3 +2126,58 @@ describe('まとめて運ぶ：ベルトや出口の速さで詰まらない', (
     for (const x of [r.main, r.side, r.side2]) if (x) expect(w.vented[x]).toBe(7);
   });
 });
+
+describe('アカウント：端末をまたいだセーブの同期の判断', () => {
+  const b = (done: number, savedAt = 1000) => ({ done, points: done * 10, playMs: done * 60000, savedAt, chapter: 0 });
+  const c = (rev: number, s = b(5)) => ({ slot: 1, rev, at: 0, device: 'PC', bytes: 0, summary: s });
+  it('どちらにもなければ何もしない。片方にだけあれば、そちらへそろえる', async () => {
+    const { syncPlan } = await import('../src/engine/sync');
+    expect(syncPlan(null, undefined, undefined)).toBe('none');
+    expect(syncPlan(b(3), undefined, undefined)).toBe('upload');          // 初めて預ける
+    expect(syncPlan(b(3), { rev: 4, dirty: false }, undefined)).toBe('upload'); // 預けた側が消えていたら、預け直す
+    expect(syncPlan(null, undefined, c(2))).toBe('download');             // 新しい端末
+  });
+  it('ほかの端末で消された枠：書き換えていなければ、こちらも消す。書き換えていたら、消さずに預け直す', async () => {
+    const { syncPlan } = await import('../src/engine/sync');
+    const gone = (rev: number) => ({ slot: 1, rev, at: 0, device: 'PC', bytes: 0, summary: { gone: true } });
+    expect(syncPlan(b(5), { rev: 7, dirty: false }, gone(8))).toBe('erase');
+    expect(syncPlan(b(6), { rev: 7, dirty: true }, gone(8))).toBe('upload');
+    expect(syncPlan(b(5), undefined, gone(8))).toBe('upload');            // つながりのわからないセーブは、消さない
+    expect(syncPlan(null, { rev: 8, dirty: false }, gone(8))).toBe('none'); // 消した端末そのもの
+    expect(syncPlan(b(1), { rev: 8, dirty: true }, gone(8))).toBe('upload'); // 消した枠で、新しく始めた
+  });
+  it('番号が同じなら、手元を書き換えたときだけ送る', async () => {
+    const { syncPlan } = await import('../src/engine/sync');
+    expect(syncPlan(b(5), { rev: 7, dirty: false }, c(7))).toBe('none');
+    expect(syncPlan(b(6), { rev: 7, dirty: true }, c(7))).toBe('upload');
+  });
+  it('ほかの端末が先へ進めていたら受け取る。手元も書き換えていたら、勝手にどちらも消さない', async () => {
+    const { syncPlan } = await import('../src/engine/sync');
+    expect(syncPlan(b(5), { rev: 7, dirty: false }, c(9, b(8)))).toBe('download');
+    expect(syncPlan(b(6), { rev: 7, dirty: true }, c(9, b(8)))).toBe('conflict');
+    expect(syncPlan(b(6), { rev: 7, dirty: false }, c(3))).toBe('conflict'); // 預けた側が作り直されている
+  });
+  it('つながりがわからない 2 つは、中身が同じときだけ、そろっているとみなす', async () => {
+    const { syncPlan, sameSave } = await import('../src/engine/sync');
+    expect(syncPlan(b(5), undefined, c(2, b(5)))).toBe('none');
+    expect(syncPlan(b(5), undefined, c(2, b(9)))).toBe('conflict');
+    expect(sameSave(b(5), b(5))).toBe(true);
+    expect(sameSave(b(5), b(5, 2000))).toBe(false);
+    expect(sameSave(b(5), {})).toBe(false);
+    expect(sameSave(null, b(5))).toBe(false);
+  });
+  it('縮めて送っても、元のセーブに戻る（日本語や長いセーブでも）', async () => {
+    const { pack, unpack } = await import('../src/engine/sync');
+    const w = newWorld();
+    for (let x = 0; x < 400; x++) place(w, 'belt', 100 + (x % 40), 200 + Math.floor(x / 40), 0);
+    const json = serialize(w), packed = await pack(json);
+    expect(packed.startsWith('gz:')).toBe(true);
+    expect(packed.length).toBeLessThan(json.length / 3);
+    expect(await unpack(packed)).toBe(json);
+    expect(deserialize((await unpack(packed))!)).not.toBeNull();
+    expect(await unpack(await pack('硫酸銅(II)五水和物 → 加熱'))).toBe('硫酸銅(II)五水和物 → 加熱');
+    expect(await unpack('raw:{"v":1}')).toBe('{"v":1}');
+    expect(await unpack('gz:これは壊れている')).toBeNull();
+    expect(await unpack('nonsense')).toBeNull();
+  });
+});

@@ -441,6 +441,15 @@ b { font-weight: 700; }
 .slotcard { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; background: var(--card); border: var(--bw) solid var(--ink); border-left-width: 10px; border-radius: 3px; padding: 13px 18px; box-shadow: 4px 4px 0 var(--shadow); }
 .slotcard b { font-family: var(--font-hand); font-size: 17px; }
 .slotcard.empty { border-style: dashed; border-left-style: solid; box-shadow: none; }
+/* アカウント：タイトルの 1 行と、枠ごとの同期の様子 */
+#title-account { justify-self: start; text-align: left; font-size: 14px; }
+#title-account.warn { border-color: var(--red); color: var(--red); }
+.acrow { display: grid; grid-template-columns: minmax(110px, 0.6fr) 2fr; gap: 6px 14px; align-items: center; padding: 8px 10px; border: 1px solid var(--soft); border-radius: 3px; font-size: 13px; }
+.acrow.clash { border-color: var(--red); border-width: 2px; }
+.acrow .row { grid-column: 1 / -1; }
+#title-panel .namebox { flex: 1 1 200px; }
+#title-panel .feedback:empty { display: none; }
+@media (max-width: 560px) { .acrow { grid-template-columns: 1fr; } }
 #title-panel { display: grid; gap: 10px; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 3px; padding: 16px 20px; }
 #title-panel textarea { width: 100%; background: var(--paper); border: 1px solid var(--ink); border-radius: 3px; padding: 10px; font: 12px/1.4 var(--font-mono); resize: vertical; user-select: text; -webkit-user-select: text; }
 .foot { align-items: center; }

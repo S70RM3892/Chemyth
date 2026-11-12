@@ -26,6 +26,7 @@ import { showStats, type StatsCtx } from './ui/stats';
 import { setSound, sfx, soundOn, unlockAudio } from './ui/sound';
 import { musicOn, musicTick, setMusic } from './ui/music';
 import { initTitle, skinButtons, slotName, store, themeButtons } from './ui/title';
+import { conflictSlots, flushAccount, initAccount, onAccountChange } from './ui/account';
 import { applySkin, applyTheme } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
 import { drawToken, elementIcon } from './ui/token';
@@ -1002,6 +1003,15 @@ function boot(data: HotData) {
     $('goal-bar').style.width = g ? `${Math.min(100, (goalCount(world) / requiredOf(world, g)) * 100)}%` : '100%';
   };
 
+  // ---- アカウント：セーブを書くたびに、少しあとで預ける。ほかの端末が先へ進めていたら、知らせる ----
+  initAccount();
+  let clashTold = 0;
+  onAccountChange(() => {
+    if (app.classList.contains('in-title') || !slot || !conflictSlots().includes(slot) || clashTold === slot) return;
+    clashTold = slot;
+    toast('ほかの端末で、この枠を先へ進めている。ここでの続きは預けていない。タイトルの「アカウント」で、どちらを残すか選べ。', 9000);
+  });
+
   // ---- タイトルと開始 ----
   const title = initTitle({
     start(n, json) {
@@ -1138,7 +1148,7 @@ function boot(data: HotData) {
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { save(); flushAccount(); } });
 
   // 開いたまま更新されたときは、遊んでいた枠にそのまま戻る
   if (data.slot && data.save && deserialize(data.save)) {
