@@ -34,6 +34,8 @@ import { buildQueue, partnerOf, quizFor } from './engine/quiz';
 import { addPlayTime, canTestOut } from './engine/pace';
 import { DAILY_GOAL, daysToExam, streakOf, todayCount } from './engine/habit';
 import { showReview, renderQuiz, calibLine, quizKey } from './ui/review';
+import { showWeek, todayExtras } from './ui/learn2';
+import { logNight } from './engine/learn';
 import { conflictSlots, flushAccount, initAccount, onAccountChange, syncState } from './ui/account';
 import { applySkin, applyTheme } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
@@ -672,6 +674,7 @@ function boot(data: HotData) {
       h('div', { class: 'menu' },
         item('m-syllabus', '範囲表（入試範囲のどこまで進んだか）', () => showSyllabus(panel())),
         item('m-log', '記録（間違えたところ）', () => showLog(panel())),
+        item('m-week', '週の報告（直近 7 日・試験までの復習の見込み）', () => showWeek(panel())),
         item('m-rank', 'ランキング', () => showRanking(panel()))),
       h('h3', {}, '設定'),
       h('div', { class: 'menu' },
@@ -772,8 +775,10 @@ function boot(data: HotData) {
       const body = h('div', { class: 'rv-body' });
       showSheet(h('header', {}, h('h2', {}, title), closeBtn()), h('p', { class: 'muted' }, `${lead}　${i + 1} / ${ids.length}`), body);
       renderQuiz(body, world, q, {
-        onFull: (done) => { const r = recipeById(id.slice(2))!; showSheet(); openConfig(sheet, world, { kind: r.machine, x: -1, y: -1, dir: 0 }, sheetActions, { recipe: r, done: (ok) => { done(ok); if (ok) right++; step(i + 1); } }); },
+        // 正解の数は onDone で数える（組み直しも onDone を通る）
+        onFull: (done) => { const r = recipeById(id.slice(2))!; showSheet(); openConfig(sheet, world, { kind: r.machine, x: -1, y: -1, dir: 0 }, sheetActions, { recipe: r, done: (ok) => { done(ok); step(i + 1); } }); },
         onDone: (r) => { if (r.ok && r.conf !== 'guess') right++; save(); },
+        onUndo: (r) => { if (r.ok && r.conf !== 'guess') right--; save(); },
         next: { label: i + 1 < ids.length ? '次へ' : '結果', go: () => step(i + 1) },
       });
     };
@@ -784,6 +789,7 @@ function boot(data: HotData) {
     if (!ids.length) { toast('今日覚えたもの・まちがえたものが、まだない。', 2400); return; }
     runSet('今夜の 10 問', '今日覚えたもの・まちがえたもの。明日の朝、同じ問いを出す', ids, (right) => {
       world.night = { day: dayKey(Date.now()), ids, got: right };
+      logNight(world);
       save();
       showSheet(h('header', {}, h('h2', {}, '今夜の 10 問'), closeBtn()),
         h('p', { class: 'qtext' }, `${ids.length} 問中 ${right} 問正解。`),
@@ -796,6 +802,7 @@ function boot(data: HotData) {
     if (!n) return;
     runSet('今朝の 10 問', `昨夜の問い（昨夜は ${n.ids.length} 問中 ${n.got} 問正解）`, n.ids, (right) => {
       n.morning = right;
+      logNight(world);
       save();
       const drop = n.got - right;
       showSheet(h('header', {}, h('h2', {}, '今朝の 10 問'), closeBtn()),
@@ -880,6 +887,7 @@ function boot(data: HotData) {
         sheet.prepend(h('p', { class: 'muted' }, '前回まちがえた反応：すべてを組み直す'));
       },
       onDone: () => { rvLeft.textContent = `残り ${reviewCount(world)}`; $('due').textContent = reviewCount(world) ? String(reviewCount(world)) : ''; save(); },
+      onUndo: () => { rvLeft.textContent = `残り ${reviewCount(world)}`; $('due').textContent = reviewCount(world) ? String(reviewCount(world)) : ''; save(); },
       next: { label: '次の問い', go: () => { const n = nextCardId(); if (n) showCard(n); else { hideCard(); toast('いま出す問いは、もうない。', 1800); } } },
     });
   };
@@ -1893,6 +1901,8 @@ function boot(data: HotData) {
         h('tr', {}, h('th', {}, 'いま待っている復習'), h('td', {}, dueNow ? `${dueNow} 問` : 'なし')),
         h('tr', {}, h('th', {}, '次の復習'), h('td', {}, next ? fmtDate(next) : '—')),
         ex !== null ? h('tr', {}, h('th', {}, '次の試験まで'), h('td', {}, `${ex} 日`)) : null),
+      // 学習時間の目標と、今日まちがえた問い（正しい答えつき）
+      ...todayExtras(world),
       dueNow ? h('p', { class: 'muted' }, '待っている復習は、閉じる前に片づけると、間隔どおりに覚えられる。') : null,
       h('div', { class: 'row' },
         dueNow ? h('button', { class: 'ghost', type: 'button', id: 'today-review', onclick: () => showReview(panel()) }, `復習する（${dueNow} 問）`) : null,

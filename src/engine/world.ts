@@ -9,6 +9,7 @@ import { isPositive, setById } from '../content/samples';
 import { RESEARCH, researchById, type Research } from '../content/research';
 import { FLAMES } from '../content/looks';
 import { isSep, sepAccepts, sepReady, sepRefusal, sepRun, sepSlots } from '../content/sep';
+import { newStudy, readStudy, type Study } from './study';
 
 /** 0:右 1:下 2:左 3:上 */
 export type Dir = 0 | 1 | 2 | 3;
@@ -209,6 +210,8 @@ export interface World {
   ret: number;
   /** 毎日の復習目標のごほうびを、最後にもらった日 */
   bonusDay: string;
+  /** 答えるまでの時間・まちがえた理由・今夜と今朝の 10 問の記録・学習時間の目標など（src/engine/study.ts） */
+  study: Study;
   /** 最後に終えた混ぜ注文（知らせるため。保存しない） */
   lastSide?: { s: string; n: number; got: number; ch: number; reward: number };
   /** リード文課題で正解した空欄 */
@@ -456,10 +459,12 @@ export function schedule(w: World, id: string, correct: boolean, now = Date.now(
  * 自信と正誤を記録して、次の予定を決める。まちがえたもの・勘で当てたものは、今日のうちに正解するまで戻ってくる
  * （自信を持ってまちがえたものは早めに：1 分後。ほかは 3 分後）。正解すれば、その日の戻りから外す。
  */
-export function answer(w: World, id: string, ok: boolean, conf: Confidence | undefined, now = Date.now()): Grade {
+export function answer(w: World, id: string, ok: boolean, conf: Confidence | undefined, now = Date.now(), hint = false): Grade {
   // 自信を聞かなかった問い（すべてを組み直す問い）は、正誤だけで決める
-  const g = conf ? gradeOf(ok, conf) : ok ? 3 : 1;
-  if (conf) { const c = (w.calib[conf] ??= [0, 0]); c[0]++; if (ok) c[1]++; }
+  let g: Grade = conf ? gradeOf(ok, conf) : ok ? 3 : 1;
+  // ヒントを見て答えたものは、「たぶん」（G = 2）までにする。自信ごとの正答率にも入れない（記憶の確かさを測れない）
+  if (hint && g > 2) g = 2;
+  if (conf && !hint) { const c = (w.calib[conf] ??= [0, 0]); c[0]++; if (ok) c[1]++; }
   rate(w, id, g, now);
   // 日ごとの復習の数（勘で当てたものは、思い出せたに数えない）
   const rd = (w.revDays[dayKey(now)] ??= [0, 0]);
@@ -540,6 +545,7 @@ export const toolUnlocked = (w: World, need: { done?: number; chapter?: number; 
 
 export function newWorld(): World {
   const w: World = {
+    study: newStudy(),
     ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, exams: [...EXAMS_DEFAULT], calib: { sure: [0, 0], maybe: [0, 0], guess: [0, 0] }, relearn: [], hcLog: [], side: null, night: null, dayMs: {}, tested: [], today: { day: '', wrong: [] }, revDays: {}, ret: RETENTION, bonusDay: '', cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
     up: { extract: 0, belt: 0, machine: 0 }, research: [], agents: [], cases: [], solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, sig: [], rails: new Map(), railRev: 0, occ: new Map(), buckets: [], playMs: 0, tick: 0, events: [], fx: [],
@@ -1659,6 +1665,7 @@ export function serialize(w: World): string {
     discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, research: w.research, agents: w.agents, cases: w.cases, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
     playMs: Math.round(w.playMs), savedAt: Date.now(),
     fname: w.fname || undefined,
+    study: w.study,
   });
 }
 
@@ -1722,6 +1729,7 @@ export function deserialize(json: string): World | null {
     if (d.revDays && typeof d.revDays === 'object') for (const [k, v] of Object.entries(d.revDays as Record<string, unknown>)) if (Array.isArray(v) && v.length === 2) w.revDays[k] = [Number(v[0]) | 0, Number(v[1]) | 0];
     w.ret = RETENTIONS.includes(d.ret) ? d.ret : RETENTION;
     w.bonusDay = typeof d.bonusDay === 'string' ? d.bonusDay : '';
+    w.study = readStudy(d.study);
     w.today = d.today && typeof d.today.day === 'string' && Array.isArray(d.today.wrong) ? { day: d.today.day, wrong: d.today.wrong.filter((x: unknown) => typeof x === 'string') } : { day: '', wrong: [] };
     w.delivered = d.delivered || {};
     w.stock = d.stock || {};

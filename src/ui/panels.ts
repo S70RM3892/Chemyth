@@ -1,6 +1,6 @@
 import { ELEMENTS } from '../content/elements';
 import { lineColor, MACHINES } from '../content/machines';
-import { CONDITIONS, electronsOf, recipeById, RECIPES } from '../content/recipes';
+import { CONDITIONS, recipeById, RECIPES } from '../content/recipes';
 import { isCorrect, QUESTIONS, type Question } from '../content/questions';
 import { label, sub } from '../content/substances';
 import { CHAPTERS } from '../content/goals';
@@ -13,15 +13,16 @@ import { TANK_CAP, RESEARCH, RAIL_BOOST, maxCars, stationCap, stationRoutes, tra
 import { applyTestOut, canTestOut, paceOf, testOutPass, testOutQuiz } from '../engine/pace';
 import { quizFor } from '../engine/quiz';
 import { calibLine, solveList } from './review';
-import { LEECH, leeches, recallNow } from '../engine/habit';
-import { PLATING, platingOf } from '../engine/world';
+import { LEECH, leeches } from '../engine/habit';
+import { calibAdvice, chapterMastery } from '../engine/learn';
 import { researchById } from '../content/research';
-import { appearance, lookOf } from '../content/looks';
+import { appearance } from '../content/looks';
 import { AGENTS, ION_LABEL, ION_ORDER, MIXES } from '../content/ions';
 import { ORG as ORGANICS, ORG_MIXES, WASHES } from '../content/extract';
 import { AMINO, AMINO_MIXES, AMINO_ORDER, PH_MAX, PH_MIN, PI_BAND, POLE_NAME, phOf, poleAt, type AminoKey, type Pole } from '../content/phoresis';
 import { sepAccepts, sepRefusal } from '../content/sep';
-import { chip, equation, openConfig, type SheetActions } from './config';
+import { chip, openConfig, type SheetActions } from './config';
+import { bookRx, bookSubs, bookTerms, logMore, logTop, masteryText } from './learn2';
 import { h } from './dom';
 import { sfx } from './sound';
 import { elementIcon, tokenIcon } from './token';
@@ -142,42 +143,20 @@ function askQuestion(c: PanelCtx, key: UpgradeKey | `r:${string}`, q = pickQuest
 
 // ---------------- 図鑑 ----------------
 
-/** 物質の実際の色の見本 */
-const swatch = (hex: string) => { const i = h('i', {}); i.style.background = hex; return i; };
-
-export function showBook(c: PanelCtx, tab: 'el' | 'sub' | 'rx' = 'el') {
+/** 図鑑。物質は名前・化学式で探せる。反応は装置で絞り、並べ替え、係数と生成物を書いて練習できる。用語は知識問題のカード（src/ui/learn2.ts） */
+export function showBook(c: PanelCtx, tab: 'el' | 'sub' | 'rx' | 'term' = 'el') {
   const { w } = c;
-  const tabs = h('div', { class: 'tabs' }, ...([['el', '元素の形'], ['sub', '物質'], ['rx', '反応']] as const).map(([id, name]) =>
+  const tabs = h('div', { class: 'tabs' }, ...([['el', '元素の形'], ['sub', '物質'], ['rx', '反応'], ['term', '用語カード']] as const).map(([id, name]) =>
     h('button', { class: 'chip plain' + (id === tab ? ' on' : ''), type: 'button', id: `book-${id}`, onclick: () => showBook(c, id) }, name)));
-  let body: HTMLElement;
-  if (tab === 'el') {
-    body = h('div', { class: 'grid' }, ...ELEMENTS.map((el) => h('div', { class: 'card' }, elementIcon(el.sym, 34),
-      h('div', { class: 'stack tight' }, h('b', {}, `${el.sym}　${el.name}`), h('span', { class: 'muted' }, el.why)))));
-  } else if (tab === 'sub') {
-    const seen = w.discovered.filter((s) => s !== 'e');
-    const st = { gas: '気体', liquid: '液体', solid: '固体' } as const;
-    body = h('div', { class: 'grid' }, ...seen.map((id) => { const s = sub(id); return h('div', { class: 'card' }, tokenIcon(id, 38),
-      h('div', { class: 'stack tight' }, h('b', { class: s.formula ? 'formula' : '' }, label(id)), h('span', { class: 'muted' }, `${s.name}・${s.formula ? st[s.state] : '混合物など'}`), lookOf(id) ? h('span', { class: 'look' }, swatch(lookOf(id)!.hex), appearance(id)) : null)); }));
-  } else {
-    const done = RECIPES.filter((r) => w.learned.includes(r.id));
-    const now = Date.now();
-    const when = (t: number) => { const d = Math.round((t - now) / 86400000); return t <= now ? 'いま' : d <= 0 ? '今日' : d === 1 ? '明日' : `${d} 日後`; };
-    body = done.length ? h('div', { class: 'rxlist' }, ...done.map((r) => {
-      const card = w.srs[`r:${r.id}`], pl = platingOf(w.srs, r.id);
-      return h('details', { class: 'rx' },
-        h('summary', {}, h('b', {}, r.name), h('span', { class: 'formula' }, equation(r) + (r.machine === 'battery' ? `（e⁻ ${electronsOf(r)}）` : '')),
-          card ? h('span', { class: 'muted rx-srs' }, `次の復習 ${when(card.due)}　いま思い出せる確率 ${Math.round(recallNow(card, now) * 100)} %${pl ? `　${PLATING[pl]}` : ''}`) : null),
-        h('p', { class: 'muted' }, `${MACHINES[r.machine].name}　${CONDITIONS[r.machine].label}：${r.accept.join(' または ')}`),
-        h('p', { class: 'note' }, r.note), h('p', { class: 'muted' }, r.source),
-        card ? h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: `book-try-${r.id}`, onclick: () => solveList(c, `練習：${r.name}`, [`r:${r.id}`], true, () => undefined) }, '練習する（予定は動かさない）')) : null);
-    }))
-      : h('p', { class: 'muted' }, 'まだ正しく設定できた反応がない。');
-  }
+  const again = () => { const top = c.sheet.scrollTop; showBook(c, tab); c.sheet.scrollTop = top; };
+  const body: (HTMLElement | null)[] = tab === 'el'
+    ? [h('div', { class: 'grid' }, ...ELEMENTS.map((el) => h('div', { class: 'card' }, elementIcon(el.sym, 34),
+      h('div', { class: 'stack tight' }, h('b', {}, `${el.sym}　${el.name}`), h('span', { class: 'muted' }, el.why)))))]
+    : tab === 'sub' ? bookSubs(w) : tab === 'rx' ? bookRx(c, again) : bookTerms(c, again);
   c.show(h('header', {}, h('h2', {}, '図鑑'), closeBtn(c)), tabs,
     tab === 'el' ? h('p', { class: 'muted' }, '物質の絵柄は、元素の形の組み合わせでできている。原子が多い物質は、元素ごとに 1 つの形と個数で表す。台の形は常温での状態（丸＝気体、しずく＝液体、角丸の四角＝固体）で、破線は混合物や高分子。')
-      : tab === 'sub' ? h('p', { class: 'muted' }, `これまでに出会った物質：${w.discovered.length - (w.discovered.includes('e') ? 1 : 0)} 種類。`)
-      : h('p', { class: 'muted' }, `正しく設定できた反応：${w.learned.length} / ${RECIPES.length}。タップすると解説が開く。`),
-    body);
+      : tab === 'rx' ? h('p', { class: 'muted' }, `正しく設定できた反応：${w.learned.length} / ${RECIPES.length}。タップすると解説が開く。`) : null,
+    ...body);
 }
 
 // ---------------- 搬出口 ----------------
@@ -221,8 +200,11 @@ export function showLog(c: PanelCtx) {
     .sort((a, b) => b[1] - a[1]).slice(0, 8);
   const weak = leeches(w);
   const hcIds = (() => { const seen = new Set<string>(); return [...w.hcLog].reverse().filter((x) => (seen.has(x.id) ? false : (seen.add(x.id), true))).map((x) => x.id); })();
+  // 学習時間の目標・練習の順番・まちがえた単元などは src/ui/learn2.ts。切り替えたら、同じ所を見たまま描き直す
+  const again = () => { const top = c.sheet.scrollTop; showLog(c); c.sheet.scrollTop = top; };
   c.show(
     h('header', {}, h('h2', {}, '記録'), closeBtn(c)),
+    ...logTop(c, again),
     h('h3', {}, `苦手（${LEECH} 回以上忘れた問い）`),
     weak.length
       ? h('table', { class: 'log' }, ...weak.slice(0, 12).map((id) => { const q = quizFor(w, id, () => 0.5, id.startsWith('k:') ? undefined : 'products'); return h('tr', {}, h('td', {}, q ? q.q : id), h('td', {}, q?.choices[0] ?? ''), h('td', { class: 'n' }, `${w.srs[id].l} 回`)); }))
@@ -242,6 +224,8 @@ export function showLog(c: PanelCtx) {
     })(),
     hcIds.length ? h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'log-hc', onclick: () => solveList(c, '自信を持ってまちがえた問いを練習', hcIds, true) }, `この一覧を解く（${Math.min(10, hcIds.length)} 問・練習）`)) : null,
     h('p', { class: 'muted' }, `自信ごとの正答率　${calibLine(w)}。「確実」の正答率が 9 割を切るなら、思い込みでまちがえている。勘で当たった ${w.calib.guess[1]} 回は、覚えたことにしていない。`),
+    h('p', { class: 'rv-advice', id: 'log-advice' }, calibAdvice(w).text),
+    ...logMore(c, again),
     h('h3', {}, '時間のかかった指令'),
     times.length ? h('table', { class: 'log' }, ...times.map(([name, ms]) => h('tr', {}, h('td', {}, name), h('td', { class: 'n' }, `${Math.max(1, Math.round(ms / 60000))} 分`)))) : h('p', { class: 'muted' }, '—'),
     h('h3', {}, 'これまでの納品'),
@@ -615,9 +599,12 @@ export function showChapters(c: PanelCtx) {
     h('p', { class: 'pace', id: 'pace' }, paceText(w)),
     h('div', { class: 'menu' }, ...CHAPTERS.map((ch, i) => {
       const done = w.progress[i], total = ch.goals.length, g = ch.goals[done];
+      // 章の習熟：章の反応のうち正しく設定できた数と、習熟メッキの数
+      const mastery = masteryText(chapterMastery(w, i));
       const btn = h('button', { class: 'ghost chapter' + (i === w.chapter ? ' picked' : ''), type: 'button', id: `chapter-${i}`,
         onclick: () => { setChapter(w, i); sfx.ok(); c.close(); } },
-        h('span', {}, h('b', {}, ch.name), h('span', { class: 'muted' }, g ? `　次：${[g.s, ...(g.also ?? [])].map((x) => sub(x).name).join('・')}` : '　完了'), w.tested.includes(i) ? h('span', { class: 'pill' }, '確認テストで短縮') : null),
+        h('span', {}, h('b', {}, ch.name), h('span', { class: 'muted' }, g ? `　次：${[g.s, ...(g.also ?? [])].map((x) => sub(x).name).join('・')}` : '　完了'), w.tested.includes(i) ? h('span', { class: 'pill' }, '確認テストで短縮') : null,
+          mastery ? h('span', { class: 'ch-mastery', id: `chapter-m-${i}` }, mastery) : null),
         h('span', { class: 'formula' }, `${done} / ${total}`));
       return canTestOut(w, i) ? h('div', { class: 'chapter-row' }, btn, h('button', { class: 'ghost testout', type: 'button', id: `testout-${i}`, onclick: () => showTestOut(c, i) }, '確認テスト')) : btn;
     })));

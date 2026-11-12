@@ -2829,3 +2829,298 @@ describe('設定・控え・休み（改善 76〜100）', () => {
     expect(deserialize(serialize(w))!.fname).toBeUndefined();
   });
 });
+
+describe('学習の補助：ヒント・取り消し・答える時間・助言・週の報告・見込み・単元・理由・夜の記録・順番・解き直し・指令・習熟・穴埋め・物質名', () => {
+  const T = new Date(2026, 10, 12, 15, 0).getTime(), DAY = 86400000;
+  const rnd = (() => { let x = 11; return () => { x = (x * 16807) % 2147483647; return x / 2147483647; }; })();
+  it('ヒントを見て答えると、覚え具合は「たぶん」（G = 2）まで。自信ごとの正答率には入れない', async () => {
+    const { answer } = await import('../src/engine/world');
+    const { review } = await import('../src/engine/fsrs');
+    const hinted = newWorld(), maybe = newWorld(), sure = newWorld();
+    answer(hinted, 'r:haber-bosch', true, 'sure', T, true);
+    answer(maybe, 'r:haber-bosch', true, 'maybe', T);
+    answer(sure, 'r:haber-bosch', true, 'sure', T);
+    expect(hinted.srs['r:haber-bosch']).toEqual(maybe.srs['r:haber-bosch']);
+    expect(hinted.srs['r:haber-bosch']).toEqual(review(undefined, 2, T, hinted.exams, 'r:haber-bosch', hinted.ret));
+    expect(sure.srs['r:haber-bosch'].s).toBeGreaterThan(hinted.srs['r:haber-bosch'].s);
+    expect(hinted.calib.sure).toEqual([0, 0]);
+    expect(sure.calib.sure).toEqual([1, 1]);
+    // まちがえたら、ヒントがあってもなくても G = 1（今日のうちに戻ってくる）
+    const a = newWorld(), b = newWorld();
+    answer(a, 'k:ppt-agcl', false, 'maybe', T, true); answer(b, 'k:ppt-agcl', false, 'maybe', T);
+    expect(a.srs['k:ppt-agcl']).toEqual(b.srs['k:ppt-agcl']);
+    expect(a.relearn.map((x) => x.id)).toEqual(['k:ppt-agcl']);
+  });
+  it('ヒントは答えを出さない。知識は 2 択に絞り、係数はまちがいの式を 1 つ消す。名前に生成物が入る反応は数と状態', async () => {
+    const { hintFor } = await import('../src/engine/learn');
+    const { partsFor, recipeQuiz, quizFor } = await import('../src/engine/quiz');
+    const { label } = await import('../src/content/substances');
+    let n = 0;
+    for (const r of RECIPES) for (const p of partsFor(r)) {
+      const q = recipeQuiz(r, p, rnd);
+      if (!q) continue;
+      const hn = hintFor(q)!;
+      expect(hn, `${r.id} ${p}`).not.toBeNull();
+      expect(hn.drop).not.toContain(q.choices[0]);
+      // 極を問うときのヒントは反応式（生成物は見えるが、どちらの極かは出ない）
+      if (p !== 'pole') expect(hn.text.includes(q.choices[0]), `${r.id} ${p}：${hn.text}`).toBe(false);
+      if (p === 'products') for (const [s] of productsOf(r)) expect(hn.text.includes(label(s)), `${r.id}：${hn.text}`).toBe(false);
+      if (p === 'coef') expect(hn.drop.length).toBe(1);
+      n++;
+    }
+    expect(n).toBeGreaterThan(300);
+    for (const k of KNOWLEDGE) {
+      const q = quizFor(null, `k:${k.id}`)!, hn = hintFor(q)!;
+      expect(q.choices.length - hn.drop.length).toBe(2);
+      expect(hn.drop).not.toContain(q.choices[0]);
+    }
+    expect(hintFor(recipeQuiz(rec('polyethylene'), 'products', rnd)!)!.text).toBe('できるものは 1 つ（高分子・混合物など）');
+    expect(hintFor(recipeQuiz(rec('haber-bosch'), 'products', rnd)!)!.text).toBe('反応の名前：ハーバー・ボッシュ法');
+    expect(hintFor(recipeQuiz(rec('contact'), 'cond', rnd)!)!.text).toBe('反応式：2SO₂ + O₂ ⇄ 2SO₃');
+  });
+  it('答えの取り消し：5 秒以内なら、予定・自信の正答率・日ごとの数・出し直し・間違い・研究点・ごほうび・答えた時間・理由が元に戻る', async () => {
+    const { answer } = await import('../src/engine/world');
+    const { snapAnswer, undoAnswer, recordTime, tagWhy, UNDO_MS } = await import('../src/engine/learn');
+    const { dailyBonus, DAILY_GOAL } = await import('../src/engine/habit');
+    const { dayKey } = await import('../src/engine/fsrs');
+    const id = 'k:ppt-agcl';
+    const w = newWorld();
+    answer(w, id, true, 'sure', T - DAY);
+    recordTime(w, id, 3000);
+    w.points = 50;
+    w.revDays[dayKey(T)] = [DAILY_GOAL - 1, 5];
+    const pick = (x: typeof w) => JSON.stringify({ srs: x.srs, calib: x.calib, revDays: x.revDays, relearn: x.relearn, hcLog: x.hcLog, today: x.today, mistakes: x.mistakes, points: x.points, bonusDay: x.bonusDay, study: x.study });
+    const before = pick(w);
+    // 答える（renderQuiz と同じ順）：控える → 記録 → 時間 → 間違い → 目標のごほうび → 理由
+    const s = snapAnswer(w, id, T);
+    const p0 = w.points;
+    answer(w, id, false, 'sure', T);
+    recordTime(w, id, 8000);
+    w.mistakes.push({ machine: 'quiz', recipe: 'ppt-agcl', part: 'quiz', t: T });
+    w.mistakes.push({ machine: 'reactor', recipe: 'haber-bosch', part: 'products', t: T + 100 });
+    expect(dailyBonus(w, T)).toBe(true);
+    s.gain = w.points - p0;
+    tagWhy(w, id, 'mixup', T + 500);
+    expect(pick(w)).not.toBe(before);
+    expect(w.today.wrong).toContain(id);
+    expect(undoAnswer(w, s, T + UNDO_MS + 1)).toBe(false);
+    expect(undoAnswer(w, s, T + 2000)).toBe(true);
+    // ほかの装置の間違い（この答えとは関係ない）は残す
+    expect(w.mistakes.map((m) => m.recipe)).toEqual(['haber-bosch']);
+    w.mistakes = [];
+    expect(pick(w)).toBe(before);
+    expect(w.bonusDay).toBe('');
+  });
+  it('答えるまでの時間：1 分で打ち切り、全体の平均と、平均の長い順。保存して読み直しても残る', async () => {
+    const { recordTime, timeStats, TIME_CAP } = await import('../src/engine/learn');
+    const w = newWorld();
+    recordTime(w, 'k:ppt-agcl', 2000); recordTime(w, 'k:ppt-agcl', 4000);
+    recordTime(w, 'k:flame-li', 90000);
+    recordTime(w, 'r:haber-bosch', 1000);
+    recordTime(w, 'k:no-such', 5000);
+    expect(w.study.ms['k:flame-li']).toEqual([TIME_CAP, 1]);
+    const st = timeStats(w);
+    expect(st.n).toBe(4);
+    expect(st.avg).toBeCloseTo((2000 + 4000 + 60000 + 1000) / 4);
+    expect(st.slow.map((x) => x.id)).toEqual(['k:flame-li', 'k:ppt-agcl', 'r:haber-bosch']);
+    expect(st.slow[1]).toEqual({ id: 'k:ppt-agcl', avg: 3000, n: 2 });
+    expect(deserialize(serialize(w))!.study.ms['k:ppt-agcl']).toEqual([6000, 2]);
+  });
+  it('自信の見積もりの助言：「確実」が 9 割を切れば自信過剰、「勘」が 5 割を超えれば自信不足', async () => {
+    const { calibAdvice } = await import('../src/engine/learn');
+    const w = newWorld();
+    expect(calibAdvice(w).kind).toBe('few');
+    w.calib = { sure: [10, 7], maybe: [0, 0], guess: [2, 0] }; expect(calibAdvice(w).kind).toBe('over');
+    expect(calibAdvice(w).text).toContain('70 %');
+    w.calib = { sure: [10, 10], maybe: [0, 0], guess: [6, 4] }; expect(calibAdvice(w).kind).toBe('under');
+    w.calib = { sure: [10, 7], maybe: [0, 0], guess: [6, 4] }; expect(calibAdvice(w).kind).toBe('both');
+    w.calib = { sure: [20, 19], maybe: [5, 3], guess: [8, 2] }; expect(calibAdvice(w).kind).toBe('good');
+    expect(calibAdvice(w).text).toContain('95 %');
+  });
+  it('週の報告：直近 7 日とその前の 7 日の、復習の数・思い出せた割合・復習した日・新しく覚えた反応・遊んだ時間', async () => {
+    const { weekReport } = await import('../src/engine/learn');
+    const { dayKey, firstCard } = await import('../src/engine/fsrs');
+    const w = newWorld();
+    w.revDays[dayKey(T)] = [10, 8]; w.revDays[dayKey(T - 6 * DAY)] = [5, 2];
+    w.revDays[dayKey(T - 7 * DAY)] = [4, 4]; w.revDays[dayKey(T - 13 * DAY)] = [6, 3];
+    w.revDays[dayKey(T - 14 * DAY)] = [99, 99];
+    w.dayMs[dayKey(T)] = 30 * 60000; w.dayMs[dayKey(T - 8 * DAY)] = 10 * 60000;
+    w.srs['r:haber-bosch'] = firstCard(3, T - DAY); w.srs['r:contact'] = firstCard(3, T - 9 * DAY); w.srs['k:ppt-agcl'] = firstCard(3, T);
+    const { cur, prev } = weekReport(w, T);
+    expect(cur).toEqual({ n: 15, ok: 10, rate: 10 / 15, learned: 1, ms: 30 * 60000, days: 2 });
+    expect(prev).toEqual({ n: 10, ok: 7, rate: 0.7, learned: 1, ms: 10 * 60000, days: 2 });
+    expect(weekReport(newWorld(), T).cur.rate).toBeNull();
+  });
+  it('試験までの見込み：毎回思い出せたとして、試験の日までの復習の回数と 1 日あたり', async () => {
+    const { forecast } = await import('../src/engine/learn');
+    const w = newWorld();
+    w.exams = [T + 30 * DAY, T + 60 * DAY];
+    w.srs['k:ppt-agcl'] = { due: T + DAY, s: 2, d: 5, last: T - DAY, n: 2, l: 0, iv: 1 };
+    const weak = forecast(w, T)!;
+    expect(weak.name).toBe('共通テスト');
+    expect(weak.days).toBe(30);
+    expect(weak.cards).toBe(1);
+    expect(weak.total).toBeGreaterThanOrEqual(3);
+    expect(weak.perDay).toBeCloseTo(weak.total / 30);
+    // よく覚えている問い：明日の 1 回のあとは間隔が試験をまたぐので、試験の前にもう 1 回だけ出る
+    w.srs['k:ppt-agcl'] = { due: T + DAY, s: 60, d: 5, last: T - 30 * DAY, n: 6, l: 0, iv: 5 };
+    expect(forecast(w, T)!.total).toBe(2);
+    // 問いが増えれば増える。実在しない問いは数えない
+    w.srs['k:flame-li'] = { due: T - DAY, s: 2, d: 5, last: T - 3 * DAY, n: 2, l: 0, iv: 1 };
+    w.srs['k:no-such'] = { due: T, s: 2, d: 5, last: T - DAY, n: 2, l: 0, iv: 1 };
+    expect(forecast(w, T)!.cards).toBe(2);
+    expect(forecast(w, T)!.total).toBeGreaterThan(4);
+    w.exams = [T - DAY, T - 2 * DAY];
+    expect(forecast(w, T)).toBeNull();
+  });
+  it('まちがえた単元：多い順に 3 つ。練習の問いは、まちがえた問いから並べ、反応は覚えたものだけ', async () => {
+    const { mistakeUnits } = await import('../src/engine/learn');
+    const w = newWorld();
+    const m = (machine: 'quiz' | 'electrolyzer' | 'reactor' | 'calc', recipe: string, n: number) => { for (let i = 0; i < n; i++) w.mistakes.push({ machine, recipe, part: 'quiz', t: T + i }); };
+    m('quiz', 'ppt-agcl', 3); m('quiz', 'ppt-cus', 1);
+    m('quiz', 'flame-li', 2);
+    m('electrolyzer', 'water-electrolysis', 3);
+    m('quiz', 'gas-cl2', 1);
+    m('calc', QUESTIONS[0].id, 5);
+    m('reactor', 'contact', 9);   // まだ覚えていない反応は数えない（答えを見せない）
+    w.learned.push('water-electrolysis');
+    const u = mistakeUnits(w);
+    expect(u.map((x) => [x.unit, x.n])).toEqual([['沈殿の色', 4], ['電気分解', 3], ['炎色反応', 2]]);
+    expect(u[0].ids.slice(0, 2)).toEqual(['k:ppt-agcl', 'k:ppt-cus']);
+    expect(u[0].ids.length).toBe(KNOWLEDGE.filter((k) => k.topic === '沈殿の色').length);
+    expect(u[1].ids[0]).toBe('r:water-electrolysis');
+    expect(u[1].ids.length).toBe(1 + KNOWLEDGE.filter((k) => k.topic === '電気分解').length);
+  });
+  it('まちがえた理由：選び直すと付け替え、理由ごとに数える。保存に入る', async () => {
+    const { tagWhy, whyTally } = await import('../src/engine/learn');
+    const w = newWorld();
+    tagWhy(w, 'k:ppt-agcl', 'slip', T); tagWhy(w, 'k:ppt-agcl', 'mixup', T + 2000);
+    tagWhy(w, 'k:flame-li', 'unknown', T + 120000);
+    tagWhy(w, 'k:ppt-agcl', 'mixup', T + 400000);
+    const t = whyTally(w);
+    expect([t.slip.n, t.unknown.n, t.mixup.n]).toEqual([0, 1, 2]);
+    expect(t.mixup.ids).toEqual(['k:ppt-agcl']);
+    expect(deserialize(serialize(w))!.study.why.length).toBe(3);
+  });
+  it('今夜・今朝の 10 問の記録：夜ごとに残り、同じ夜は朝の結果で上書き。直近 7 日だけ出す', async () => {
+    const { logNight, nightHistory } = await import('../src/engine/learn');
+    const { dayKey } = await import('../src/engine/fsrs');
+    const w = newWorld();
+    w.night = { day: dayKey(T - 9 * DAY), ids: ['k:a', 'k:b'], got: 2 }; logNight(w);
+    w.night = { day: dayKey(T - DAY), ids: ['k:a', 'k:b', 'k:c'], got: 3 }; logNight(w);
+    w.night.morning = 1; logNight(w);
+    expect(w.study.nights.length).toBe(2);
+    expect(nightHistory(w, T)).toEqual([{ day: dayKey(T - DAY), n: 3, got: 3, morning: 1 }]);
+    expect(deserialize(serialize(w))!.study.nights).toEqual(w.study.nights);
+  });
+  it('古いセーブ（study がない）も読め、壊れた値は既定に戻る', async () => {
+    const d = JSON.parse(serialize(newWorld()));
+    delete d.study;
+    expect(deserialize(JSON.stringify(d))!.study).toEqual({ ms: {}, why: [], nights: [], goalMin: 0, order: 'mix', redo: {} });
+    d.study = { ms: { 'k:a': [100, 2], 'k:b': ['x', 1], 'k:c': [5, 0] }, why: [{ id: 'k:a', why: 'slip', t: 1 }, { id: 'k:a', why: 'bad', t: 1 }], nights: [{ day: '2026-11-1', n: 3, got: 2 }, { day: 5 }], goalMin: 37, order: 'weak', redo: { q1: 5, q2: 'x' } };
+    const s = deserialize(JSON.stringify(d))!.study;
+    expect(s).toEqual({ ms: { 'k:a': [100, 2] }, why: [{ id: 'k:a', why: 'slip', t: 1 }], nights: [{ day: '2026-11-1', n: 3, got: 2 }], goalMin: 0, order: 'weak', redo: { q1: 5 } });
+    d.study = 'こわれた';
+    expect(deserialize(JSON.stringify(d))!.study.order).toBe('mix');
+  });
+  it('学習時間の目標：今日の時間と、目標までの残り', async () => {
+    const { studyToday } = await import('../src/engine/learn');
+    const { dayKey } = await import('../src/engine/fsrs');
+    const w = newWorld();
+    w.dayMs[dayKey(T)] = 20 * 60000;
+    expect(studyToday(w, T)).toMatchObject({ goal: 0, done: false, frac: 0 });
+    w.study.goalMin = 30;
+    expect(studyToday(w, T)).toMatchObject({ ms: 20 * 60000, goal: 30 * 60000, done: false, left: 10 * 60000 });
+    expect(studyToday(w, T).frac).toBeCloseTo(2 / 3);
+    w.dayMs[dayKey(T)] = 31 * 60000;
+    expect(studyToday(w, T)).toMatchObject({ done: true, left: 0, frac: 1 });
+    expect(deserialize(serialize(w))!.study.goalMin).toBe(30);
+  });
+  it('練習の順番：苦手からなら、いま思い出せる確率の低い順（同じなら忘れた回数の多い順）。まだ答えていない問いは後ろ', async () => {
+    const { orderIds } = await import('../src/engine/learn');
+    const w = newWorld();
+    w.srs['k:a'] = { due: T, s: 30, d: 5, last: T - DAY, n: 3, l: 0, iv: 4 };
+    w.srs['k:b'] = { due: T, s: 1, d: 5, last: T - 5 * DAY, n: 3, l: 1, iv: 1 };
+    w.srs['k:c'] = { due: T, s: 1, d: 5, last: T - 5 * DAY, n: 3, l: 4, iv: 1 };
+    w.study.order = 'weak';
+    expect(orderIds(w, ['k:a', 'k:new', 'k:b', 'k:c'], rnd, T)).toEqual(['k:c', 'k:b', 'k:a', 'k:new']);
+    w.study.order = 'mix';
+    expect([...orderIds(w, ['k:a', 'k:b', 'k:c', 'k:a'], rnd, T)].sort()).toEqual(['k:a', 'k:b', 'k:c']);
+  });
+  it('計算問題の解き直し：まだのものが先。解き直すと印がつき、正解した計算問題にも入る。またまちがえたら戻る', async () => {
+    const { calcRedo, redoSolved } = await import('../src/engine/learn');
+    const w = newWorld();
+    const [q1, q2] = QUESTIONS;
+    w.mistakes.push({ machine: 'calc', recipe: q1.id, part: 'calc', t: T }, { machine: 'calc', recipe: q2.id, part: 'calc', t: T + 10 },
+      { machine: 'calc', recipe: q1.id, part: 'calc', t: T + 20 }, { machine: 'calc', recipe: 'no-such', part: 'calc', t: T });
+    let list = calcRedo(w);
+    expect(list.map((x) => [x.id, x.misses])).toEqual([[q1.id, 2], [q2.id, 1]]);
+    redoSolved(w, q1.id, T + 30);
+    list = calcRedo(w);
+    expect(list.map((x) => [x.id, x.done])).toEqual([[q2.id, false], [q1.id, true]]);
+    expect(w.solved).toContain(q1.id);
+    w.mistakes.push({ machine: 'calc', recipe: q1.id, part: 'calc', t: T + 40 });
+    expect(calcRedo(w).find((x) => x.id === q1.id)!.done).toBe(false);
+  });
+  it('反応を使う指令と、章ごとの習熟（章の反応・覚えた数・メッキ）', async () => {
+    const { goalsOf, chapterMastery } = await import('../src/engine/learn');
+    const { chapterRecipes } = await import('../src/engine/pace');
+    expect(goalsOf(rec('haber-bosch'))).toContainEqual({ ch: 0, gi: 2, s: 'NH3' });
+    expect(goalsOf(rec('daniell')).some((g) => g.s === 'e')).toBe(true);
+    for (let ch = 0; ch < CHAPTERS.length; ch++) for (const r of chapterRecipes(ch)) expect(goalsOf(r).some((g) => g.ch === ch), r.id).toBe(true);
+    const w = newWorld(), rs = chapterRecipes(0);
+    expect(chapterMastery(w, 0)).toEqual({ learned: 0, total: rs.length, plate: [0, 0, 0] });
+    w.learned.push(rs[0].id);
+    w.srs[`r:${rs[0].id}`] = { due: T, s: 10, d: 5, last: T, n: 5, l: 0, iv: 3, b: 8 };
+    expect(chapterMastery(w, 0)).toEqual({ learned: 1, total: rs.length, plate: [0, 1, 0] });
+  });
+  it('係数を書く・生成物を組む：採点。どの反応でも、正しい答えは正解になる', async () => {
+    const { checkCoefs, checkProducts, productPool, fillTerms, canFillCoef, canPickProducts } = await import('../src/engine/learn');
+    const r = rec('haber-bosch');
+    expect(fillTerms(r).map((t) => [t.id, t.n, t.fixed])).toEqual([['N2', 1, false], ['H2', 3, false], ['NH3', 2, false]]);
+    expect(checkCoefs(r, [1, 3, 2])).toBe('ok');
+    expect(checkCoefs(r, [2, 6, 4])).toBe('scaled');
+    expect(checkCoefs(r, [1, 3, 3])).toBe('wrong');
+    expect(checkCoefs(r, [1, 3])).toBe('wrong');
+    expect(fillTerms(rec('daniell')).filter((t) => t.fixed).map((t) => t.id)).toEqual(['e']);
+    const pool = productPool(r, rnd);
+    expect(pool).toEqual(expect.arrayContaining(['NH3', 'N2', 'H2']));   // 原料そのものも、まぎらわしい札として入る
+    expect(new Set(pool).size).toBe(pool.length);
+    // 札は答えと同じ種類：化学式の答えに、名前で選ぶ物（ボンベ・高分子）や捕集びんはまぜない
+    for (let i = 0; i < 20; i++) expect(productPool(r, rnd).every((s) => !sub(s).named && !s.startsWith('jar-'))).toBe(true);
+    expect(checkProducts(r, ['NH3'])).toBe(true);
+    expect(checkProducts(r, ['NH3', 'N2'])).toBe(false);
+    let n = 0;
+    for (const x of RECIPES) {
+      if (canFillCoef(x)) { n++; expect(checkCoefs(x, fillTerms(x).filter((t) => !t.fixed).map((t) => t.n)), x.id).toBe('ok'); }
+      if (canPickProducts(x)) { const p = productPool(x, rnd); expect(p.length, x.id).toBeGreaterThanOrEqual(productsOf(x).length + 2); expect(checkProducts(x, p.filter((s) => productsOf(x).some(([y]) => y === s))), x.id).toBe(true); }
+    }
+    expect(n).toBeGreaterThan(50);
+  });
+  it('解説の中の物質名：長い式の一部やイオンは拾わず、係数のついた式は拾う', async () => {
+    const { subSpans } = await import('../src/engine/learn');
+    const ids = ['AgCl', 'Cu', 'H2O', 'H2', 'O2', 'NaCl', 'Na'];
+    const linked = (t: string) => subSpans(t, ids).filter((x) => x.id).map((x) => x.t);
+    expect(linked('AgCl 白、AgBr 淡黄、AgI 黄。')).toEqual(['AgCl']);
+    expect(linked('陰極：Cu²⁺ + 2e⁻ → Cu。')).toEqual(['Cu']);
+    expect(linked('2H₂O → 2H₂ + O₂')).toEqual(['H₂O', 'H₂', 'O₂']);
+    expect(linked('NaCl と Na⁺')).toEqual(['NaCl']);
+    expect(subSpans('2H₂O → 2H₂ + O₂', ids).map((x) => x.t).join('')).toBe('2H₂O → 2H₂ + O₂');
+  });
+  it('用語カードの単元・練習できる取り違えやすい組・苦手の一覧・問いと答えの 1 行', async () => {
+    const { termTopics, practiceGroups, weakIds, answerRow } = await import('../src/engine/learn');
+    const { dayKey } = await import('../src/engine/fsrs');
+    expect(termTopics().reduce((a, t) => a + t.ids.length, 0)).toBe(KNOWLEDGE.length);
+    const w = newWorld();
+    expect(practiceGroups(w).every((g) => g.ids.every((id) => id.startsWith('k:')))).toBe(true);
+    w.learned.push('ether', 'ethanol-dehydration');
+    expect(practiceGroups(w).some((g) => g.name.startsWith('エタノールの脱水'))).toBe(true);
+    w.mistakes.push({ machine: 'quiz', recipe: 'flame-li', part: 'quiz', t: T });
+    expect(practiceGroups(w)[0].name).toBe('炎色反応');
+    w.today = { day: dayKey(T), wrong: ['k:ppt-agcl'] };
+    w.hcLog.push({ id: 'r:haber-bosch', t: T });
+    expect(weakIds(w, T)).toEqual(['k:ppt-agcl', 'r:haber-bosch']);
+    expect(answerRow('k:ppt-agcl')).toEqual({ q: 'AgCl の沈殿の色は。', a: '白' });
+    expect(answerRow('r:haber-bosch')).toEqual({ q: 'ハーバー・ボッシュ法', a: 'N₂ + 3H₂ ⇄ 2NH₃（触媒・条件：Fe₃O₄）' });
+  });
+});
