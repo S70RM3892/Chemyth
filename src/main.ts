@@ -374,7 +374,8 @@ function boot(data: HotData) {
   // ---- モーダル ----
   const modal = $('modal'), sheet = $('sheet');
   const closeModal = () => { modal.hidden = true; sheet.replaceChildren(); selected = null; save(); };
-  const showSheet = (...nodes: (Node | string | null)[]) => { sheet.replaceChildren(...nodes.filter((n): n is Node | string => n !== null)); sheet.scrollTop = 0; modal.hidden = false; };
+  // 流した位置は、窓を見せてから 0 に戻す（隠れている間に 0 にしても効かず、前の窓の位置のまま開いてしまう）
+  const showSheet = (...nodes: (Node | string | null)[]) => { sheet.replaceChildren(...nodes.filter((n): n is Node | string => n !== null)); modal.hidden = false; sheet.scrollTop = 0; };
   modal.addEventListener('pointerdown', (ev) => { if (ev.target === modal) closeModal(); });
   const closeBtn = () => h('button', { class: 'ghost', type: 'button', id: 'sheet-close', onclick: closeModal }, '閉じる');
   const sheetActions = {
