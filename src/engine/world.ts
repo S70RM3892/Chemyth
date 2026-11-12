@@ -155,7 +155,10 @@ const UTIL_TAU = 20;
 /** 流れの記録の 1 区切り（秒）と、残す数 */
 export const BUCKET_SEC = 10;
 const BUCKET_KEEP = 30;
-export interface Bucket { t: number; deliver: number; goal: number; vent: number; spill: number; made: number }
+/** 1 分ごとの記録を残す数（1 時間ぶん）。5 分より古い区切りは、ここへまとめる */
+export const HOUR_KEEP = 60;
+/** sub：物質ごとの [作った（採取を含む）, 使った, 納めた, 捨てた（廃棄口・あふれ）]。stock：区切りの始めの納品所の在庫。どちらも保存しない */
+export interface Bucket { t: number; deliver: number; goal: number; vent: number; spill: number; made: number; sub?: Record<string, number[]>; stock?: Record<string, number> }
 
 export type MistakePart = 'reactants' | 'products' | 'electrodes' | 'coefficients' | 'electrons' | 'condition' | 'equilibrium' | 'revealed' | 'calc' | 'isomer' | 'quiz' | 'passage';
 export interface Mistake {
@@ -268,8 +271,14 @@ export interface World {
   lastGrade?: { g: string; rate: number; bonus: number };
   /** 直近の流れ。10 秒ごとの区切りで 5 分ぶん。保存しない */
   buckets: Bucket[];
-  /** 画面効果のきっかけ。保存しない */
-  fx: { x: number; y: number; type: 'react' | 'deliver' | 'spill' | 'vent'; s: string }[];
+  /** それより前の流れ。1 分ごとの区切りで 1 時間ぶん（t は分）。合計だけを小さく保存する */
+  hour: Bucket[];
+  /** 得た実績と、得た時刻（src/engine/achieve.ts の id） */
+  ach: Record<string, number>;
+  /** 指令ごとの、終わるまでの見込み（秒）。指令の 4 分の 1 を終えたときの速さで見積もる。キーは '章:番号' */
+  eta: Record<string, number>;
+  /** 画面効果のきっかけ。train は列車が降ろした数 n、goal は指令の達成。保存しない */
+  fx: { x: number; y: number; type: 'react' | 'deliver' | 'spill' | 'vent' | 'train' | 'goal'; s: string; n?: number }[];
 }
 
 export const beltSpeed = (w: World) => 2 * (1 + 0.35 * w.up.belt);
@@ -540,7 +549,7 @@ export function newWorld(): World {
   const w: World = {
     ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, exams: [...EXAMS_DEFAULT], calib: { sure: [0, 0], maybe: [0, 0], guess: [0, 0] }, relearn: [], hcLog: [], side: null, night: null, dayMs: {}, tested: [], today: { day: '', wrong: [] }, revDays: {}, ret: RETENTION, bonusDay: '', cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
-    up: { extract: 0, belt: 0, machine: 0 }, research: [], agents: [], cases: [], solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, sig: [], rails: new Map(), railRev: 0, occ: new Map(), buckets: [], playMs: 0, tick: 0, events: [], fx: [],
+    up: { extract: 0, belt: 0, machine: 0 }, research: [], agents: [], cases: [], solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, sig: [], rails: new Map(), railRev: 0, occ: new Map(), buckets: [], hour: [], ach: {}, eta: {}, playMs: 0, tick: 0, events: [], fx: [],
   };
   for (const [x, y] of hubTiles(2)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
   return w;
@@ -776,12 +785,40 @@ export function configure(e: Ent, r: Recipe, order: string[], poles?: ('c' | 'a'
 function bucket(w: World): Bucket {
   const t = Math.floor(w.playMs / 1000 / BUCKET_SEC), last = w.buckets[w.buckets.length - 1];
   if (last && last.t === t) return last;
-  const b: Bucket = { t, deliver: 0, goal: 0, vent: 0, spill: 0, made: 0 };
+  const stock: Record<string, number> = {};
+  for (const s in w.stock) if (w.stock[s] > 0) stock[s] = w.stock[s];
+  const b: Bucket = { t, deliver: 0, goal: 0, vent: 0, spill: 0, made: 0, sub: {}, stock };
   w.buckets.push(b);
-  if (w.buckets.length > BUCKET_KEEP) w.buckets.shift();
+  // 5 分より古い区切りは、1 分ごとの記録（1 時間ぶん）にまとめる
+  while (w.buckets.length > BUCKET_KEEP) foldMinute(w.hour, w.buckets.shift()!);
   return b;
 }
+/** 10 秒の区切り b を、1 分ごとの記録 list に足す（古い順に足していく） */
+export function foldMinute(list: Bucket[], b: Bucket) {
+  const t = Math.floor((b.t * BUCKET_SEC) / 60);
+  let m = list[list.length - 1];
+  if (!m || m.t !== t) { m = { t, deliver: 0, goal: 0, vent: 0, spill: 0, made: 0 }; list.push(m); }
+  m.deliver += b.deliver; m.goal += b.goal; m.vent += b.vent; m.spill += b.spill; m.made += b.made;
+  if (b.sub) { const ms = (m.sub ??= {}); for (const s in b.sub) { const r = (ms[s] ??= [0, 0, 0, 0]); b.sub[s].forEach((v, i) => { r[i] += v; }); } }
+  if (b.stock && !m.stock) m.stock = b.stock; // 1 分の始めの在庫
+  if (list.length > HOUR_KEEP) list.splice(0, list.length - HOUR_KEEP);
+}
+/** 1 分ごとの流れ（古い順、最大 1 時間）。直近 5 分の区切りもまとめて入れる。withSub なら物質ごとの数と在庫も写す */
+export function minutes(w: World, withSub = false): Bucket[] {
+  const out: Bucket[] = w.hour.map((m) => ({ t: m.t, deliver: m.deliver, goal: m.goal, vent: m.vent, spill: m.spill, made: m.made,
+    ...(withSub && m.sub ? { sub: Object.fromEntries(Object.entries(m.sub).map(([s, r]) => [s, [...r]])) } : {}), ...(withSub && m.stock ? { stock: m.stock } : {}) }));
+  for (const b of w.buckets) foldMinute(out, withSub ? b : { ...b, sub: undefined, stock: undefined });
+  return out;
+}
 const bump = (rec: Record<string, number>, s: string, n = 1) => { rec[s] = (rec[s] || 0) + n; };
+/** 物質ごとの流れを、いまの区切りに足す。col：0 作った（採取を含む）、1 使った、2 納めた、3 捨てた。電子と、試薬棚の混合物（':' を含む id）は数えない */
+function tally(w: World, s: string, col: 0 | 1 | 2 | 3, n: number) {
+  if (s === 'e' || s.includes(':')) return;
+  ((bucket(w).sub ??= {})[s] ??= [0, 0, 0, 0])[col] += n;
+}
+/** ベルトごとの、これまでに入ってきた荷の数（保存しない。統計の重ね表示で、毎分の数を出すのに使う） */
+const passed = new WeakMap<Ent, number>();
+export const beltPassed = (e: Ent) => passed.get(e) || 0;
 
 /** 装置がいま止まっている理由。0 動いている、1 原料待ち、2 出口が詰まっている */
 export const machineState = (e: Ent): 0 | 1 | 2 => (e.busy ? 0 : outputBlocked(e) ? 2 : 1);
@@ -815,7 +852,7 @@ export interface FlowStats {
 export function flowStats(w: World): FlowStats {
   const now = Math.floor(w.playMs / 1000 / BUCKET_SEC);
   const span = (n: number) => w.buckets.filter((b) => b.t > now - n);
-  const sum = (bs: Bucket[], k: keyof Bucket) => bs.reduce((a, b) => a + b[k], 0);
+  const sum = (bs: Bucket[], k: 'deliver' | 'goal' | 'vent' | 'spill' | 'made') => bs.reduce((a, b) => a + b[k], 0);
   // 経過時間が短いうちは、その時間で割る
   const mins = (n: number) => Math.max(BUCKET_SEC, Math.min(n * BUCKET_SEC, w.playMs / 1000)) / 60;
   const m1 = span(6), m5 = span(30);
@@ -1059,6 +1096,7 @@ function deliver(w: World, s: string, x: number, y: number, rc?: boolean, quiet 
   if (rc) return; // 搬出口や試薬棚から出して納めただけのものは数えない
   w.delivered[s] = (w.delivered[s] || 0) + 1;
   bucket(w).deliver++;
+  tally(w, s, 2, 1);
   feed(w, s);
   // 混ぜ注文
   if (w.side && w.side.s === s) { w.side.got++; if (w.side.got >= w.side.n) { w.points += w.side.reward; w.events.push('side-done'); w.lastSide = w.side; w.side = null; } }
@@ -1155,6 +1193,7 @@ function finishGoal(w: World, g: Goal, ch: number) {
     w.progress[ch]++;
     w.counts[ch] = 0;
     w.points += 30;
+    w.fx.push({ x: HUB_CENTER[0], y: HUB_CENTER[1], type: 'goal', s: g.s });
     maybeSideOrder(w);
     if (growHub(w)) w.events.push('hub-grow');
     if (w.progress[ch] < CHAPTERS[ch].goals.length) { w.events.push('goal-done'); return; }
@@ -1210,6 +1249,7 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
         if (dry) return true;
         t.item.n = (t.item.n || 1) + n;
         t.ins = (t.ins || 0) | (1 << d);
+        passed.set(t, (passed.get(t) || 0) + n);
         return true;
       }
       // 合流点（2 方向以上から入るベルト）：交互に通すか、決めた向きを優先して通す
@@ -1218,6 +1258,7 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
       t.ins = (t.ins || 0) | (1 << d); t.li = d;
       t.item = { s, p: 0, m: w.tick, rc, n: N };
       t.st = s === 'e' ? 'gas' : sub(s).state;
+      passed.set(t, (passed.get(t) || 0) + n);
       return true;
     case 'splitter':
     case 'analyzer':
@@ -1285,6 +1326,7 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
       if (dry) return true;
       bump(w.vented, s, n);
       bucket(w).vent += n;
+      tally(w, s, 3, n);
       // 有毒な気体も、そのまま捨ててよい。数だけ記録する
       if (TOXIC[s]) bump(w.emitted, s, n);
       w.fx.push({ x, y, type: 'vent', s });
@@ -1315,7 +1357,7 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
         const starved = r.inputs.some(([id, k]) => id !== s && (t.inBuf![id] || 0) < k);
         if (w.noSpill || !starved) return false;
         if (dry) return true;
-        w.fx.push({ x, y, type: 'spill', s }); bump(w.spilled, s, n); bucket(w).spill += n;
+        w.fx.push({ x, y, type: 'spill', s }); bump(w.spilled, s, n); bucket(w).spill += n; tally(w, s, 3, n);
         return true;
       }
       if (dry) return true;
@@ -1328,6 +1370,7 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
 export function step(w: World, dt: number) {
   w.tick++;
   w.playMs += dt * 1000;
+  bucket(w); // 何も流れていない間も区切りを作る（在庫の推移と、1 時間の記録が途切れない）
   // 量産の指令：求められた速さを保てている間だけ時間が進み、下回ると倍の速さで戻る
   const rg = currentGoal(w);
   if (rg?.rate) {
@@ -1427,8 +1470,9 @@ export function step(w: World, dt: number) {
               for (let i = 0; i < cnt; i++) q.push(x);
               discover(w, x);
               // 新しくできたものだけを「作った数」に入れる（そのまま通り抜けたものは数えない）
-              if (x !== e.item.s && !x.includes(':')) { bump(w.made, x, cnt); bucket(w).made += cnt; }
+              if (x !== e.item.s && !x.includes(':')) { bump(w.made, x, cnt); bucket(w).made += cnt; tally(w, x, 0, cnt); }
             }
+            if (r.main !== e.item.s && r.side !== e.item.s && r.side2 !== e.item.s) tally(w, e.item.s, 1, cnt);
             w.fx.push({ x: e.x + 0.5, y: e.y + 0.5, type: 'react', s: r.side ?? r.main ?? r.side2 ?? e.item.s });
             e.item = null; e.busy = false; e.prog = 0; e.n = (e.n || 0) + cnt;
           }
@@ -1497,7 +1541,7 @@ export function step(w: World, dt: number) {
         // 出口がふさがっている間も採り続け、SOURCE_HOLD 個までためて、空いたときにまとめて出す
         e.timer = Math.min((e.timer || 0) + dt, every * SOURCE_HOLD);
         const k = Math.floor(e.timer / every + 1e-9);
-        if (k >= 1 && push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, resourceAt(e.x, e.y), undefined, k)) { e.timer = Math.max(0, e.timer - k * every); e.n = (e.n || 0) + k; }
+        if (k >= 1 && push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, resourceAt(e.x, e.y), undefined, k)) { e.timer = Math.max(0, e.timer - k * every); e.n = (e.n || 0) + k; tally(w, resourceAt(e.x, e.y), 0, k); }
         // ためられる量がいっぱいになると、採れるのに出せない
         e.u = (e.u ?? 1) + ((e.timer < every * SOURCE_HOLD - 1e-9 ? 1 : 0) - (e.u ?? 1)) * kU;
         break;
@@ -1576,7 +1620,11 @@ export function step(w: World, dt: number) {
             if (!held) tr.p = Math.min(1, tr.p + v);
             if (tr.p >= 1) {
               const db = (dest!.buf ??= []);
-              if (tr.cargo.length && db.length < stationCap(w)) db.push(...tr.cargo.splice(0, stationCap(w) - db.length));
+              if (tr.cargo.length && db.length < stationCap(w)) {
+                const got = tr.cargo.splice(0, stationCap(w) - db.length);
+                db.push(...got);
+                w.fx.push({ x: dest!.x + 1, y: dest!.y + 1, type: 'train', s: got[0].replace(/^!/, ''), n: got.length });
+              }
               if (!tr.cargo.length) { tr.back = true; e.n = (e.n || 0) + 1; }
             }
           } else {
@@ -1606,7 +1654,7 @@ export function step(w: World, dt: number) {
         if (!e.busy) {
           // 出口にためておける量を超えた生成物があるうちは、次の反応を始めない（副生成物を放置すると、ここで詰まる）
           if (!outputBlocked(e, r) && r.inputs.every(([s, n]) => (e.inBuf![s] || 0) >= n)) {
-            for (const [s, n] of r.inputs) e.inBuf[s] -= n;
+            for (const [s, n] of r.inputs) { e.inBuf[s] -= n; tally(w, s, 1, n); }
             e.busy = true;
             e.prog = 0;
           }
@@ -1622,13 +1670,13 @@ export function step(w: World, dt: number) {
             e.outOrder.forEach((s, i) => {
               const k = r.outputs.find(([id]) => id === s)![1];
               e.outBuf![i] += k;
-              if (s !== 'e') { bump(w.made, s, k); bucket(w).made += k; }
+              if (s !== 'e') { bump(w.made, s, k); bucket(w).made += k; tally(w, s, 0, k); }
               discover(w, s);
             });
             flush();
             // 続けて動けるなら、同じコマのうちに次を始め、余った時間も持ち越す（1 回ごとに 1 コマ休むと、速い装置ほど表示の速さより遅くなる）
             if (!outputBlocked(e, r) && r.inputs.every(([s, n]) => (e.inBuf![s] || 0) >= n)) {
-              for (const [s, n] of r.inputs) e.inBuf[s] -= n;
+              for (const [s, n] of r.inputs) { e.inBuf[s] -= n; tally(w, s, 1, n); }
               e.busy = true;
               e.prog = Math.min(over, 0.99);
             }
@@ -1653,6 +1701,8 @@ export function serialize(w: World): string {
     v: SAVE_VERSION, ents: [...w.ents.values()].filter((e) => e.kind !== 'part'), chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
     rails: [...w.rails], hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, exams: w.exams, calib: w.calib, relearn: w.relearn, hcLog: w.hcLog, side: w.side, night: w.night, dayMs: w.dayMs, tested: w.tested, today: w.today, revDays: w.revDays, ret: w.ret, bonusDay: w.bonusDay, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
     discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, research: w.research, agents: w.agents, cases: w.cases, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
+    // 1 時間の流れは、1 分ごとの合計だけを [分, 納品, 指令, 廃棄口, あふれ, 作った] の数の並びで残す（60 行）
+    hist: minutes(w).map((m) => [m.t, m.deliver, m.goal, m.vent, m.spill, m.made]), ach: w.ach, eta: w.eta,
     playMs: Math.round(w.playMs), savedAt: Date.now(),
   });
 }
@@ -1738,6 +1788,14 @@ export function deserialize(json: string): World | null {
     w.fed = d.fed || {};
     w.multi = d.multi || {};
     w.playMs = d.playMs || 0;
+    // 1 時間の流れ：数の並びのうち、形の合うものだけを、分の古い順に読む
+    const num = (v: unknown) => typeof v === 'number' && isFinite(v) && v >= 0;
+    w.hour = (Array.isArray(d.hist) ? d.hist : []).filter((r: unknown) => Array.isArray(r) && r.length === 6 && r.every(num) && Number.isInteger(r[0]))
+      .map((r: number[]) => ({ t: r[0], deliver: r[1], goal: r[2], vent: r[3], spill: r[4], made: r[5] })).sort((a: Bucket, b: Bucket) => a.t - b.t).slice(-HOUR_KEEP);
+    w.ach = {};
+    if (d.ach && typeof d.ach === 'object') for (const [k, v] of Object.entries(d.ach as Record<string, unknown>)) if (typeof v === 'number' && isFinite(v) && v > 0) w.ach[k] = v;
+    w.eta = {};
+    if (d.eta && typeof d.eta === 'object') for (const [k, v] of Object.entries(d.eta as Record<string, unknown>)) if (/^\d+:\d+$/.test(k) && num(v)) w.eta[k] = Math.round(v as number);
     return w;
   } catch {
     return null;

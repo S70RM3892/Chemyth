@@ -25,6 +25,8 @@ import { chip, equation, openConfig, type SheetActions } from './config';
 import { h } from './dom';
 import { sfx } from './sound';
 import { elementIcon, tokenIcon } from './token';
+import { researchMap } from './resmap';
+import { showGoalLog } from './goals';
 
 type Show = (...nodes: (Node | string | null)[]) => void;
 export interface PanelCtx { w: World; show: Show; close(): void; toast(msg: string, ms?: number): void; sheet: HTMLElement; actions: SheetActions }
@@ -57,6 +59,7 @@ export function showUpgrades(c: PanelCtx) {
     })),
     h('h3', {}, `研究　${w.research.length} / ${RESEARCH.length}`),
     h('p', { class: 'muted' }, '工場づくりの道具と能力を開く。強化と同じく、研究点を払って計算問題を 1 問解く。「どちらか一方」の組は、工場の形に合うほうを選べ。あとで切り替えるには、もう一度払う。'),
+    researchMap(w),
     ...[1, 2, 3].map((tier) => h('div', { class: 'rs-tier' },
       h('div', { class: 'rs-head' }, h('b', {}, `第 ${tier} 段`), h('span', { class: 'muted' }, tierNeed(tier) ? (w.research.length >= tierNeed(tier) ? '開いている' : `研究を ${tierNeed(tier)} 個終えると開く（いま ${w.research.length} 個）`) : '最初から開いている')),
       h('div', { class: 'rs-grid' }, ...RESEARCH.filter((r) => r.tier === tier).map((r) => {
@@ -64,7 +67,7 @@ export function showUpgrades(c: PanelCtx) {
         const rival = r.group ? RESEARCH.find((x) => x.group === r.group && x.id !== r.id && has(w, x.id)) : undefined;
         const btn = done ? h('span', { class: 'pill ok' }, '研究済み')
           : h('button', { class: 'primary', type: 'button', id: `rs-${r.id}`, disabled: !!block, onclick: () => askQuestion(c, `r:${r.id}`) }, rival ? `${r.cost} 点で切り替える` : `${r.cost} 点で研究`);
-        return h('div', { class: 'rs-card' + (done ? ' done' : block && !done ? ' locked' : '') },
+        return h('div', { class: 'rs-card' + (done ? ' done' : block && !done ? ' locked' : ''), id: `rsc-${r.id}` },
           h('div', { class: 'row' }, h('b', {}, r.name), r.group ? h('span', { class: 'pill' }, 'どちらか一方') : null),
           h('p', {}, r.text),
           rival ? h('p', { class: 'muted' }, `いまは「${rival.name}」を選んでいる。切り替えると、そちらは取り消される。`) : null,
@@ -613,6 +616,7 @@ export function showChapters(c: PanelCtx) {
   c.show(h('header', {}, h('h2', {}, '指令の一覧'), closeBtn(c)),
     h('p', { class: 'muted' }, '章はいつでも切り替えられる。進み具合は章ごとに残る。後ろの章には、前の章で作った物質を原料に使うものがある。'),
     h('p', { class: 'pace', id: 'pace' }, paceText(w)),
+    h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'chapters-log', onclick: () => showGoalLog(c) }, '終えた指令（評価・かかった時間・見込み）')),
     h('div', { class: 'menu' }, ...CHAPTERS.map((ch, i) => {
       const done = w.progress[i], total = ch.goals.length, g = ch.goals[done];
       const btn = h('button', { class: 'ghost chapter' + (i === w.chapter ? ' picked' : ''), type: 'button', id: `chapter-${i}`,

@@ -8,6 +8,7 @@ import { h } from './dom';
 import { reactionScene } from './scene';
 import { sfx } from './sound';
 import { elementIcon, tokenIcon } from './token';
+import { deviceRecord } from './charts';
 
 type Placed = Exclude<Kind, 'hub' | 'part'>;
 const NAMED = SUBSTANCES.filter((s) => s.named);
@@ -185,7 +186,7 @@ export function openConfig(sheet: HTMLElement, w: World, e: Ent, act: SheetActio
             h('p', {}, h('b', {}, r.name)),
             h('p', { class: 'status', id: 'cfg-status' }, statusOf(e, r)),
             h('p', { class: 'status', id: 'cfg-cap' }, capacityText(w, e, r)),
-            h('p', { class: 'muted', id: 'cfg-util' }, utilText(e)),
+            deviceRecord(e, r),
             h('p', { class: 'muted', id: 'cfg-plate' }, platingText(w, r)),
             h('p', { class: 'note' }, r.note),
             h('p', { class: 'muted' }, `${cond.label}：${r.accept.join(' または ')}` + (isBat ? `　負極 ${label(r.neg!)}　正極 ${label(r.pos!)}` : '') + (r.shift ? `　平衡上有利：${r.shift}` : '')),
