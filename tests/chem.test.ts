@@ -3343,3 +3343,246 @@ describe('組み立ての道具：自動ベルト・回す・鏡・一時停止�
     expect(dupSpot(w, re)).toEqual({ x: 38, y: 10, side: 1 });   // 下向きの右手は西
   });
 });
+
+describe('統計：収支・1 時間の記録・詰まりの元・見込み・実績・生産の流れ', () => {
+  const [hx, hy] = HUB_TILES[0];
+  const run = (w: ReturnType<typeof newWorld>, sec: number, dt = 1 / 60) => { for (let i = 0; i < sec / dt; i++) step(w, dt); };
+  /** 採取機 → ベルト 2 本 → 納品所。陸地なので空気が届く */
+  const airLine = () => {
+    const w = newWorld();
+    place(w, 'extractor', hx - 3, hy, 0); place(w, 'belt', hx - 2, hy, 0); place(w, 'belt', hx - 1, hy, 0);
+    return w;
+  };
+  const reactorLine = () => {
+    const w = newWorld();
+    w.progress[0] = 2;
+    place(w, 'reactor', hx - 5, hy, 0);
+    for (const x of [hx - 3, hx - 2, hx - 1]) place(w, 'belt', x, hy, 0);
+    const e = at(w, hx - 5, hy)!;
+    configure(e, rec('haber-bosch'), ['NH3']);
+    return { w, e };
+  };
+
+  it('物質ごとの収支：作った・使った・納めた・捨てた（1 分あたり）が、累計と合う', async () => {
+    const { balanceOf } = await import('../src/engine/flow');
+    const { w, e } = reactorLine();
+    for (let i = 0; i < 40 * 60; i++) { e.inBuf = { N2: 4, H2: 12 }; step(w, 1 / 60); }
+    const { rows, min } = balanceOf(w, 5);
+    const row = (s: string) => rows.find((r) => r.s === s)!;
+    // 40 秒ぶん：期間 5 分のうち、遊んだ 40 秒で割っている
+    expect(min).toBeCloseTo(40 / 60, 1);
+    expect(Math.round(row('NH3').made * min)).toBe(w.made.NH3);
+    expect(Math.round(row('NH3').deliver * min)).toBe(w.delivered.NH3);
+    expect(Math.round(row('H2').used * min)).toBe(3 * Math.round(row('N2').used * min));
+    // N₂ 1 つで NH₃ 2 つ。始めたばかりの反応のぶんだけ、使った数が先に立つ
+    const n2 = Math.round(row('N2').used * min), nh3 = w.made.NH3;
+    expect(nh3).toBeLessThanOrEqual(2 * n2);
+    expect(nh3).toBeGreaterThanOrEqual(2 * n2 - 2);
+    // 原料はどこからも作っていない（手で入れた）ので、差は使ったぶんのマイナス
+    expect(row('N2').net).toBeLessThan(0);
+    expect(row('NH3').lost).toBe(0);
+    // 採取機で採ったものは「作った」に入り、廃棄口へ捨てたものは「捨てた」に入る
+    const w2 = newWorld();
+    place(w2, 'extractor', 10, 10, 0); place(w2, 'belt', 11, 10, 0); place(w2, 'vent', 12, 10, 0);
+    run(w2, 20);
+    const b2 = balanceOf(w2, 1), air = b2.rows.find((r) => r.s === 'air')!;
+    expect(air.made).toBeGreaterThan(0);
+    expect(Math.round(air.lost * b2.min)).toBe(w2.vented.air);
+    // 差は、まだベルトの上にあるぶん
+    expect(Math.round(air.net * b2.min)).toBe(at(w2, 11, 10)!.item?.n ?? (at(w2, 11, 10)!.item ? 1 : 0));
+  });
+
+  it('1 時間の記録：5 分より古い流れは 1 分ごとにまとまり、合計だけを小さく保存する', async () => {
+    const { deliverySeries, hourTrend, periodBuckets, stockSeries, recentRate } = await import('../src/engine/flow');
+    const { minutes, HOUR_KEEP, beltPassed } = await import('../src/engine/world');
+    const w = airLine();
+    run(w, 7 * 60, 0.25);
+    const ms = minutes(w);
+    expect(w.hour.length).toBeGreaterThanOrEqual(1);
+    expect(ms.length).toBe(8); // 0〜7 分め（最後は途中）
+    expect(ms.reduce((a, m) => a + m.deliver, 0)).toBe(w.delivered.air);
+    // 期間の切り替え：1 分は 10 秒ごと 6 本、5 分は 30 本、すべては 1 分ごと
+    expect(deliverySeries(w, 1).vals.length).toBe(6);
+    expect(deliverySeries(w, 5).vals.length).toBe(30);
+    expect(deliverySeries(w, 0).vals.reduce((a, v) => a + v, 0)).toBe(w.delivered.air);
+    expect(periodBuckets(w, 0).step).toBe(60);
+    const tr = hourTrend(w);
+    expect(tr.vals.length).toBe(8);
+    expect(tr.avg).toBeGreaterThan(20);
+    expect(tr.recent).not.toBeNull();
+    expect(recentRate(w)).toBeGreaterThan(20);
+    // ベルトごとの通った数
+    expect(beltPassed(at(w, hx - 1, hy)!)).toBeGreaterThanOrEqual(w.delivered.air - 99);
+    // 在庫の推移：いちばん多い在庫が並び、最後はいまの在庫
+    const st = stockSeries(w, 5);
+    expect(st.subs[0]).toBe('air');
+    expect(st.series[0][st.series[0].length - 1]).toBe(w.stock.air);
+    expect(st.series[0][0]).toBeLessThan(w.stock.air);
+    // 保存：1 分ごとの合計だけ（数の並び）。読み直しても 1 時間の記録は続く
+    const json = serialize(w), d = JSON.parse(json);
+    expect(d.hist.length).toBe(8);
+    expect(JSON.stringify(d.hist).length).toBeLessThan(400);
+    const r = deserialize(json)!;
+    expect(r.hour.reduce((a, m) => a + m.deliver, 0)).toBe(w.delivered.air);
+    expect(r.buckets.length).toBe(0);
+    run(r, 30, 0.25);
+    expect(minutes(r).reduce((a, m) => a + m.deliver, 0)).toBe(r.delivered.air);
+    // 60 分より古い分は捨てる。壊れた行は読まない
+    const big = newWorld();
+    for (let i = 0; i < 90 * 6 + 1; i++) { big.playMs = i * 10000; step(big, 0.001); }
+    expect(minutes(big).length).toBeLessThanOrEqual(HOUR_KEEP + 1);
+    expect(big.hour.length).toBeLessThanOrEqual(HOUR_KEEP);
+    const bad = JSON.parse(serialize(big));
+    bad.hist = [[1, 2, 3], ['x', 1, 1, 1, 1, 1], [5, 1, 0, 0, 0, 2], [4, -1, 0, 0, 0, 0]];
+    expect(deserialize(JSON.stringify(bad))!.hour).toEqual([{ t: 5, deliver: 1, goal: 0, vent: 0, spill: 0, made: 2 }]);
+  });
+
+  it('詰まりの元・止まっている理由・装置の種類ごと', async () => {
+    const { bottlenecks, machineTypes, stopReasons } = await import('../src/engine/flow');
+    const w = newWorld();
+    // 出口のない電解槽（詰まる）、原料の来ない反応器（待つ）、未設定の反応器
+    place(w, 'electrolyzer', 10, 10, 0);
+    const el = at(w, 10, 10)!;
+    configure(el, rec('water-electrolysis'), ['H2', 'O2'], ['c', 'a']);
+    place(w, 'reactor', 20, 10, 0); configure(at(w, 20, 10)!, rec('haber-bosch'), ['NH3']);
+    place(w, 'reactor', 30, 10, 0);
+    for (let i = 0; i < 20 * 60; i++) { el.inBuf = { H2O: 8 }; step(w, 1 / 60); }
+    const b = bottlenecks(w);
+    expect(b.jammed[0].e).toBe(el);
+    expect(b.jammed[0].why).toBe('jam');
+    expect(b.starved.map((x) => x.e)).toContain(at(w, 20, 10));
+    const st = stopReasons(w);
+    expect(st).toMatchObject({ run: 0, wait: 1, jam: 1, unset: 1, bad: 0 });
+    expect(st.time[2]).toBeGreaterThan(10);
+    const types = machineTypes(w);
+    expect(types.find((t) => t.kind === 'reactor')).toMatchObject({ n: 2, set: 1, wait: 1 });
+    expect(types.find((t) => t.kind === 'electrolyzer')).toMatchObject({ n: 1, set: 1, jam: 1 });
+    // 使わない物質が入口に来た装置は、詰まりの先頭に出る
+    at(w, 20, 10)!.bad = 'O2'; at(w, 20, 10)!.badT = w.tick;
+    expect(bottlenecks(w).jammed[0]).toMatchObject({ why: 'bad' });
+    expect(stopReasons(w).bad).toBe(1);
+  });
+
+  it('指令の見込み：4 分の 1 を終えた時点で 1 回だけ記録し、終えた指令の一覧に、評価・かかった時間と並ぶ', async () => {
+    const { noteEta, goalRecords } = await import('../src/engine/flow');
+    const { w, e } = reactorLine();
+    // 長く遊んだあとに始めた指令でも、指令を始めてからの速さで見積もる（直近 1 分で割ると、始めのうちは遅く見える）
+    w.playMs = 25 * 60000;
+    let noted = 0;
+    for (let i = 0; i < 40 * 60 && w.progress[0] === 2; i++) { e.inBuf = { N2: 4, H2: 12 }; step(w, 1 / 60); if (i % 30 === 0 && noteEta(w)) noted++; }
+    expect(w.progress[0]).toBe(3);
+    expect(noted).toBe(1);
+    const est = w.eta['0:2'], took = w.goalMs['0:2'] / 1000;
+    expect(est).toBeGreaterThan(0);
+    // 速さがほぼ一定なので、見込みは実際に近い
+    expect(Math.abs(est - took)).toBeLessThan(took * 0.6 + 3);
+    const ch0 = goalRecords(w).find((c) => c.ch === 0)!;
+    expect(ch0.goals.length).toBe(3);
+    expect(ch0.goals[2]).toMatchObject({ s: 'NH3', eta: est, tested: false });
+    expect(ch0.goals[2].sec).toBeCloseTo(took, 3);
+    expect(ch0.goals[2].grade).toBeDefined();
+    // 前の 2 つは時間の記録がない（ここでは飛ばした）
+    expect(ch0.goals[0].sec).toBeNull();
+    // 保存して読み直しても残る。形の合わない値は捨てる
+    const d = JSON.parse(serialize(w));
+    d.eta.x = 3; d.eta['1:0'] = 'a';
+    expect(deserialize(JSON.stringify(d))!.eta).toEqual({ '0:2': est });
+    // 指令を終えると、納品所から光の柱を出すきっかけを残す
+    expect(w.fx.some((f) => f.type === 'goal')).toBe(true);
+  });
+
+  it('実績：条件を満たすと 1 度だけ得て、得た時刻をセーブに残す', async () => {
+    const { ACHIEVEMENTS, checkAchievements } = await import('../src/engine/achieve');
+    const { dayKey } = await import('../src/engine/fsrs');
+    expect(ACHIEVEMENTS.length).toBeGreaterThanOrEqual(30);
+    expect(new Set(ACHIEVEMENTS.map((a) => a.id)).size).toBe(ACHIEVEMENTS.length);
+    const w = newWorld(), T0 = new Date(2026, 10, 12, 15, 0).getTime();
+    expect(checkAchievements(w, T0)).toEqual([]);
+    w.learned.push('haber-bosch');
+    w.grades['0:0'] = 'S';
+    for (let i = 0; i < 7; i++) w.revDays[dayKey(T0 - i * 86400000)] = [i === 3 ? 12 : 4, 3];
+    const got = checkAchievements(w, T0).map((a) => a.id);
+    expect(got).toEqual(expect.arrayContaining(['react-1', 'grade-s', 'streak-3', 'streak-7', 'review-10']));
+    expect(got).not.toContain('streak-30');
+    expect(w.ach['react-1']).toBe(T0);
+    expect(checkAchievements(w, T0 + 1000)).toEqual([]);
+    // 納品
+    const line = airLine();
+    run(line, 30, 0.25);
+    expect(checkAchievements(line, T0).map((a) => a.id)).toContain('deliver-1');
+    // 保存と読み直し。数でない値は捨てる
+    const d = JSON.parse(serialize(w));
+    d.ach.bogus = 'x';
+    const r = deserialize(JSON.stringify(d))!;
+    expect(r.ach['react-1']).toBe(T0);
+    expect(r.ach.bogus).toBeUndefined();
+    expect(checkAchievements(r, T0)).toEqual([]);
+  });
+
+  it('生産の流れ：指令の物質から原料までの反応の木。工場にある工程と足りない工程を分ける', async () => {
+    const { chainOf, chainGaps } = await import('../src/engine/chain');
+    const w = newWorld();
+    const t = chainOf(w, 'NH3');
+    expect(t.kind).toBe('recipe');
+    expect(t.recipe!.id).toBe('haber-bosch');
+    expect(t.have).toBe(false);
+    const n2 = t.inputs.find((n) => n.s === 'N2')!, h2 = t.inputs.find((n) => n.s === 'H2')!;
+    expect(n2.recipe!.id).toBe('air-distillation');
+    expect(n2.inputs[0]).toMatchObject({ s: 'air', kind: 'raw', have: false, where: '大気' });
+    expect(h2.recipe!.machine).toBe('electrolyzer');
+    // 工場に置くと、その工程は「ある」になり、そこへ移れる
+    place(w, 'reactor', 10, 10, 0);
+    configure(at(w, 10, 10)!, rec('haber-bosch'), ['NH3']);
+    place(w, 'extractor', 20, 20, 0);
+    const t2 = chainOf(w, 'NH3');
+    expect(t2.have).toBe(true);
+    expect(t2.at).toBe(at(w, 10, 10));
+    expect(t2.inputs.find((n) => n.s === 'N2')!.inputs[0].have).toBe(true);
+    const gaps = chainGaps(t2);
+    expect(gaps.all).toBeGreaterThan(gaps.miss);
+    expect(gaps.miss).toBeGreaterThan(0);
+    // 鉛蓄電池の放電と充電を両方置くと、PbSO₄ は放電から戻ってくる（循環）
+    const w2 = newWorld();
+    w2.seen = CHAPTERS.length;
+    place(w2, 'battery', 10, 10, 0); configure(at(w2, 10, 10)!, rec('lead-acid'), ['PbSO4', 'H2O']);
+    place(w2, 'electrolyzer', 20, 10, 0); configure(at(w2, 20, 10)!, rec('lead-charge'), ['Pb', 'PbO2', 'H2SO4'], ['c', 'a', 'c']);
+    const lead = chainOf(w2, 'e');
+    expect(lead.recipe!.id).toBe('lead-acid');
+    type Node = ReturnType<typeof chainOf>;
+    const flat = (n: Node): Node[] => [n, ...n.inputs.flatMap(flat)];
+    expect(flat(lead).some((n) => n.kind === 'loop')).toBe(true);
+    // どの指令の物質でも、木は有限で、反応の節はその物質を作る反応になっている
+    const all = newWorld();
+    all.seen = CHAPTERS.length;
+    for (const g of GOALS) for (const s of [g.s, ...(g.also ?? [])]) {
+      const nodes = flat(chainOf(all, s));
+      expect(nodes.length, s).toBeLessThan(200);
+      for (const n of nodes) {
+        if (n.kind === 'recipe' || n.kind === 'deep') expect(n.recipe!.outputs.some(([x]) => x === n.s), `${s}:${n.s}`).toBe(true);
+        else expect(n.inputs.length).toBe(0);
+      }
+      // いちばん上が試薬棚の試薬になるのは、仕分けの試料だけ（試薬をそのまま納めても数えない）
+      if (nodes[0].kind === 'reagent') expect(SETS.some((x) => x.members.includes(s)), s).toBe(true);
+    }
+  });
+
+  it('表の書き出し（CSV）と、列車の画面効果のきっかけ', async () => {
+    const { csvOf, statsCsv } = await import('../src/engine/flow');
+    expect(csvOf([['a,b', 'x"y', 1.234, 5], ['改行\nあり']])).toBe('"a,b","x""y",1.23,5\r\n"改行\nあり"');
+    const w = airLine();
+    run(w, 20, 0.25);
+    const csv = statsCsv(w, 5);
+    expect(csv).toContain('物質ごとの収支');
+    expect(csv).toContain('空気');
+    expect(csv).toContain('終えた指令');
+    // 列車が降ろす駅に着くと、降ろした数つきのきっかけを残す
+    const t = newWorld();
+    place(t, 'station', 10, 10, 0); place(t, 'station', 40, 10, 0);
+    at(t, 40, 10)!.role = 'out';
+    at(t, 10, 10)!.buf = ['N2', 'N2', 'N2', '!O2'];
+    run(t, 6);
+    const fx = t.fx.filter((f) => f.type === 'train');
+    expect(fx.length).toBe(1);
+    expect(fx[0]).toMatchObject({ x: 41, y: 11, n: 4, s: 'N2' });
+  });
+});

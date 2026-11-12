@@ -18,6 +18,7 @@ import { washById } from '../content/extract';
 import { AMINO_ORDER, aminoOf, phOf, poleAt, type AminoKey } from '../content/phoresis';
 import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/sep';
 import { drawFar, farBegin, farEnd } from './far';
+import { drawGlints, hubMeter, mapStats, noteFx } from './mapfx';
 
 export interface Camera { x: number; y: number; z: number }
 /** WebGL の合成段に渡す層。glow：光っている所（黒地に加算で描く）、mask：効果をかける所（赤＝熱のゆらぎ、青＝水面）。どちらも画面と同じ座標で描ける */
@@ -491,6 +492,7 @@ const born = new WeakMap<Ent, number>();
 
 function spawn(w: World, P: Palette) {
   for (const f of w.fx.splice(0)) {
+    if (noteFx(f)) continue; // 列車の到着と指令の達成は mapfx.ts だけで描く
     if (f.type === 'deliver') {
       particles.push({ x: f.x + 0.5, y: f.y + 0.2, vx: 0, vy: -0.9, age: 0, life: 0.9, color: P.red, text: '+1', r: 0 });
     } else if (f.type === 'vent') {
@@ -1233,6 +1235,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   if (!off) {
     if (three) { use(T!); const c = rgb01(light ? '#8a8d93' : '#2a2023'); three.boxes.push(hr.x + 0.04, hr.y + 0.04, hr.s - 0.08, TOP_H, c[0], c[1], c[2], 1); }
     hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
+    hubMeter(ctx, P, w, sx(hr.x + hr.s / 2), sy(hr.y), z);
     use(base);
   }
   // 納品所の口は、赤く脈打つ光。熱で上の空気がゆらぐ
@@ -1360,6 +1363,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     }
   }
 
+  // ---- 稼働率の色分けと、ベルトの毎分の数（統計の重ね表示のあいだ） ----
+  mapStats(ctx, P, w, !!view.stats, sx, sy, z, inView);
   // ---- 稼働率の札：装置の上に、直近の稼働率と止まっている理由を出す ----
   if (view.stats && z >= 13) {
     const GOOD = '#2f8f55', WARN = '#c9821a';
@@ -1395,7 +1400,24 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       ctx.strokeStyle = P.hi; ctx.lineWidth = 2; ctx.setLineDash([7, 5]);
       rr(ctx, bx, by, bw, bh, punk ? 0 : 8); ctx.stroke();
       ctx.setLineDash([]);
-      const name = label(d.s), tx = `${name}　${d.perMin >= 10 ? Math.round(d.perMin) : d.perMin.toFixed(1)}/分　${d.n}台`;
+      // 区画の名前：いちばん多くの装置が作っている物質の名前で呼ぶ（「アンモニア工場」）
+      const title = `${d.s === 'e' ? '電池' : sub(d.s).name.replace(/（.*）| .*$/g, '')}工場`, rate = d.perMin >= 10 ? String(Math.round(d.perMin)) : d.perMin.toFixed(1);
+      if (z < 10 && bw >= 90 && bh >= 40) {
+        // うんと引いた視点：区画の中に、大きく名前を書く
+        const big = Math.max(13, Math.min(30, bw * 0.14, bh * 0.36));
+        // 区画が画面からはみ出していても、見えている部分の真ん中に書く
+        const mx = (Math.max(bx, 0) + Math.min(bx + bw, cw)) / 2, my = (Math.max(by, 0) + Math.min(by + bh, ch)) / 2;
+        ctx.textAlign = 'center';
+        ctx.font = `800 ${big}px ${FONT_UI}`; ctx.lineJoin = 'round';
+        ctx.lineWidth = Math.max(3, big * 0.22); ctx.strokeStyle = punk ? '#0b0d10' : P.paper; ctx.strokeText(title, mx, my - big * 0.3);
+        ctx.fillStyle = punk ? '#eef0ea' : P.ink; ctx.fillText(title, mx, my - big * 0.3);
+        ctx.font = `700 ${big * 0.5}px ${FONT_UI}`;
+        const sub2 = `毎分 ${rate}・${d.n} 台`;
+        ctx.lineWidth = Math.max(2.5, big * 0.12); ctx.strokeText(sub2, mx, my + big * 0.42); ctx.fillStyle = d.perMin > 0 ? (punk ? '#eef0ea' : P.ink) : P.red; ctx.fillText(sub2, mx, my + big * 0.42);
+        ctx.textAlign = 'left';
+        continue;
+      }
+      const name = label(d.s), tx = `${title}${name !== title.slice(0, -2) ? ` ${name}` : ''}　${rate}/分　${d.n}台`;
       ctx.font = `700 ${fs}px ${FONT_UI}`;
       const tw = ctx.measureText(tx).width, pw = tw + 34, ph = 22, px = Math.max(4, Math.min(cw - pw - 4, bx + bw / 2 - pw / 2)), py = by - ph - 3;
       ctx.fillStyle = punk ? '#0b0d10' : P.plate;
@@ -1579,6 +1601,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     }
   }
   ctx.globalAlpha = 1;
+  // ---- 光の効果（納品の光の尾・反応の光・列車の到着・指令の光の柱） ----
+  drawGlints(ctx, G, P, sx, sy, z, dt, cw, ch, three ? { screen: three.screen, project: three.project } : null);
 
   use(base);
   if (punk) ambient(ctx, P, cw, ch, t, dt, sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), z);

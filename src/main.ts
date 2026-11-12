@@ -26,6 +26,9 @@ import { palette } from './ui/theme';
 import { FLAMES } from './content/looks';
 import { decodeBlueprint, encodeBlueprint, type Stamp } from './engine/blueprint';
 import { showStats, type StatsCtx } from './ui/stats';
+import { paintPts, showAchievements, statsTick } from './ui/achieve';
+import { showChain } from './ui/chain';
+import { showGoalLog } from './ui/goals';
 import { setSound, setVolume, sfx, soundOn, unlockAudio } from './ui/sound';
 import { musicOn, musicTick, setMusic, setMusicVolume } from './ui/music';
 import { fmtDate, fmtTime, initTitle, skinButtons, slotName, store, themeButtons } from './ui/title';
@@ -680,6 +683,8 @@ function boot(data: HotData) {
       h('div', { class: 'menu' },
         item('m-chapters', '指令の一覧（章を切り替える）', () => showChapters(panel())),
         item('m-stats', '統計（納品の速さ・装置の稼働率・学習の進み）', () => showStats(statsCtx())),
+        item('m-chain', '生産の流れ（いまの指令を原料までたどる）', () => showChain(statsCtx())),
+        item('m-goals', '終えた指令（評価・かかった時間・見込み）', () => showGoalLog(panel())),
         item('m-where', 'どこで作っている？（物質から装置を探す）', () => showWhere()),
         ...b2.menuItems(item),
         item('m-album', 'アルバム（達成した瞬間の工場の写真）', () => showAlbum()),
@@ -700,6 +705,7 @@ function boot(data: HotData) {
         item('m-syllabus', '範囲表（入試範囲のどこまで進んだか）', () => showSyllabus(panel())),
         item('m-log', '記録（間違えたところ）', () => showLog(panel())),
         item('m-week', '週の報告（直近 7 日・試験までの復習の見込み）', () => showWeek(panel())),
+        item('m-ach', '実績（工場・納品・指令・学習の節目）', () => showAchievements(panel())),
         item('m-rank', 'ランキング', () => showRanking(panel()))),
       h('h3', {}, '設定'),
       h('div', { class: 'menu' },
@@ -1886,7 +1892,7 @@ function boot(data: HotData) {
       return;
     }
     const g = currentGoal(world), ch2 = CHAPTERS[world.chapter];
-    $('pts').textContent = String(world.points);
+    paintPts($('pts'), world);
     // 強化か研究ができるだけの研究点がたまったら、ボタンに印をつける
     if (world.tick % 30 === 0) {
       const can = (['extract', 'belt', 'machine'] as const).some((k) => { const c = UPGRADE_COST[world.up[k]]; return c !== undefined && world.points >= c; }) || RESEARCH.some((r) => !has(world, r.id) && !researchBlock(world, r));
@@ -2050,6 +2056,7 @@ function boot(data: HotData) {
         if (ev === 'all-done') { toast('すべての指令を終えた。', 6000); sfx.goal(); }
         save();
       }
+      if (!sandbox) statsTick(world); // 指令の見込みの記録と、実績（半秒に 1 回）
       sinceSave += dt;
       if (sinceSave > 5) { sinceSave = 0; save(); saveCam(); paintSync(); }
       if (!warned && pf.breakMin && now - began > pf.breakMin * 60000) { warned = true; breakReminder(pf.breakMin); }
