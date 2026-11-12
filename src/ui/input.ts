@@ -16,6 +16,11 @@ export interface InputHandlers {
   groundMode?(): boolean;
   /** なぞり書きを終えて指を離した */
   end?(): void;
+  /** なぞり書きを途中でやめた（2 本目の指が触れた・指が取り消された・長押しの見本が出てすぐに、動かさずに離した）。
+   *  置く前の見本や、ずらしかけたものは、決めずに捨てる。もう引いたベルトなどは、そのまま。ないときは end を呼ぶ */
+  abort?(): void;
+  /** タップとは言えない長さまで、指を動かさずに押し続けた（hold が何も始めなかったとき） */
+  press?(tx: number, ty: number): void;
   /** マウスが乗っているマス。外れたら null */
   hover?(t: [number, number] | null): void;
   /** 2 本指で軽くたたいた（元に戻す） */
@@ -48,7 +53,10 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
   let pinch: { d: number; cx: number; cy: number } | null = null;
   let vx = 0, vy = 0, lastMove = 0;
   let holdTimer = 0;
-  const HOLD_MS = 260;
+  /** 長押しの見本が出るまで。TAP_MS より前に、ほとんど動かさずに離したら、見本が出ていてもタップにする（ゆっくりめのタップ） */
+  const HOLD_MS = 260, TAP_MS = 500;
+  /** 長押し（hold）が始まったか。指が触れた所から 8 ピクセル以上動いたことがあるか */
+  let held = false, slid = false;
   // 何本かの指でたたく：最初の指から 250 ms 以内にほかの指が触れ、350 ms 以内に、ほとんど動かさずに全部離れたとき
   let firstDown = 0, camAtDown = { x: 0, y: 0, z: 0 };
   let multi: { n: number; moved: number } | null = null;
@@ -106,6 +114,7 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
       moved = false;
       panning = false;
       last = null;
+      held = slid = false;
       h.begin();
       // 押し続け：置く前の見本を出して、指で場所を選べるようにする
       clearTimeout(holdTimer);
@@ -114,14 +123,20 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
         holdTimer = window.setTimeout(() => {
           if (!start || moved || pts.size !== 1) return;
           const st = toTile(sx0, sy0), g = groundTile(sx0, sy0);
-          if (!h.hold!(st[0], st[1], g)) return;
-          moved = true; panning = false; last = h.groundMode?.() ? g : st;
+          if (!h.hold!(st[0], st[1], g)) {
+            // 何も始めなかった：タップとは言えない長さまで押し続けたら、知らせる
+            if (h.press) holdTimer = window.setTimeout(() => { if (start && !moved && pts.size === 1) h.press!(st[0], st[1]); }, TAP_MS - HOLD_MS);
+            return;
+          }
+          moved = true; held = true; panning = false; last = h.groundMode?.() ? g : st;
         }, HOLD_MS);
       }
-    } else if (pts.size === 2) {
+    } else {
       clearTimeout(holdTimer);
-      if (start && moved && !panning) h.end?.();
+      // なぞり書きの途中で 2 本目の指が触れた：拡大・移動に移る。置く前の見本や、ずらしかけたものは決めない
+      if (start && moved && !panning) { if (h.abort) h.abort(); else h.end?.(); }
       start = null;
+      // 指の組が替わるたびに、拡大・移動の基準を取り直す（前の 2 本の幅と比べると、急に寄ったり引いたりする）
       pinch = pinchState();
     }
   });
@@ -161,6 +176,7 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
       clamp();
       return;
     }
+    if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) >= 8) slid = true;
     at = [ev.clientX, ev.clientY];
     walk(ev.clientX, ev.clientY);
   });
@@ -185,9 +201,15 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
     if (!pts.delete(ev.pointerId)) return;
     at = null;
     clearTimeout(holdTimer);
-    if (pts.size === 0 && start && moved && !panning) h.end?.();
-    if (pts.size < 2) pinch = null;
-    if (pts.size === 0 && start && !moved && ev.type === 'pointerup') {
+    // 長押しの見本が出てすぐ（TAP_MS より前）に、動かさずに離した：ゆっくりめのタップ。見本やずらしかけたものは捨てて、タップにする
+    const slowTap = pts.size === 0 && !!start && held && !slid && ev.type === 'pointerup' && performance.now() - firstDown < TAP_MS;
+    if (pts.size === 0 && start && moved && !panning) {
+      // 指が取り消された（ほかの操作に取られた）ときも、置く前の見本は決めない
+      if ((slowTap || ev.type === 'pointercancel') && h.abort) h.abort();
+      else h.end?.();
+    }
+    pinch = pts.size >= 2 ? pinchState() : null;
+    if (pts.size === 0 && start && (!moved || slowTap) && ev.type === 'pointerup') {
       const [tx, ty] = toTile(ev.clientX, ev.clientY);
       h.tap(tx, ty);
     }

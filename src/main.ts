@@ -9,7 +9,7 @@ import { productsOf, recipeById } from './content/recipes';
 import { about, chip, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
 import { attachInput, Z_MAX, Z_MIN, Z_MIN_3D, type InputHandlers } from './ui/input';
-import { FAR_Z } from './ui/far';
+import { FAR_Z, isFar } from './ui/far';
 import { numPad, typeNumber, reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showSampler, showTestOut, showPhoresis, showSettler, showSignal, showStation, showTank, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
 import { showDrills, showEssays, showStructure } from './ui/practice';
 import { burst, draw, setCalm, type Camera } from './ui/render';
@@ -1396,6 +1396,10 @@ function boot(data: HotData) {
   /** 線路をなぞり始められるマス：駅か線路の上、またはその隣 */
   const railStart = (x: number, y: number) => [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => at(world, x + dx, y + dy)?.kind === 'station' || world.rails.has(`${x + dx},${y + dy}`));
   const pullsBelt = (x: number, y: number) => { const e = at(world, x, y); return !!e && e.kind !== 'hub' && e.kind !== 'vent'; };
+  /** いま地図を引いた視野（戦略図）で描いているか。絵と同じ境（7.5〜8.5 のずらし幅）で決める。立体表示は、いつも近くの絵 */
+  const farView = () => !(threeOn() && gw > 0) && isFar(cv, cam);
+  /** 長押しでつかむ前に選んでいたもの（ずらすのをやめたら、選びを戻す） */
+  let grabWas: Ent | null = null, farTold = 0;
   const H: Required<InputHandlers> = {
     groundMode: () => !!moving,
     minZoom: zMin,
@@ -1407,13 +1411,20 @@ function boot(data: HotData) {
       if (b2.locked()) return false;
       // 「見る」のとき、置いたものを長押しすると、つかんでずらせる（移す量は、指の下の地面のマスで測る）
       const held = at(world, x, y);
-      if (tool === 'pan' && held && held.kind !== 'hub' && cam.z >= FAR_Z) { moving = { es: [held], gx: g ? g[0] : x, gy: g ? g[1] : y, dx: 0, dy: 0, area: false }; selected = held; sfx.tap(); buzz(15); return true; }
+      if (tool === 'pan' && held && held.kind !== 'hub' && !farView()) { moving = { es: [held], gx: g ? g[0] : x, gy: g ? g[1] : y, dx: 0, dy: 0, area: false }; grabWas = selected; selected = held; sfx.tap(); buzz(15); return true; }
       if (!isBuild(tool) || tool === 'belt') return false;
-      // 置けない所を長押ししたら、理由を知らせる（空いていても置けなければ、見本は赤く出る）
-      if (at(world, x, y)) { b2.whyNot(tool, x, y); return false; }
+      // 置けない所を長押ししたら、理由を知らせる（空いていても置けなければ、見本は赤く出る）。設備のあるマスは、ゆっくりめのタップと分けるため press で知らせる
+      if (at(world, x, y)) return false;
       holding = true; hover = [x, y];
       if (!b2.whyNot(tool, x, y)) sfx.tap();
       return true;
+    },
+    press(x, y) { if (isBuild(tool) && tool !== 'belt' && at(world, x, y) && !b2.locked()) b2.whyNot(tool, x, y); },
+    // なぞり書きを途中でやめた：置く前の見本と、ずらしかけたものは、決めずに捨てる（つかむ前に選んでいたものに戻す）
+    abort() {
+      if (moving) { if (!moving.area) selected = grabWas; moving = null; }
+      if (holding) { holding = false; hover = null; }
+      H.end();
     },
     end() {
       b2.strokeEnd();
@@ -1437,8 +1448,18 @@ function boot(data: HotData) {
       else if (hv) b2.whyNot(tool, hv[0], hv[1]);
     },
     hover(t) { if (!holding) hover = t; cv.classList.toggle('over-ent', !!t && tool === 'pan' && !!at(world, t[0], t[1])); },
-    // 引いた視野（戦略図）では、「見る」でなぞると、いつも地図が動く（設備が小さすぎて、ベルトを引くつもりでつかむことはない）
-    mode: (x, y) => (b2.locked() ? 'pan' : tool === 'rail' ? (!floor && railStart(x, y) ? 'stroke' : 'pan') : tool === 'area' ? (blueprint ? 'pan' : 'stroke') : tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y) && cam.z >= FAR_Z) ? 'stroke' : 'pan'),
+    mode(x, y) {
+      if (b2.locked()) return 'pan';
+      if (tool === 'area') return blueprint ? 'pan' : 'stroke';
+      const m = tool === 'rail' ? (!floor && railStart(x, y) ? 'stroke' : 'pan') : tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y)) ? 'stroke' : 'pan';
+      // 引いた視野（戦略図）では、1 本指でなぞると、どの道具でもいつも地図が動く。1 マスが数ピクセルしかなく、ねらったマスをなぞれない
+      // （少し動かすつもりで、ベルトや線路を何十マスも引いたり消したりしてしまう）。範囲を囲むのは、粗くてもよいので、そのまま
+      if (m === 'stroke' && farView()) {
+        if (tool !== 'pan' && Date.now() - farTold > 60000) { farTold = Date.now(); toast('引いた地図では、なぞると地図が動く（1 マスが小さすぎて、ねらってなぞれない）。ベルトや線路を引く・なぞって消すのは、寄ってから。', 3200); }
+        return 'pan';
+      }
+      return m;
+    },
     tap(x, y) {
       // 「ずらす」を押したあとのタップ：その場所へ（2×2 の装置は、タップしたマスが左上になる）
       if (moveArm) {
@@ -1511,7 +1532,8 @@ function boot(data: HotData) {
   // 画面のマスに、いま見ている階のずれを足してから渡す
   const F = (y: number) => y + floor * FLOOR_DY;
   const input = attachInput(cv, cam, {
-    begin: H.begin, end: H.end,
+    begin: H.begin, end: H.end, abort: H.abort,
+    press: (x, y) => H.press(x, F(y)),
     mode: (x, y) => H.mode(x, F(y)),
     tap: (x, y) => H.tap(x, F(y)),
     stroke: (x, y, prev) => H.stroke(x, F(y), prev && [prev[0], F(prev[1])]),
@@ -2081,10 +2103,10 @@ function boot(data: HotData) {
         // 光の層は黒地に加算、効果の層は黒地（何もない所は効果なし）
         for (const c2 of [glowCtx, maskCtx]) { c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'source-over'; c2.globalAlpha = 1; c2.fillStyle = '#000'; c2.fillRect(0, 0, glowCv.width, glowCv.height); c2.setTransform(fxK, 0, 0, fxK, 0, 0); c2.globalCompositeOperation = 'lighter'; }
         // 高さの層は、地面の高さ（0.1）で塗ってから、高いものを「明るいほうを残す」で重ねる
-        if (gfxTier === 2 && !(three && gw > 0) && cam.z >= FAR_Z) { heightCtx.setTransform(1, 0, 0, 1, 0, 0); heightCtx.globalCompositeOperation = 'source-over'; heightCtx.globalAlpha = 1; heightCtx.fillStyle = 'rgb(26,26,26)'; heightCtx.fillRect(0, 0, heightCv.width, heightCv.height); heightCtx.setTransform(fxK, 0, 0, fxK, 0, 0); heightCtx.globalCompositeOperation = 'lighten'; }
+        if (gfxTier === 2 && !(three && gw > 0) && !isFar(cv, cam)) { heightCtx.setTransform(1, 0, 0, 1, 0, 0); heightCtx.globalCompositeOperation = 'source-over'; heightCtx.globalAlpha = 1; heightCtx.fillStyle = 'rgb(26,26,26)'; heightCtx.fillRect(0, 0, heightCv.width, heightCv.height); heightCtx.setTransform(fxK, 0, 0, fxK, 0, 0); heightCtx.globalCompositeOperation = 'lighten'; }
       }
       // 高さの層（影とくぼみの陰り）は、引いた視野では使わない（1 マスが数ピクセルでは影が見えず、合成の手間だけかかる）
-      const useH = fx && gfxTier === 2 && !(three && gw > 0) && cam.z >= FAR_Z;
+      const useH = fx && gfxTier === 2 && !(three && gw > 0) && !isFar(cv, cam);
       if (t3) {
         // 立体表示：見えている範囲を囲む長方形を、地面の層と天面の層に描く。#cv は透明にして、画面にじかに描くものだけを載せる
         const c3 = camera3(cam, cw, ch), cam2 = { x: (c3.x0 + c3.x1) / 2, y: (c3.y0 + c3.y1) / 2, z: cam.z };
