@@ -1,16 +1,18 @@
 import { CHAPTERS, TOTAL_GOALS } from './content/goals';
+import { RESEARCH } from './content/research';
 import { HUB_CENTER, LAND, ZONES, hubRect, resourceAt, zoneAt } from './content/map';
 import { ELEMENTS } from './content/elements';
 import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
-import { relearnReady, MOVERS, JAM_SEC, machineState, freeLine, lineNo, LINE_MAX, BIG, FEED_TIERS, flamesFed, addRail, removeRail, setRailMask, stationRoutes, FLOOR_DY, floorOf, groundY, has, liftPartner, footprint, inDoors, maxLanes, mergeDirs, slotCount, slotPort, at, autoDir, beltSpeed, configure, currentGoal, extractInterval, fedTier, flowStats, goalRate, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
-import { recipeById } from './content/recipes';
+import { moveEnts, moveRails, researchBlock, UPGRADE_COST, signalOn, stationCap, TANK_CAP, type Item, relearnReady, MOVERS, JAM_SEC, machineState, freeLine, lineNo, LINE_MAX, BIG, FEED_TIERS, flamesFed, addRail, removeRail, setRailMask, stationRoutes, FLOOR_DY, floorOf, groundY, has, liftPartner, footprint, inDoors, maxLanes, mergeDirs, slotCount, slotPort, at, autoDir, beltSpeed, configure, currentGoal, extractInterval, fedTier, flowStats, goalRate, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { productsOf, recipeById } from './content/recipes';
 import { about, chip, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
-import { attachInput, Z_MIN, type InputHandlers } from './ui/input';
+import { attachInput, Z_MAX, Z_MIN, type InputHandlers } from './ui/input';
 import { numPad, typeNumber, reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showSampler, showTestOut, showPhoresis, showSettler, showSignal, showStation, showTank, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
 import { showDrills, showEssays, showStructure } from './ui/practice';
-import { draw, type Camera } from './ui/render';
+import { burst, draw, setCalm, type Camera } from './ui/render';
+import { applyPrefs, buzz, onPrefs, prefs, setPrefs, type Prefs } from './ui/prefs';
 import { lanePaths, type LaneTile } from './engine/lanes';
 import { CASES, CASE_KIND, CASE_REWARD, limitStock, type Case, type CaseState } from './engine/cases';
 import { appearance, equationOf } from './content/looks';
@@ -23,15 +25,16 @@ import { palette } from './ui/theme';
 import { FLAMES } from './content/looks';
 import { decodeBlueprint, encodeBlueprint, type Stamp } from './engine/blueprint';
 import { showStats, type StatsCtx } from './ui/stats';
-import { setSound, sfx, soundOn, unlockAudio } from './ui/sound';
-import { musicOn, musicTick, setMusic } from './ui/music';
-import { initTitle, skinButtons, slotName, store, themeButtons } from './ui/title';
-import { SLEEP_DEFAULT, duskOf, eveningWindow, hhmm, isClosed, morningDue, nightDone, nightSetIds, windDown, type SleepCfg } from './engine/sleep';
+import { setSound, setVolume, sfx, soundOn, unlockAudio } from './ui/sound';
+import { musicOn, musicTick, setMusic, setMusicVolume } from './ui/music';
+import { fmtDate, fmtTime, initTitle, skinButtons, slotName, store, themeButtons } from './ui/title';
+import { SLEEP_DEFAULT, duskOf, eveningWindow, hhmm, isClosed, minutesToBed, morningDue, nightDone, nightSetIds, windDown, type SleepCfg } from './engine/sleep';
 import { capByExams, dayKey } from './engine/fsrs';
 import { buildQueue, partnerOf, quizFor } from './engine/quiz';
 import { addPlayTime, canTestOut } from './engine/pace';
-import { showReview, renderQuiz, calibLine } from './ui/review';
-import { conflictSlots, flushAccount, initAccount, onAccountChange } from './ui/account';
+import { DAILY_GOAL, daysToExam, streakOf, todayCount } from './engine/habit';
+import { showReview, renderQuiz, calibLine, quizKey } from './ui/review';
+import { conflictSlots, flushAccount, initAccount, onAccountChange, syncState } from './ui/account';
 import { applySkin, applyTheme } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
 import { drawToken, elementIcon } from './ui/token';
@@ -40,7 +43,6 @@ type Placeable = Exclude<Kind, 'hub' | 'part'>;
 type Tool = 'pan' | 'erase' | 'area' | 'rail' | Placeable;
 /** 範囲コピーした設計図。左上からのずれで持つ */
 type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir } | { t: 'rails'; snap: [string, number | undefined][] } | { t: 'ch'; x: number; y: number; ch: number };
-const SESSION_LIMIT_MS = 25 * 60 * 1000;
 const BUILD: Placeable[] = ['belt', 'bridge', 'tunnel', 'lift', 'splitter', 'analyzer', 'sensor', 'gate', 'station', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'settler', 'funnel', 'phoresis', 'sampler', 'depot', 'tank', 'vent'];
 /** 道具の分類。道具が多いので、棚を分けて出す */
 const GROUPS: { id: string; name: string; tools: Tool[] }[] = [
@@ -90,6 +92,8 @@ function boot(data: HotData) {
   let floor = 0;
   /** 置く前の見本を出すマス（マウスが乗っているか、指で押し続けている所）。holding は、押し続けて場所を選んでいる最中 */
   let hover: [number, number] | null = null, holding = false;
+  /** ずらしている最中：つかんだマス（gx, gy）からの移動量。arm は「ずらす」ボタンを押して、行き先のタップを待っている設備 */
+  let moving: { es: Ent[]; gx: number; gy: number; dx: number; dy: number; area: boolean } | null = null, moveArm: Ent | null = null;
   /** 置くときの向き。null は自動（流れ込みに合わせるか、納品所の方角） */
   let placeDir: Dir | null = null;
   /** ベルトをまとめて引く本数と、いまのなぞり書きの道筋・敷いたマス */
@@ -98,7 +102,7 @@ function boot(data: HotData) {
   /** 設計図を置こうとしている場所（左上のマス） */
   let ghost: [number, number] | null = null;
   /** いまのなぞり書きで敷いた線路のマス数 */
-  let railsLaid = 0;
+  let railsLaid = 0, beltRun = 0;
   /** 地図に稼働率の札を出すか */
   let overlay = store.meta().overlay === true;
   const app = $('app');
@@ -110,13 +114,25 @@ function boot(data: HotData) {
 
   setSound(store.meta().sound !== false);
   setMusic(store.meta().music !== false);
+  let pf = prefs();
+  onPrefs((p) => { pf = p; setVolume(p.sfxVol); setMusicVolume(p.musicVol); setCalm(p.calm); dusk = p.dusk ? duskOf(new Date()) : 0; paintMarks(); });
   // 背景音楽は、最初に画面に触れたときから鳴らせる（ブラウザの決まり）
   window.addEventListener('pointerdown', () => unlockAudio(), { once: true });
   applyTheme(store.meta().theme ?? 'auto');
   applySkin(store.meta().skin ?? 'note');
   /** 課題を開いているあいだ、本編の工場は home に預けておく。world は課題の小さな工場 */
   let sandbox: { c: Case; home: World; done: boolean } | null = null;
-  const save = () => { if (slot) store.write(slot, serialize(sandbox ? sandbox.home : world)); };
+  /** 時刻を「15:04」の形に */
+  const hm = (t: number) => { const d = new Date(t); return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  let savedAt = 0, saveFailTold = 0;
+  const save = () => {
+    if (!slot) return;
+    if (store.write(slot, serialize(sandbox ? sandbox.home : world))) { savedAt = Date.now(); return; }
+    // 保存できなかった（容量がいっぱい・プライベートモードなど）。1 分に 1 度だけ知らせる
+    if (Date.now() - saveFailTold > 60000) { saveFailTold = Date.now(); toast('保存できなかった。この端末の保存領域がいっぱいかもしれない。メニューの「すべて書き出す」でファイルに控えておけ。', 9000); }
+  };
+  /** セーブ枠ごとに、見ていた場所を覚える（次に開いたとき、同じ場所から始める） */
+  const saveCam = () => { if (slot && !sandbox) store.setMeta({ cams: { ...(store.meta().cams ?? {}), [String(slot)]: { x: +cam.x.toFixed(2), y: +cam.y.toFixed(2), z: +cam.z.toFixed(2) } } }); };
   hot?.snapshot?.(() => (slot ? { slot, save: serialize(world) } : {}));
 
   // ---- WebGL の合成段：地図の絵（#cv）を素材にして、光・発光・ゆらぎをかけた結果を #gl に出す ----
@@ -180,12 +196,25 @@ function boot(data: HotData) {
   // ---- トースト ----
   const toastEl = $('toast');
   let toastTimer = 0;
+  /** 通知の履歴（直近 30 件。メニューの「通知の履歴」で見られる） */
+  const toastLog: { t: number; msg: string }[] = [];
+  let lastToast = '', toastN = 1;
   const toast = (msg: string, ms = 2600) => {
-    toastEl.textContent = msg;
+    if (!msg) return;
+    // 同じ知らせが続いたら、新しく出さずに「×2」とまとめる
+    if (msg === lastToast && !toastEl.hidden) toastN++;
+    else { toastN = 1; lastToast = msg; toastLog.push({ t: Date.now(), msg }); if (toastLog.length > 30) toastLog.shift(); }
+    toastEl.replaceChildren(msg, toastN > 1 ? h('span', { class: 'n' }, `×${toastN}`) : '');
     toastEl.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(() => { toastEl.hidden = true; }, ms);
+    // 長い知らせは、読み終えられるだけ長く出す（1 文字 80 ms を目安。最長 9 秒）。押せば消える
+    toastTimer = window.setTimeout(() => { toastEl.hidden = true; }, Math.max(ms, Math.min(9000, 1000 + msg.length * 80)));
   };
+  toastEl.addEventListener('click', () => { toastEl.hidden = true; clearTimeout(toastTimer); });
+  const showNotes = () => showSheet(
+    h('header', {}, h('h2', {}, '通知の履歴'), closeBtn()),
+    toastLog.length ? h('ol', { class: 'notes' }, ...[...toastLog].reverse().map((n) => h('li', {}, h('span', { class: 'muted' }, `${new Date(n.t).getHours()}:${String(new Date(n.t).getMinutes()).padStart(2, '0')}　`), n.msg))) : h('p', { class: 'muted' }, 'まだ通知はない。'),
+    h('p', { class: 'muted' }, '直近 30 件。この画面を閉じると残らない（ページを開き直すと消える）。'));
 
   // ---- 赤いはんこ：正解や達成のとき ----
   const stampEl = $('stamp');
@@ -201,7 +230,20 @@ function boot(data: HotData) {
   const undo: Op[][] = [], redo: Op[][] = [];
   let group: Op[] | null = null;
   const undoBtn = $<HTMLButtonElement>('b-undo'), redoBtn = $<HTMLButtonElement>('b-redo');
-  const paintUndo = () => { undoBtn.disabled = undo.length === 0; redoBtn.hidden = redo.length === 0; };
+  const OP_NAME = { add: '置いた', del: '消した', dir: '回した', rails: '線路', ch: '番号' } as const;
+  /** 手の組の中身を短く言う（元に戻すボタンの説明に使う） */
+  const describe = (g: Op[] | undefined) => {
+    if (!g?.length) return '';
+    const adds = g.filter((o) => o.t === 'add').length, dels = g.filter((o) => o.t === 'del').length;
+    if (adds && dels && adds === dels) return `ずらした ${adds} 個`;
+    const kinds = [...new Set(g.map((o) => o.t))];
+    return kinds.map((k) => `${OP_NAME[k]} ${g.filter((o) => o.t === k).length}`).join('・');
+  };
+  const paintUndo = () => {
+    undoBtn.disabled = undo.length === 0; redoBtn.hidden = redo.length === 0;
+    undoBtn.title = undo.length ? `元に戻す：${describe(undo[undo.length - 1])}（Ctrl + Z、2 本指で軽くたたいても）` : '元に戻す';
+    redoBtn.title = redo.length ? `やり直す：${describe(redo[redo.length - 1])}` : 'やり直す';
+  };
   const record = (op: Op) => {
     if (!group) { group = []; undo.push(group); if (undo.length > 60) undo.shift(); }
     group.push(op);
@@ -212,7 +254,7 @@ function boot(data: HotData) {
   const clearUndo = () => { undo.length = 0; redo.length = 0; group = null; paintUndo(); };
   const doPlace = (kind: Placeable, x: number, y: number, dir: Dir): string | null => {
     const err = place(world, kind, x, y, dir);
-    if (!err) record({ t: 'add', x, y });
+    if (!err) { record({ t: 'add', x, y }); const e = at(world, x, y); if (e) burst(e.x, e.y, sizeOf(e), 'place'); if (kind !== 'belt') buzz(8); }
     return err;
   };
   const doErase = (x: number, y: number): boolean => {
@@ -229,12 +271,33 @@ function boot(data: HotData) {
     record({ t: 'del', ent: e });
     // 昇降機は 2 つで 1 組。元に戻すときに両方とも戻るよう、相方も記録する
     if (e.kind === 'lift') { const p = liftPartner(world, e); if (p) record({ t: 'del', ent: p }); }
+    burst(e.x, e.y, sizeOf(e), 'erase');
+    buzz(12);
     return remove(world, x, y);
   };
   const doTurn = (e: Ent, dir: Dir) => {
     if (e.dir === dir) return;
     record({ t: 'dir', x: e.x, y: e.y, dir: e.dir });
     e.dir = dir;
+  };
+  /**
+   * 置いたものをずらす。ずらせたら true。元の設備を消した手と、新しく置いた手として 1 組に記録する（元に戻すと、元の場所に戻る）。
+   * rect：範囲選択でずらすときの範囲。その中の線路も一緒にずらす
+   */
+  const doMove = (es: Ent[], dx: number, dy: number, quiet = false, rect?: [number, number, number, number] | null): boolean => {
+    group = null;
+    const r = moveEnts(world, es, dx, dy);
+    if (!r.ok) { if (!quiet) { toast(r.why, 2200); sfx.bad(); buzz(30); } return false; }
+    if (!r.added.length) return true;
+    for (const e of r.removed) record({ t: 'del', ent: e });
+    for (const e of r.added) record({ t: 'add', x: e.x, y: e.y });
+    if (rect) { const snap = moveRails(world, rect, dx, dy); if (snap.length) record({ t: 'rails', snap }); }
+    group = null;
+    if (selected && r.removed.includes(selected)) selected = r.added[r.removed.indexOf(selected)];
+    for (const e of r.added) burst(e.x, e.y, sizeOf(e), 'move');
+    if (!quiet) { sfx.place(); buzz(12); }
+    save();
+    return true;
   };
   /** 手の組を逆からたどって打ち消し、打ち消した手を逆にした組（＝やり直すための組）を返す */
   const applyOps = (g: Op[]): Op[] => {
@@ -266,7 +329,7 @@ function boot(data: HotData) {
   const doUndo = () => {
     const g = undo.pop();
     group = null;
-    if (g) { selected = null; redo.push(applyOps(g)); toast('ひとつ前に戻した', 1200); }
+    if (g) { selected = null; redo.push(applyOps(g)); toast(`ひとつ前に戻した（${describe(g)}）`, 1400); }
     paintUndo();
   };
   const doRedo = () => {
@@ -385,8 +448,174 @@ function boot(data: HotData) {
       h('li', {}, h('b', {}, '網にする'), '道具「線路」で駅から駅へ線路を敷くと、列車はそこを 1.5 倍の速さで走る。線路は枝分かれさせて何駅でも共有できるが、混むと待ちが出る。地図を引くと、区画ごとに「何を毎分いくつ作っているか」の札が出る。'),
     ),
     h('p', { class: 'muted' }, '物質の絵柄は、元素ごとに決まった形の組み合わせでできている（「図鑑」で確認できる）。置いたものをタップすると、その場に「設定・回す・消す」が出る。間違えたら右上の「元に戻す」。'),
+    h('p', { class: 'muted' }, '置いたものは、「見る」で長押ししてそのまま指を動かすと、ずらせる。選んだものの帯の ⇲ を押してから行き先をタップしてもよい。'),
+    first ? null : h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'help-keys', onclick: () => showKeys() }, 'キーと指の操作の一覧'), h('button', { class: 'ghost', type: 'button', id: 'help-prefs', onclick: () => showPrefs() }, '設定')),
     first ? h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'start', onclick: closeModal }, '始める')) : null,
   );
+
+  // ---- 画面写真（PNG）：次に描いたコマを、見えているとおりに保存する ----
+  let shotPending = false;
+  const download = (href: string, name: string) => { const a = document.createElement('a'); a.href = href; a.download = name; document.body.append(a); a.click(); a.remove(); };
+  const stampName = (ext: string) => { const d = new Date(); return `chemyth-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}.${ext}`; };
+  const shot = () => { shotPending = true; };
+  /** 描き終えたコマを 1 枚にまとめる（高画質・立体表示では、WebGL の絵の上に #cv を重ねる） */
+  const takeShot = () => {
+    shotPending = false;
+    try {
+      const out = document.createElement('canvas'), W = cv.width, Hh = cv.height;
+      out.width = W; out.height = Hh;
+      const o = out.getContext('2d')!;
+      if (fxOn() && !glCv.hidden) o.drawImage(glCv, 0, 0, W, Hh);
+      if (!fxOn() || threeOn()) o.drawImage(cv, 0, 0, W, Hh);
+      out.toBlob((b) => { if (!b) { toast('写真を作れなかった。', 2000); return; } const u = URL.createObjectURL(b); download(u, stampName('png')); window.setTimeout(() => URL.revokeObjectURL(u), 5000); toast('画面写真を保存した（ダウンロード）。', 2000); }, 'image/png');
+    } catch { toast('この画面では写真を保存できない。', 2400); }
+  };
+  /** キーと指の操作の一覧 */
+  const KEYS: [string, string][] = [
+    ['矢印・W A S D', '地図を動かす'], ['+ / −', '拡大・縮小'], ['0', '全体を見る'], ['H', '納品所へ'], ['K・L', '覚えた場所 1・2 へ（Shift を押しながらで、いまの場所を覚える）'],
+    ['V・B・X・G・T', '見る・ベルト・撤去・範囲・線路'], ['Q', '直前の道具に戻る'], ['R', '選んだものを回す（設備の道具なら、置く向きを回す）'],
+    ['Shift + 矢印', '選んだもの（範囲選択なら囲んだもの）を 1 マスずらす'], ['Delete', '選んだものを消す'], ['Esc', 'やめる・選択を外す・窓を閉じる'],
+    ['Space', '一時停止・再開'], ['F', '速さを切り替える'], ['J', '稼働率と詰まりを地図に重ねる'], ['M', '小地図を出す・隠す'], ['P', '画面写真を保存'], ['N', '通知の履歴'],
+    ['Ctrl + Z / Ctrl + Y', '元に戻す・やり直す'], ['Ctrl + C', '選んだ設備・囲んだものをコピー'], ['Ctrl + S', 'いますぐ保存'],
+    ['1〜4 → 1〜3 → Enter', '復習：選択肢 → 自信（確実・たぶん・勘）→ 次へ'], ['?', 'この一覧'],
+  ];
+  const GESTURES: [string, string][] = [
+    ['長押し → そのまま動かす', '「見る」のとき、置いたものをつかんでずらす（設備の道具なら、置く場所を選ぶ）'], ['⇲（選んだものの帯）', '押してから行き先をタップすると、そこへずらす'],
+    ['範囲の中から引く', '囲んだものをまとめてずらす（中の線路も一緒に）'], ['2 本指で軽くたたく', '元に戻す'], ['3 本指で軽くたたく', 'やり直す'], ['ダブルタップ', 'その場所へ寄る'],
+    ['なぞって画面の端へ', '地図が自動で送られる（ベルト・ずらす・範囲選択）'], ['通知を押す', '通知を消す'], ['場所1・場所2 を長押し', 'いまの場所を覚える'],
+  ];
+  const showKeys = () => showSheet(
+    h('header', {}, h('h2', {}, 'キーと指の操作'), closeBtn()),
+    h('h3', {}, '指（タブレット・スマホ）'),
+    h('table', { class: 'keys' }, ...GESTURES.map(([a, b]) => h('tr', {}, h('th', {}, a), h('td', {}, b)))),
+    h('h3', {}, 'キーボード'),
+    h('table', { class: 'keys' }, ...KEYS.map(([a, b]) => h('tr', {}, h('th', {}, a), h('td', {}, b)))));
+  // ---- データ：すべてのセーブ枠を 1 つのファイルに書き出す・ファイルから読み込む ----
+  const BACKUP = 'chemyth-v2-backup';
+  let memBackup: string | null = null;
+  const exportAll = () => {
+    save(); saveCam();
+    const slots: Record<string, string | null> = {};
+    for (const n of [1, 2, 3]) slots[String(n)] = store.read(n);
+    let blueprints: unknown = [];
+    try { blueprints = JSON.parse(localStorage.getItem(BP_KEY) || '[]'); } catch { /* なくてよい */ }
+    const blob = new Blob([JSON.stringify({ app: 'chemyth', v: 2, at: Date.now(), slots, blueprints })], { type: 'application/json' });
+    const u = URL.createObjectURL(blob);
+    download(u, stampName('json'));
+    window.setTimeout(() => URL.revokeObjectURL(u), 5000);
+    toast('3 冊ぶんを 1 つのファイルに書き出した（アルバムの写真は含まない）。', 3000);
+  };
+  const importAll = () => {
+    const inp = h('input', { type: 'file', accept: '.json,application/json' }) as HTMLInputElement;
+    inp.onchange = () => {
+      const f = inp.files?.[0];
+      if (!f) return;
+      f.text().then((text) => {
+        let d: { app?: string; slots?: Record<string, string | null>; blueprints?: unknown };
+        try { d = JSON.parse(text); } catch { toast('読めないファイルだった。', 3000); return; }
+        if (d.app !== 'chemyth' || !d.slots) { toast('Chemyth の書き出したファイルではない。', 3000); return; }
+        const ok = [1, 2, 3].filter((n) => { const j = d.slots![String(n)]; return typeof j === 'string' && !!deserialize(j); });
+        if (!ok.length) { toast('読めるノートが入っていなかった。', 3000); return; }
+        showSheet(h('header', {}, h('h2', {}, 'ファイルから読み込む'), closeBtn()),
+          h('p', {}, `読み込むと、${ok.map((n) => slotName(n)).join('・')}が、ファイルの中身に置き換わる。`),
+          h('p', { class: 'muted' }, '置き換える前の中身は控えておく。メニューの「データ」から、読み込む前に戻せる（控えは 1 回ぶん）。'),
+          h('div', { class: 'row' },
+            h('button', { class: 'primary', type: 'button', id: 'imp-go', onclick: () => {
+              const prev: Record<string, string | null> = {};
+              for (const n of [1, 2, 3]) prev[String(n)] = store.read(n);
+              memBackup = JSON.stringify(prev);
+              try { localStorage.setItem(BACKUP, memBackup); } catch { toast('控えはこの画面を閉じるまでしか残せない（保存領域がいっぱい）。', 4000); }
+              // 遊んでいる枠を置き換えるなら、先にタイトルへ戻る（あとで上書きしないように）
+              modal.hidden = true; sheet.replaceChildren();
+              toTitle();
+              for (const n of ok) store.write(n, d.slots![String(n)]!);
+              if (Array.isArray(d.blueprints)) try { localStorage.setItem(BP_KEY, JSON.stringify(d.blueprints)); } catch { /* 設計図は入らなくてもよい */ }
+              title.show();
+              toast(`${ok.length} 冊を読み込んだ。`, 2600);
+            } }, '置き換えて読み込む'),
+            h('button', { class: 'ghost', type: 'button', onclick: closeModal }, 'やめる')));
+      }, () => toast('ファイルを読めなかった。', 3000));
+    };
+    inp.click();
+  };
+  const backupText = () => { try { return localStorage.getItem(BACKUP) ?? memBackup; } catch { return memBackup; } };
+  const restoreBackup = () => {
+    const t = backupText();
+    if (!t) return;
+    let prev: Record<string, string | null>;
+    try { prev = JSON.parse(t); } catch { return; }
+    modal.hidden = true; sheet.replaceChildren();
+    toTitle();
+    for (const n of [1, 2, 3]) { const j = prev[String(n)]; if (typeof j === 'string') store.write(n, j); else store.erase(n); }
+    try { localStorage.removeItem(BACKUP); } catch { /* 消せなくてもよい */ }
+    memBackup = null;
+    title.show();
+    toast('読み込む前の状態に戻した。', 2600);
+  };
+  const showData = () => showSheet(
+    h('header', {}, h('h2', {}, 'データ'), closeBtn()),
+    h('p', { class: 'muted' }, `最後に保存：${savedAt ? hm(savedAt) : 'まだ'}。5 秒ごとと、出来事のたびに、この端末へ自動で保存している。`),
+    h('div', { class: 'menu' },
+      h('button', { class: 'ghost', type: 'button', id: 'd-export', onclick: exportAll }, 'すべて書き出す（3 冊ぶんを 1 つのファイルに）'),
+      h('button', { class: 'ghost', type: 'button', id: 'd-import', onclick: importAll }, 'ファイルから読み込む'),
+      backupText() ? h('button', { class: 'ghost warn', type: 'button', id: 'd-restore', onclick: restoreBackup }, '読み込む前に戻す') : null,
+      h('button', { class: 'ghost', type: 'button', id: 'd-shot', onclick: () => { closeModal(); window.setTimeout(shot, 60); } }, '画面写真を保存（PNG）')),
+    h('p', { class: 'muted' }, '1 冊ずつの書き出し（文字列）は、タイトル画面の各ノートの「書き出す」から。アカウントにログインしていれば、端末どうしで自動でそろう。'));
+
+  // ---- どこで作っている？：物質の名前・化学式から、作っている装置と採っている採取機を探して、そこへ移る ----
+  const showWhere = () => {
+    const by = new Map<string, Ent[]>();
+    for (const e of world.ents.values()) {
+      if (e.kind === 'part') continue;
+      const r = recipeById(e.recipe);
+      const outs = r ? productsOf(r).map(([s0]) => s0) : e.kind === 'extractor' ? [resourceAt(e.x, groundY(e.y))] : e.kind === 'tank' && e.sub ? [e.sub] : [];
+      for (const s0 of outs) { if (!by.has(s0)) by.set(s0, []); by.get(s0)!.push(e); }
+    }
+    const rows = [...by].sort((a, b) => b[1].length - a[1].length);
+    const q = h('input', { type: 'search', id: 'where-q', placeholder: '物質の名前か化学式（例：アンモニア、NH3）', autocomplete: 'off' }) as HTMLInputElement;
+    const list = h('div', { class: 'menu', id: 'where-list' });
+    const turn = new Map<string, number>();
+    const norm = (t: string) => t.toLowerCase().replace(/[₀-₉]/g, (d) => String(d.charCodeAt(0) - 0x2080)).replace(/\s/g, '');
+    const paint = () => {
+      const k = norm(q.value);
+      const hit = rows.filter(([s0]) => !k || norm(sub(s0).name).includes(k) || norm(label(s0)).includes(k) || norm(s0).includes(k));
+      list.replaceChildren(...hit.slice(0, 40).map(([s0, es]) => h('button', { class: 'ghost', type: 'button', id: `where-${s0}`, onclick: () => {
+        const i = turn.get(s0) ?? 0; turn.set(s0, i + 1);
+        statsCtx().focus(es[i % es.length]);
+        if (es.length > 1) toast(`${sub(s0).name}：${es.length} 台のうち ${(i % es.length) + 1} 台目。もう一度選ぶと次へ。`, 2600);
+      } }, `${sub(s0).name} ${label(s0)}　${es.length} 台`)), hit.length ? '' : h('p', { class: 'muted' }, '工場の中に、その物質を作っている所はない。'));
+    };
+    q.oninput = paint;
+    showSheet(h('header', {}, h('h2', {}, 'どこで作っている？'), closeBtn()), q, h('p', { class: 'muted' }, '選ぶと、作っている装置（採取機・タンク）へ移る。同じ物質を何台かで作っていれば、選ぶたびに次へ。'), list);
+    paint();
+    window.setTimeout(() => { if (matchMedia('(hover: hover)').matches) q.focus(); }, 50);
+  };
+  // ---- 設定：この端末の好み（振動・音量・動き・大きさ・札・休憩）と、覚える確率（セーブに入る） ----
+  const showPrefs = () => {
+    const p = prefs();
+    const seg = <T,>(id: string, cur: T, opts: [T, string][], set: (v: T) => void) => h('span', { class: 'seg', role: 'group' }, ...opts.map(([v, name], i) => h('button', { type: 'button', id: `${id}-${i}`, class: cur === v ? 'on' : '', onclick: () => { set(v); sfx.tap(); showPrefs(); } }, name)));
+    const onoff = (id: string, cur: boolean, k: keyof Prefs, on = 'あり', off = 'なし') => seg(id, cur, [[true, on], [false, off]], (v) => setPrefs({ [k]: v } as Partial<Prefs>));
+    const row = (what: string, note: string, ctl: HTMLElement) => h('div', { class: 'pref-row' }, h('div', { class: 'what' }, h('b', {}, what), note ? h('small', {}, note) : null), ctl);
+    const range = (id: string, v: number, set: (v: number) => void) => { const r = h('input', { type: 'range', id, min: '0', max: '100', step: '5', value: String(Math.round(v * 100)) }) as HTMLInputElement; r.oninput = () => set(Number(r.value) / 100); r.onchange = () => sfx.tap(); return r; };
+    const w0 = sandbox ? sandbox.home : world;
+    showSheet(h('header', {}, h('h2', {}, '設定'), closeBtn()),
+      h('h3', {}, '学習（セーブに入る。端末をまたいで同じ）'),
+      row('覚えておく確率の目標', '復習の間隔は、思い出せる確率がこの値に下がる日を目安に決まる。上げるほど忘れにくいが、復習が増える。標準は 90 %。', seg('p-ret', w0.ret, [[0.85, '85 %'], [0.9, '90 %'], [0.95, '95 %']], (v) => { w0.ret = v; save(); })),
+      h('h3', {}, 'この端末の好み'),
+      row('振動', '置く・消す・ずらす・まちがえたとき。iPhone・iPad では震わない（ブラウザが対応していない）。', onoff('p-vib', p.vib, 'vib')),
+      row('効果音の大きさ', '', range('p-sfx', p.sfxVol, (v) => setPrefs({ sfxVol: v }))),
+      row('音楽の大きさ', '', range('p-music', p.musicVol, (v) => setPrefs({ musicVol: v }))),
+      row('動きを減らす', '土ぼこり・花火・画面の滑らかな移動・窓の動きを控える。', onoff('p-calm', p.calm, 'calm', 'オン', 'オフ')),
+      row('文字を大きく', '窓・指令・通知の文字を 15 % 大きくする。', onoff('p-text', p.bigText, 'bigText', 'オン', 'オフ')),
+      row('ボタンを大きく', '上の帯・道具・選んだものの帯のボタンを大きくする。', onoff('p-btn', p.bigButtons, 'bigButtons', 'オン', 'オフ')),
+      row('夕暮れ', '実際の時刻に合わせて、地図が暮れていく。', onoff('p-dusk', p.dusk, 'dusk')),
+      row('指令のヒント', '自分で考えたいときは隠す。', onoff('p-hints', p.hints, 'hints', '出す', '隠す')),
+      row('反応式の札', '「いつも」なら、うんと近づかなくても、見えている装置すべてに反応式を出す。', onoff('p-plates', p.plates, 'plates', 'いつも', '近づいたとき')),
+      row('復習の札の位置', '', seg<'left' | 'right'>('p-side', p.cardSide, [['left', '左'], ['right', '右']], (v) => setPrefs({ cardSide: v }))),
+      row('休憩の知らせ', '続けて遊んだ時間で知らせる。', seg<0 | 25 | 50>('p-break', p.breakMin, [[25, '25 分'], [50, '50 分'], [0, 'なし']], (v) => setPrefs({ breakMin: v }))),
+      row('放置で省電力', '5 分さわらなければ、描く回数を減らして電池をもたせる（工場は動き続ける）。', onoff('p-saver', p.saver, 'saver')),
+      row('小地図の大きさ', '', seg('p-mini', p.miniBig, [[false, '小'], [true, '大']], (v) => { setPrefs({ miniBig: v }); window.setTimeout(paintMini, 30); })));
+  };
 
   const showMenu = () => {
     const item = (id: string, text: string, go: () => void) => h('button', { class: 'ghost', type: 'button', id, onclick: go }, text);
@@ -396,6 +625,7 @@ function boot(data: HotData) {
       h('div', { class: 'menu' },
         item('m-chapters', '指令の一覧（章を切り替える）', () => showChapters(panel())),
         item('m-stats', '統計（納品の速さ・装置の稼働率・学習の進み）', () => showStats(statsCtx())),
+        item('m-where', 'どこで作っている？（物質から装置を探す）', () => showWhere()),
         item('m-album', 'アルバム（達成した瞬間の工場の写真）', () => showAlbum())),
       h('h3', {}, '京大形式の演習'),
       h('div', { class: 'menu' },
@@ -432,9 +662,13 @@ function boot(data: HotData) {
           store.setMeta({ view3d: three ? 'on' : 'off', ...(three ? { gfx: 'high' as const } : {}) }); sfx.tap(); placeAct(); showMenu();
         }),
         item('m-music', musicOn() ? '音楽：あり' : '音楽：なし', () => { setMusic(!musicOn()); store.setMeta({ music: musicOn() }); sfx.tap(); showMenu(); }),
+        item('m-prefs', '設定（振動・音量・動き・文字とボタンの大きさ・札・休憩・覚える確率）', () => showPrefs()),
+        item('m-data', 'データ（すべて書き出す・読み込む・画面写真）', () => showData()),
+        item('m-notes', `通知の履歴（${toastLog.length} 件）`, () => showNotes()),
+        item('m-keys', 'キーと指の操作', () => showKeys()),
         item('m-help', '遊び方', () => showHelp()),
-        item('m-title', '保存してタイトルへ戻る', () => { modal.hidden = true; sheet.replaceChildren(); toTitle(); })),
-      h('p', { class: 'muted' }, `${slotName(slot)}。この端末に自動で保存している。`),
+        item('m-title', '保存してタイトルへ戻る（今日のまとめ）', () => { if (sandbox) { modal.hidden = true; sheet.replaceChildren(); toTitle(); } else showToday(); })),
+      h('p', { class: 'muted' }, `${slotName(slot)}。この端末に自動で保存している（最後に保存 ${savedAt ? hm(savedAt) : '—'}）。今日遊んだ時間 ${fmtTime(world.dayMs[dayKey(Date.now())] ?? 0)}。${(() => { const st = syncState(); return st.on ? `アカウント：${st.trouble ? `同期できていない（${st.trouble}）` : st.busy ? '同期中' : st.lastSync ? `${hm(st.lastSync)} に同期` : '同期待ち'}。` : ''; })()}`),
     );
   };
 
@@ -466,7 +700,7 @@ function boot(data: HotData) {
   // ---- 睡眠：今夜の 10 問、今朝の 10 問、就寝から起床までの閉店、実際の時刻の夕暮れ ----
   const sleepCfg = (): SleepCfg => ({ ...SLEEP_DEFAULT, ...(store.meta().sleep ?? {}) });
   const closedNow = () => { const ext = store.meta().ext; if (ext && ext.until > Date.now()) return false; return isClosed(sleepCfg(), new Date()); };
-  let dusk = duskOf(new Date());
+  let dusk = prefs().dusk ? duskOf(new Date()) : 0;
   /** 問いを順に出す（今夜・今朝の 10 問）。終わったら finish(正解数) */
   const runSet = (title: string, lead: string, ids: string[], finish: (right: number) => void) => {
     let right = 0;
@@ -526,8 +760,10 @@ function boot(data: HotData) {
   let sleepTick = 0;
   const sleepCheck = () => {
     const now = new Date(), cfg = sleepCfg(), today = dayKey(now.getTime());
-    dusk = duskOf(now);
-    $('b-night').hidden = !(slot && !sandbox && eveningWindow(cfg, now) && !nightDone(world, now.getTime()) && nightSetIds(world, now.getTime()).length >= 3);
+    dusk = prefs().dusk ? duskOf(now) : 0;
+    const nb = $('b-night');
+    nb.hidden = !(slot && !sandbox && eveningWindow(cfg, now) && !nightDone(world, now.getTime()) && nightSetIds(world, now.getTime()).length >= 3);
+    if (!nb.hidden) { const m = minutesToBed(cfg, now); nb.textContent = `今夜の 10 問（就寝まで ${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}）`; }
     if (!slot || sandbox) return;
     if (closedNow()) { showClosing(); return; }
     if (windDown(cfg, now) && store.meta().warned !== today) { store.setMeta({ warned: today }); toast(`就寝 ${hhmm(cfg.bed)} まで 1 時間を切った。今夜の 10 問をやって、画面を閉じろ。`, 8000); }
@@ -610,6 +846,9 @@ function boot(data: HotData) {
     const P = palette(), hr = hubRect(world.hubSize);
     const vw = cw / 2 / cam.z, vh = ch / 2 / cam.z;
     let x0 = Math.min(hr.x, cam.x - vw), y0 = Math.min(hr.y, cam.y - vh), x1 = Math.max(hr.x + hr.s, cam.x + vw), y1 = Math.max(hr.y + hr.s, cam.y + vh);
+    // いまの指令の資源地も入るように広げる（どこへ取りに行けばよいかがわかる）
+    const gz = !sandbox ? currentGoal(world)?.zone : undefined, za = gz ? ZONES[gz as keyof typeof ZONES]?.at : undefined;
+    if (za && !floor) { x0 = Math.min(x0, za[0] - za[2]); y0 = Math.min(y0, za[1] - za[2]); x1 = Math.max(x1, za[0] + za[2]); y1 = Math.max(y1, za[1] + za[2]); }
     const here: Ent[] = [];
     for (const e of world.ents.values()) {
       if (e.kind === 'part' || floorOf(e.y) !== floor) continue;
@@ -633,6 +872,19 @@ function boot(data: HotData) {
         mctx.fillRect(px(e.x), py(gy), Math.max(2, sz * k), Math.max(2, sz * k));
         if ((isMachine(e.kind) && e.recipe && machineState(e) === 2 && (e.stuck || 0) > 2.5) || e.bad) stops.push(e);
       }
+    }
+    // 線路（1 階だけ）と駅
+    if (!floor && world.rails.size) {
+      mctx.fillStyle = P.ink; mctx.globalAlpha = 0.55;
+      for (const kk of world.rails.keys()) { const [rx, ry] = kk.split(',').map(Number); mctx.fillRect(px(rx + 0.25), py(ry + 0.25), Math.max(1, k * 0.5), Math.max(1, k * 0.5)); }
+      mctx.globalAlpha = 1;
+    }
+    mctx.strokeStyle = P.ink; mctx.lineWidth = 1.2;
+    for (const e of here) if (e.kind === 'station') mctx.strokeRect(px(e.x) - 1, py(groundY(e.y)) - 1, Math.max(4, 2 * k) + 2, Math.max(4, 2 * k) + 2);
+    // いまの指令の資源地：点線の輪
+    if (za && !floor) {
+      mctx.strokeStyle = P.red; mctx.lineWidth = 1.5; mctx.setLineDash([3, 2]);
+      mctx.beginPath(); mctx.arc(px(za[0]), py(za[1]), Math.max(4, za[2] * k), 0, Math.PI * 2); mctx.stroke(); mctx.setLineDash([]);
     }
     mctx.fillStyle = P.red; mctx.fillRect(px(hr.x), py(hr.y), Math.max(3, hr.s * k), Math.max(3, hr.s * k));
     mctx.fillStyle = 'rgba(235,150,30,0.95)';
@@ -660,24 +912,122 @@ function boot(data: HotData) {
     if (sandbox) showCaseBrief(); else showChapters(panel());
   };
   const speedBtn = $('b-speed');
-  const paintSpeed = () => { speedBtn.textContent = speed === 0 ? '⏸ 停止中' : `▶ ×${speed}`; speedBtn.classList.toggle('hot', speed !== 1); };
+  const paintSpeed = () => { speedBtn.textContent = speed === 0 ? '⏸ 停止中' : `▶ ×${speed}`; speedBtn.classList.toggle('hot', speed !== 1); $('paused').hidden = speed !== 0 || !slot; };
   speedBtn.onclick = () => { speed = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length]; paintSpeed(); sfx.tap(); };
   undoBtn.onclick = doUndo;
   redoBtn.onclick = doRedo;
   paintUndo();
-  // キーボード：Ctrl（⌘）+ Z で元に戻す、Ctrl + Shift + Z か Ctrl + Y でやり直す
+  // ---- キーボード（一覧は「?」キーか、遊び方の「キーと指の操作」） ----
+  /** 直前の道具（Q で戻る） */
+  let prevTool: Tool = 'pan', lastSpeed = 1;
+  const KEY_TOOLS: Record<string, Tool> = { v: 'pan', b: 'belt', x: 'erase', g: 'area', t: 'rail' };
+  const zoomBy = (f: number) => { const base = camTo ?? cam; camTo = { x: base.x, y: base.y, z: Math.min(Z_MAX, Math.max(Z_MIN, base.z * f)) }; };
+  const togglePause = () => { if (speed === 0) speed = lastSpeed || 1; else { lastSpeed = speed; speed = 0; } paintSpeed(); sfx.tap(); };
   document.addEventListener('keydown', (ev) => {
     const tag = (ev.target as HTMLElement | null)?.tagName;
-    if (!slot || !(ev.ctrlKey || ev.metaKey) || tag === 'INPUT' || tag === 'TEXTAREA' || !modal.hidden) return;
-    const k = ev.key.toLowerCase();
-    if (k === 'z' && !ev.shiftKey) { ev.preventDefault(); doUndo(); }
-    else if ((k === 'z' && ev.shiftKey) || k === 'y') { ev.preventDefault(); doRedo(); }
+    if (!slot || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ev.isComposing) return;
+    // 復習の問い（窓でも札でも）：数字で選び、Enter で次へ
+    if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && quizKey(ev.key)) { ev.preventDefault(); return; }
+    const k = ev.key, low = k.length === 1 ? k.toLowerCase() : k;
+    if (!modal.hidden) { if (k === 'Escape') { ev.preventDefault(); closeModal(); } return; }
+    if (!closingEl.hidden) return;
+    if (ev.ctrlKey || ev.metaKey) {
+      // Ctrl（⌘）+ Z で元に戻す、Ctrl + Shift + Z か Ctrl + Y でやり直す。Ctrl + S で保存、Ctrl + C でコピー
+      if (low === 'z' && !ev.shiftKey) { ev.preventDefault(); doUndo(); }
+      else if ((low === 'z' && ev.shiftKey) || low === 'y') { ev.preventDefault(); doRedo(); }
+      else if (low === 's') { ev.preventDefault(); save(); saveCam(); toast(savedAt ? '保存した。' : '保存できなかった。', 1200); }
+      else if (low === 'c' && selected && copyable(selected)) { ev.preventDefault(); actCopy.click(); }
+      else if (low === 'c' && tool === 'area' && !blueprint && inArea().length) { ev.preventDefault(); $('area-copy').click(); }
+      return;
+    }
+    if (ev.altKey) return;
+    const ARROW: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    const WASD: Record<string, [number, number]> = { a: [-1, 0], d: [1, 0], w: [0, -1], s: [0, 1] };
+    const arrow = ARROW[k] ?? (!ev.shiftKey ? WASD[low] : undefined);
+    if (arrow) {
+      ev.preventDefault();
+      // Shift + 矢印：選んだもの（範囲選択なら、囲んだもの）を 1 マスずらす
+      if (ev.shiftKey) {
+        if (tool === 'area' && !blueprint && inArea().length) { if (shiftArea(arrow[0], arrow[1], false)) sfx.tap(); }
+        else if (selected && selected.kind !== 'hub') doMove([selected], arrow[0], arrow[1]);
+        else toast('Shift + 矢印は、選んだもの（範囲選択なら囲んだもの）を 1 マスずらす。', 2200);
+        return;
+      }
+      camTo = null; input.stop();
+      const d = Math.max(1, 140 / cam.z);
+      cam.x += arrow[0] * d; cam.y += arrow[1] * d;
+      return;
+    }
+    switch (low) {
+      case 'Escape':
+        if (moveArm) { moveArm = null; app.classList.remove('arming'); toast('ずらすのをやめた。', 1000); }
+        else if (moving) moving = null;
+        else if (clone) { clone = null; pick('pan'); toast('コピーをやめた。', 1000); }
+        else if (tool === 'area' && (blueprint || areaRect())) { blueprint = null; ghost = null; areaA = areaB = null; paintArea(); }
+        else if (selected) selected = null;
+        else if (!rvCard.hidden) hideCard();
+        else if (tool !== 'pan') pick('pan');
+        break;
+      case 'Delete': case 'Backspace':
+        ev.preventDefault();
+        if (selected && selected.kind !== 'hub') sheetActions.erase(selected);
+        else if (tool === 'area' && !blueprint && inArea().length) $('area-del').click();
+        break;
+      case 'r':
+        if (selected && selected.kind !== 'hub') { sheetActions.rotate(selected); sfx.tap(); }
+        else if (tool === 'area' && blueprint) $('area-rot').click();
+        else if (isBuild(tool)) { placeDir = placeDir === null ? 0 : (((placeDir + 1) % 4) as Dir); paintOpts(); toast(`置く向き：${ARROWS[placeDir]}`, 900); }
+        break;
+      case ' ': ev.preventDefault(); togglePause(); break;
+      case 'f': speedBtn.click(); break;
+      case '+': case '=': case ';': zoomBy(1.25); break;
+      case '-': case '_': zoomBy(0.8); break;
+      case '0': camTo = fitView(); break;
+      case 'h': camTo = { x: hubCX, y: hubCY, z: nearZoom() }; break;
+      case 'q': if (!buttons.get(prevTool)?.hidden) { pick(prevTool); sfx.tap(); } break;
+      case 'k': case 'l': if (ev.shiftKey) setMark(low === 'k' ? 0 : 1); else goMark(low === 'k' ? 0 : 1); break;
+      case 'j': overlay = !overlay; store.setMeta({ overlay }); paintOverlay(); toast(overlay ? '稼働率と詰まりを地図に重ねた（J で消す）。' : '稼働率の表示を消した。', 1400); break;
+      case 'm': miniOn = !miniOn; store.setMeta({ minimap: miniOn }); paintMini(); paintMarks(); break;
+      case 'p': shot(); break;
+      case 'n': showNotes(); break;
+      case '?': case '/': showKeys(); break;
+      default: { const t = KEY_TOOLS[low]; if (t && !buttons.get(t)?.hidden) { pick(t); sfx.tap(); } }
+    }
   });
+  // ---- 覚えた場所（2 か所）：K・L で移る、Shift + K・L で覚える。小地図の上のボタンは、押すと移り、長押しで覚える ----
+  const marksOf = (): (Camera | null)[] => { const m = store.meta().marks?.[String(slot)]; return [m?.[0] ?? null, m?.[1] ?? null]; };
+  const paintMarks = () => {
+    const el = $('marks');
+    el.hidden = !slot || !miniOn || !!sandbox;
+    marksOf().forEach((m, i) => $(`mark-${i}`).classList.toggle('set', !!m));
+  };
+  function setMark(i: number) {
+    const m = marksOf();
+    m[i] = { x: +cam.x.toFixed(2), y: +cam.y.toFixed(2), z: +cam.z.toFixed(2) };
+    store.setMeta({ marks: { ...(store.meta().marks ?? {}), [String(slot)]: m } });
+    toast(`いまの場所を「場所 ${i + 1}」に覚えた。${i ? 'L' : 'K'} キーか、小地図の上の「場所${i + 1}」で戻れる。`, 2600); sfx.ok(); paintMarks();
+  }
+  function goMark(i: number) {
+    const m = marksOf()[i];
+    if (!m) { toast(`「場所 ${i + 1}」はまだない。ボタンを長押しするか、Shift + ${i ? 'L' : 'K'} で、いまの場所を覚える。`, 2800); return; }
+    camTo = { ...m }; sfx.tap();
+  }
+  for (const i of [0, 1]) {
+    const b = $(`mark-${i}`);
+    let timer = 0, long = false;
+    b.addEventListener('pointerdown', () => { long = false; clearTimeout(timer); timer = window.setTimeout(() => { long = true; setMark(i); buzz(20); }, 550); });
+    const cancel = () => clearTimeout(timer);
+    b.addEventListener('pointerup', cancel); b.addEventListener('pointerleave', cancel); b.addEventListener('pointercancel', cancel);
+    b.addEventListener('click', () => { if (!long) goMark(i); });
+    b.addEventListener('contextmenu', (ev) => ev.preventDefault());
+  }
+  $('mini-size').onclick = () => { setPrefs({ miniBig: !prefs().miniBig }); sfx.tap(); window.setTimeout(paintMini, 30); };
 
   // ---- 道具バー ----
   const bar = $('tools'), tip = $('tip');
   const buttons = new Map<Tool, HTMLButtonElement>();
   const pick = (id: Tool, keepClone = false) => {
+    if (id !== tool) prevTool = tool;
     tool = id;
     if (!keepClone) clone = null;
     if (id !== 'area') { blueprint = null; ghost = null; areaA = areaB = null; }
@@ -718,8 +1068,9 @@ function boot(data: HotData) {
     bar.append(b);
   }
   // 道具の棚：分類ごとに切り替える
-  let tab = 'move';
-  const tabs = h('div', { id: 'tabs' }, ...GROUPS.map((g) => h('button', { type: 'button', id: `tab-${g.id}`, onclick: () => { tab = g.id; paintTabs(); sfx.tap(); } }, g.name)));
+  // 最後に開いていた棚を覚えておく（次に開いたときも同じ棚から）
+  let tab = GROUPS.some((g) => g.id === store.meta().tab) ? store.meta().tab! : 'move';
+  const tabs = h('div', { id: 'tabs' }, ...GROUPS.map((g) => h('button', { type: 'button', id: `tab-${g.id}`, onclick: () => { tab = g.id; store.setMeta({ tab }); paintTabs(); sfx.tap(); } }, g.name)));
   bar.before(tabs);
   function paintTabs() {
     for (const g of GROUPS) {
@@ -751,13 +1102,39 @@ function boot(data: HotData) {
     sfx.ok();
   };
   actOpen.onclick = () => { if (selected) inspect(selected); };
+  $('act-move').onclick = () => { if (!selected || selected.kind === 'hub') return; moveArm = selected; app.classList.add('arming'); toast('動かす先をタップ（2×2 の装置は、そこが左上）。長押しして指を動かしても、ずらせる。', 4200); sfx.tap(); };
   actTurn.onclick = () => { if (selected) sheetActions.rotate(selected); };
   actErase.onclick = () => { if (selected) sheetActions.erase(selected); };
+  const actNote = $('act-note');
+  /** 選んだ設備の状態の一行：動いているか、何を待っているか、何を運んでいるか、どれだけためているか */
+  const statusOf = (e: Ent): string => {
+    const its = (xs: (Item | null | undefined)[]) => { const m = new Map<string, number>(); for (const it of xs) if (it) m.set(it.s, (m.get(it.s) ?? 0) + (it.n ?? 1)); return [...m].map(([s0, n]) => `${label(s0)} ×${n}`).join('　'); };
+    if (isMachine(e.kind)) {
+      const r = recipeById(e.recipe);
+      if (!r) return '反応が未設定（「設定」で反応を組む）';
+      if (e.sealed) return '中身の見えない装置';
+      if (e.bad) return `${label(e.bad)} を受け取れずに止まっている（この反応では使わない）`;
+      const st = machineState(e), u = Math.round((e.u ?? 0) * 100);
+      const same = e === selected ? (sameMarks()?.length ?? 0) : 0, tail = same ? `　同じ反応 ほかに ${same} 台` : '';
+      if (st === 0) return `動いている　稼働 ${u} %　反応 ${e.n ?? 0} 回${tail}`;
+      if (st === 2) return `出口が詰まっている：${(e.outOrder ?? []).filter((_, i) => (e.outBuf?.[i] ?? 0) > 0).map(label).join('・') || '生成物'} の行き先を確かめろ`;
+      const lack = r.inputs.filter(([s0, n]) => (e.inBuf?.[s0] ?? 0) < n).map(([s0]) => label(s0));
+      return lack.length ? `原料待ち：${lack.join('・')} が足りない　稼働 ${u} %${tail}` : `待機中　稼働 ${u} %${tail}`;
+    }
+    if (MOVERS.has(e.kind)) { const t = its([e.item, ...(e.items ?? [])]); return t ? `運んでいる：${t}` : '空'; }
+    if (e.kind === 'tank') return e.sub ? `${label(e.sub)} ${e.cnt ?? 0} / ${TANK_CAP}${e.test === 'hold' ? '　出口を閉じている' : ''}` : '空のタンク';
+    if (e.kind === 'station') { const cars = [e.tr, ...(e.xtr ?? [])].filter((t): t is NonNullable<typeof t> => !!t); return `${e.role === 'out' ? '降ろす駅' : '積む駅'}　路線 ${e.ch ?? 1}　ためている荷 ${e.buf?.length ?? 0} / ${stationCap(world)}${e.role !== 'out' && cars.length ? `　走っている列車 ${cars.filter((t) => t.p > 0 || t.back).length} / ${cars.length}` : ''}`; }
+    if (e.kind === 'extractor') { const z = zoneAt(e.x, groundY(e.y)); return `採っている：${z ? ZONES[z].name : '陸地'}の ${label(resourceAt(e.x, groundY(e.y)))}`; }
+    if (e.kind === 'sensor' || e.kind === 'gate') return `信号 ${e.ch ?? 1}　${signalOn(world, e.ch ?? 1) ? 'オン' : 'オフ'}`;
+    if (isSep(e.kind)) { const n = (e.buf?.length ?? 0) + (e.buf2?.length ?? 0) + (e.buf3?.length ?? 0); return n ? `分けたものをためている：${n} 個` : e.item ? `分けている：${label(e.item.s)}` : '待機中'; }
+    return '';
+  };
   const placeAct = () => {
-    if (!selected || !modal.hidden || !slot || floorOf(selected.y) !== floor) { act.hidden = true; return; }
+    if (!selected || !modal.hidden || !slot || floorOf(selected.y) !== floor) { act.hidden = true; actNote.hidden = true; return; }
     const hub = selected.kind === 'hub';
     actOpen.textContent = isMachine(selected.kind) || selected.kind === 'station' || selected.kind === 'sensor' || selected.kind === 'gate' || isSep(selected.kind) ? '設定' : selected.kind === 'tank' ? '中身' : selected.kind === 'depot' || selected.kind === 'sampler' ? '選ぶ' : selected.kind === 'analyzer' ? '検査' : '説明';
     actTurn.hidden = actErase.hidden = hub;
+    ($('act-move') as HTMLButtonElement).hidden = hub;
     actCopy.hidden = !copyable(selected);
     act.hidden = false;
     const hr = hubRect(world.hubSize);
@@ -768,6 +1145,12 @@ function boot(data: HotData) {
     // 稼働率の札を出しているときは、札の上に出す
     const ay = scr[1] - 14 - (overlay && !hub ? 26 : 0);
     act.style.transform = `translate(${Math.round(Math.min(cw - 110, Math.max(110, ax)))}px, ${Math.round(Math.max(64, ay))}px) translate(-50%, -100%)`;
+    const note = hub ? '' : statusOf(selected);
+    actNote.hidden = !note;
+    if (note) {
+      if (actNote.textContent !== note) actNote.textContent = note;
+      actNote.style.transform = `translate(${Math.round(Math.min(cw - 110, Math.max(110, ax)))}px, ${Math.round(Math.max(64, ay) - 58)}px) translate(-50%, -100%)`;
+    }
   };
 
   $('b-fit').onclick = () => {
@@ -806,6 +1189,32 @@ function boot(data: HotData) {
     if (isMachine(tool) || tool === 'depot' || tool === 'sampler' || tool === 'analyzer' || tool === 'station' || tool === 'sensor' || tool === 'gate' || isSep(tool)) inspect(placed);
   };
   /** 置く前の見本：占めるマス、置けるかどうか、向き、出口（外向きの矢印）と入口（内向きの矢印） */
+  /** 選んだ設備の出口と入口（反応で使う出口だけ） */
+  const selPorts = () => {
+    const e = selected;
+    if (!e || e.kind === 'hub' || e.kind === 'station' || MOVERS.has(e.kind) || floorOf(e.y) !== floor) return null;
+    const outs = isMachine(e.kind) ? (e.outOrder?.length ? (e.outSlot ?? e.outOrder.map((_, i) => i)) : Array.from({ length: slotCount(e) }, (_, i) => i))
+      : isSep(e.kind) ? sepSlots(e.kind) : e.kind === 'splitter' ? [0, 1, 2] : e.kind === 'analyzer' || e.kind === 'tank' ? [0, 1] : e.kind === 'vent' ? [] : [0];
+    const ports: { x: number; y: number; d: number; out: boolean }[] = [];
+    for (const i of outs) { const q = slotPort(e, i); ports.push({ x: q.x, y: q.y, d: q.d, out: true }); }
+    if (e.kind !== 'extractor' && e.kind !== 'depot' && e.kind !== 'sampler') for (const q of inDoors(e)) ports.push({ x: q.x, y: q.y, d: q.d, out: false });
+    return ports;
+  };
+  let marksFor: Ent | null = null, marksN = -1, marksList: Ent[] = [];
+  /** 選んだ装置と同じ反応の装置（選び直すか、設備の数が変わったときだけ数え直す） */
+  const sameMarks = () => {
+    const e = selected;
+    if (!e?.recipe) return null;
+    if (marksFor !== e || marksN !== world.ents.size) { marksFor = e; marksN = world.ents.size; marksList = [...world.ents.values()].filter((o) => o !== e && o.kind !== 'part' && o.recipe === e.recipe); }
+    return marksList;
+  };
+  /** ずらしている間の見本：行き先に置けるなら蛍光、ふさがっていれば赤 */
+  const moveGhost = () => {
+    if (!moving) return null;
+    const m = moving, set = new Set(m.es.flatMap((e) => (e.kind === 'lift' ? [e, liftPartner(world, e)].filter((x): x is Ent => !!x) : [e])));
+    const ok = [...set].every((e) => footprint(e.x + m.dx, e.y + m.dy, sizeOf(e)).every(([fx, fy]) => { const o = at(world, fx, fy); return !o || set.has(o); }));
+    return [...set].filter((e) => floorOf(e.y) === floor).map((e) => ({ x: e.x + m.dx, y: e.y + m.dy, size: sizeOf(e), ok, dir: e.dir, glyph: MACHINES[e.kind as keyof typeof MACHINES]?.glyph ?? '' }));
+  };
   const toolGhost = () => {
     if (!hover || !isBuild(tool) || tool === 'belt' || !modal.hidden) return null;
     if (at(world, hover[0], hover[1]) && !holding) return null;
@@ -849,11 +1258,15 @@ function boot(data: HotData) {
   const railStart = (x: number, y: number) => [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => at(world, x + dx, y + dy)?.kind === 'station' || world.rails.has(`${x + dx},${y + dy}`));
   const pullsBelt = (x: number, y: number) => { const e = at(world, x, y); return !!e && e.kind !== 'hub' && e.kind !== 'vent'; };
   const H: Required<InputHandlers> = {
+    groundMode: () => !!moving,
     undo: () => { if (modal.hidden) doUndo(); },
     redo: () => { if (modal.hidden) doRedo(); },
-    begin: () => { group = null; camTo = null; cross = null; railsLaid = 0; tip.hidden = true; lanePath = []; laneLaid.clear(); holding = false; },
+    begin: () => { group = null; camTo = null; cross = null; railsLaid = 0; beltRun = 0; tip.hidden = true; lanePath = []; laneLaid.clear(); holding = false; },
     // 設備の道具で空いたマスを押し続けると、見本が出て、指で場所を選べる。離すと置く
-    hold(x, y) {
+    hold(x, y, g) {
+      // 「見る」のとき、置いたものを長押しすると、つかんでずらせる（移す量は、指の下の地面のマスで測る）
+      const held = at(world, x, y);
+      if (tool === 'pan' && held && held.kind !== 'hub') { moving = { es: [held], gx: g ? g[0] : x, gy: g ? g[1] : y, dx: 0, dy: 0, area: false }; selected = held; sfx.tap(); buzz(15); return true; }
       if (!isBuild(tool) || tool === 'belt' || at(world, x, y)) return false;
       holding = true; hover = [x, y]; sfx.tap();
       return true;
@@ -865,15 +1278,28 @@ function boot(data: HotData) {
         toast(`線路を ${railsLaid} マス敷いた。${linked ? `線路でつながった積む駅：${linked} か所。` : 'まだ、積む駅と降ろす駅はつながっていない。'}`, 2600);
         sfx.ok(); railsLaid = 0;
       }
+      if (moving) {
+        const m = moving;
+        moving = null;
+        if (m.dx || m.dy) { if (m.area) shiftArea(m.dx, m.dy, false); else doMove(m.es, m.dx, m.dy); }
+        return;
+      }
       if (!holding) return;
       holding = false;
       const hv = hover;
       hover = null;
       if (hv && !at(world, hv[0], hv[1])) placeAt(hv[0], hv[1]);
     },
-    hover(t) { if (!holding) hover = t; },
+    hover(t) { if (!holding) hover = t; cv.classList.toggle('over-ent', !!t && tool === 'pan' && !!at(world, t[0], t[1])); },
     mode: (x, y) => (tool === 'rail' ? (!floor && railStart(x, y) ? 'stroke' : 'pan') : tool === 'area' ? (blueprint ? 'pan' : 'stroke') : tool === 'belt' || tool === 'erase' || (tool === 'pan' && pullsBelt(x, y)) ? 'stroke' : 'pan'),
     tap(x, y) {
+      // 「ずらす」を押したあとのタップ：その場所へ（2×2 の装置は、タップしたマスが左上になる）
+      if (moveArm) {
+        const e = moveArm;
+        moveArm = null; app.classList.remove('arming');
+        if (at(world, x, y) !== e) doMove([e], x - e.x, y - e.y);
+        return;
+      }
       if (tool === 'rail') {
         const e = at(world, x, y), m = world.rails.get(`${x},${y}`) || 0;
         if (e?.kind === 'station') inspect(e);
@@ -892,6 +1318,9 @@ function boot(data: HotData) {
       placeAt(x, y);
     },
     stroke(x, y, prev) {
+      if (moving) { moving.dx = x - moving.gx; moving.dy = y - moving.gy; return; }
+      // 範囲選択の中から引き始めたら、囲んだものをまとめてずらす
+      if (tool === 'area' && !prev && !blueprint && areaRect() && inRect(x, y)) { const es = inArea(); if (es.length) { moving = { es, gx: x, gy: y, dx: 0, dy: 0, area: true }; return; } }
       selected = null;
       if (holding) { hover = [x, y]; return; }
       if (tool === 'rail') {
@@ -916,7 +1345,14 @@ function boot(data: HotData) {
       }
       cross = null;
       const e = at(world, x, y);
-      if (!e) { if (prev || tool === 'belt') doPlace('belt', x, y, beltDir); }
+      if (!e) {
+        if ((prev || tool === 'belt') && !doPlace('belt', x, y, beltDir)) {
+          // 引いている長さを、下の説明の欄に出す
+          beltRun++;
+          tip.replaceChildren(h('b', {}, `ベルト ${beltRun} マス`), beltRun >= 2 ? '　離すと引き終わる。画面の端まで引くと、地図が送られる。' : '');
+          tip.hidden = false; clearTimeout(tipTimer); tipTimer = window.setTimeout(() => { tip.hidden = true; }, 1600);
+        }
+      }
       else if (e.kind === 'belt' && prev) {
         if (e.dir % 2 !== beltDir % 2) cross = [x, y]; // 直角に乗った。次の一歩で、横切るか合流かが決まる
         else doTurn(e, beltDir);
@@ -930,7 +1366,8 @@ function boot(data: HotData) {
     mode: (x, y) => H.mode(x, F(y)),
     tap: (x, y) => H.tap(x, F(y)),
     stroke: (x, y, prev) => H.stroke(x, F(y), prev && [prev[0], F(prev[1])]),
-    hold: (x, y) => H.hold(x, F(y)),
+    hold: (x, y, g) => H.hold(x, F(y), [g[0], F(g[1])]),
+    groundMode: () => !!moving,
     hover: (t) => H.hover(t && [t[0], F(t[1])]),
     undo: H.undo, redo: H.redo,
   }, {
@@ -974,9 +1411,12 @@ function boot(data: HotData) {
   function paintArea() {
     const n = inArea().length, bp = !!blueprint;
     areaAct.hidden = tool !== 'area';
-    $('area-n').textContent = bp ? (ghost ? `設計図 ${blueprint!.length} 個。場所を変えるなら別のマスをタップ。` : `設計図 ${blueprint!.length} 個。置きたい場所の左上をタップ。`) : areaRect() ? `${n} 個を選択中` : 'なぞって四角く囲め。';
+    const r = areaRect();
+    $('area-n').textContent = bp ? (ghost ? `設計図 ${blueprint!.length} 個。場所を変えるなら別のマスをタップ。` : `設計図 ${blueprint!.length} 個。置きたい場所の左上をタップ。`) : r ? `${n} 個を選択中（${r[2] - r[0] + 1}×${r[3] - r[1] + 1} マス）。${n ? '中から引くと、まとめてずらせる。' : ''}` : 'なぞって四角く囲め。';
+    $('area-all').hidden = bp;
     $('area-copy').hidden = $('area-del').hidden = bp || n === 0;
     $('area-num').hidden = bp || !inArea().some((e) => NUMBERED.includes(e.kind));
+    $('area-nudge').hidden = bp || n === 0;
     $('area-rot').hidden = $('area-save').hidden = $('area-put').hidden = !bp;
     ($('area-put') as HTMLButtonElement).disabled = !ghost;
     $('area-lib').hidden = bp;
@@ -1017,6 +1457,26 @@ function boot(data: HotData) {
     again();
   };
   $('area-num').onclick = showNumbering;
+  const inRect = (x: number, y: number) => { const r = areaRect(); return !!r && x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]; };
+  /** 囲んだものを、まとめて 1 マスずつずらす（中の線路も一緒に）。囲みも一緒に動く */
+  const shiftArea = (dx: number, dy: number, quiet: boolean) => {
+    const es = inArea(), r = areaRect();
+    if (!es.length || !areaA || !areaB || !r) return false;
+    if (!doMove(es, dx, dy, quiet, r)) return false;
+    areaA = [areaA[0] + dx, areaA[1] + dy]; areaB = [areaB[0] + dx, areaB[1] + dy];
+    paintArea();
+    return true;
+  };
+  const nudgeArea = (dx: number, dy: number) => { if (shiftArea(dx, dy, false)) sfx.tap(); };
+  // 画面に見えている範囲を、まとめて囲む
+  $('area-all').onclick = () => {
+    const vw = cw / 2 / cam.z, vh = ch / 2 / cam.z;
+    areaA = [Math.floor(cam.x - vw) + 1, F(Math.floor(cam.y - vh) + 1)];
+    areaB = [Math.floor(cam.x + vw) - 1, F(Math.floor(cam.y + vh) - 1)];
+    blueprint = null; ghost = null; sfx.tap(); paintArea();
+  };
+  $('area-left').onclick = () => nudgeArea(-1, 0); $('area-right').onclick = () => nudgeArea(1, 0);
+  $('area-up').onclick = () => nudgeArea(0, -1); $('area-down').onclick = () => nudgeArea(0, 1);
   const toStamps = (r: [number, number, number, number], es: Ent[]): Stamp[] => es.map((e) => ({ kind: e.kind as Placeable, dx: e.x - r[0], dy: e.y - r[1], dir: e.dir, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, test: e.test, sub: e.sub, ch: e.ch, role: e.role }));
   $('area-copy').onclick = () => {
     const r = areaRect(), es = inArea();
@@ -1223,9 +1683,9 @@ function boot(data: HotData) {
   }
 
   // ---- 花火：章を終えたら、納品所が飲み込んだ元素の炎色で上げる ----
-  const fireworks = (count: number) => launchFireworks(flamesFed(world).map((sym) => ({ sym, ...FLAMES[sym] })), count);
+  const fireworks = (count: number) => pf.calm ? undefined : launchFireworks(flamesFed(world).map((sym) => ({ sym, ...FLAMES[sym] })), count);
   // 確認用：アドレスに ?fw を付けると、花火を上げる関数と、いまの視点を外から読める
-  if (typeof location !== 'undefined' && location.search.includes('fw')) Object.assign(window, { __fireworks: fireworks, __cam: cam, __project: (x: number, y: number, hh = 0) => (threeOn() ? camera3(cam, cw, ch).project(x, y, hh) : [(x - cam.x) * cam.z + cw / 2, (y - cam.y) * cam.z + ch / 2]) });
+  if (typeof location !== 'undefined' && location.search.includes('fw')) Object.assign(window, { __fireworks: fireworks, __cam: cam, __world: () => world, __at: (x: number, y: number) => at(world, x, y), __project: (x: number, y: number, hh = 0) => (threeOn() ? camera3(cam, cw, ch).project(x, y, hh) : [(x - cam.x) * cam.z + cw / 2, (y - cam.y) * cam.z + ch / 2]) });
 
   // ---- アルバム：指令を達成した瞬間の工場を、上から撮って残す（章ごとに最新の 1 枚と、最初の 1 枚）----
   interface Photo { k: string; cap: string; d: string; done: number; ms: number }
@@ -1247,7 +1707,8 @@ function boot(data: HotData) {
     const list = album();
     if (big) {
       const img = h('img', { class: 'photo-big', src: big.d, alt: big.cap });
-      showSheet(h('header', {}, h('h2', {}, 'アルバム'), h('button', { class: 'ghost', type: 'button', id: 'album-back', onclick: () => showAlbum() }, '戻る')), img, h('p', {}, big.cap), h('p', { class: 'muted' }, `達成 ${big.done} / ${TOTAL_GOALS}`));
+      showSheet(h('header', {}, h('h2', {}, 'アルバム'), h('button', { class: 'ghost', type: 'button', id: 'album-back', onclick: () => showAlbum() }, '戻る')), img, h('p', {}, big.cap), h('p', { class: 'muted' }, `達成 ${big.done} / ${TOTAL_GOALS}`),
+        h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'album-save', onclick: () => { download(big.d, stampName('jpg')); toast('写真を保存した（ダウンロード）。', 2000); } }, 'この写真を保存する')));
       return;
     }
     showSheet(h('header', {}, h('h2', {}, 'アルバム'), closeBtn()),
@@ -1276,6 +1737,11 @@ function boot(data: HotData) {
     }
     const g = currentGoal(world), ch2 = CHAPTERS[world.chapter];
     $('pts').textContent = String(world.points);
+    // 強化か研究ができるだけの研究点がたまったら、ボタンに印をつける
+    if (world.tick % 30 === 0) {
+      const can = (['extract', 'belt', 'machine'] as const).some((k) => { const c = UPGRADE_COST[world.up[k]]; return c !== undefined && world.points >= c; }) || RESEARCH.some((r) => !has(world, r.id) && !researchBlock(world, r));
+      $('b-up').classList.toggle('ready', can);
+    }
     const due = reviewCount(world);
     $('due').textContent = due ? String(due) : '';
     const sig = `${world.chapter}:${world.progress[world.chapter]}:${world.hubSize}`;
@@ -1310,6 +1776,15 @@ function boot(data: HotData) {
   // ---- アカウント：セーブを書くたびに、少しあとで預ける。ほかの端末が先へ進めていたら、知らせる ----
   initAccount();
   let clashTold = 0;
+  /** メニューの右肩の印：緑＝同期済み、黄＝同期中、赤＝同期できていない・食い違い */
+  const paintSync = () => {
+    const st = syncState(), dot = $('sync-dot');
+    dot.hidden = !st.on;
+    if (!st.on) return;
+    dot.className = st.trouble || st.conflicts ? 'bad' : st.busy ? 'busy' : '';
+    dot.title = st.trouble ? `同期できていない：${st.trouble}` : st.conflicts ? 'ほかの端末と食い違っている（タイトルの「アカウント」で選ぶ）' : st.busy ? '同期中' : st.lastSync ? `${hm(st.lastSync)} に同期` : '同期待ち';
+  };
+  onAccountChange(paintSync);
   onAccountChange(() => {
     if (app.classList.contains('in-title') || !slot || !conflictSlots().includes(slot) || clashTold === slot) return;
     clashTold = slot;
@@ -1323,6 +1798,9 @@ function boot(data: HotData) {
       slot = n;
       clearUndo(); selected = null; shownGoal = ''; speed = 1; paintSpeed(); clone = null;
       cam.x = hubCX; cam.y = hubCY; cam.z = nearZoom(); camTo = null;
+      // 前に見ていた場所から始める
+      const c0 = json ? store.meta().cams?.[String(n)] : undefined;
+      if (c0 && [c0.x, c0.y, c0.z].every((v) => typeof v === 'number' && isFinite(v))) { cam.x = c0.x; cam.y = c0.y; cam.z = Math.min(Z_MAX, Math.max(Z_MIN, c0.z)); }
       $('b-fit').textContent = '全体';
       title.hide();
       app.classList.remove('in-title');
@@ -1330,17 +1808,39 @@ function boot(data: HotData) {
       refreshTools(false);
       lastSeen = world.seen; lastRes = world.research.length; floor = 0; paintFloor();
       pick('pan');
+      // 「見る」を選ぶと棚が「運ぶ」に替わるので、最後に開いていた棚に戻す
+      const t0 = store.meta().tab;
+      if (t0 && GROUPS.some((g) => g.id === t0)) { tab = t0; paintTabs(); }
       began = performance.now(); warned = false;
-      save();
-      if (!json) showHelp(true);
+      save(); paintSpeed(); paintMarks(); paintSync();
+      if (!json) { showHelp(true); store.setMeta({ news: NEWS }); }
       else if (closedNow()) showClosing();
       else if (morningDue(world, sleepCfg(), new Date())) showMorningSet();
+      else if (store.meta().news !== NEWS) showNews();
     },
   });
-  const toTitle = () => { rvCard.hidden = true; leaveCase(); save(); slot = 0; selected = null; app.classList.add('in-title'); title.show(); };
+  const toTitle = () => { rvCard.hidden = true; leaveCase(); save(); saveCam(); slot = 0; selected = null; moving = null; moveArm = null; app.classList.remove('arming'); actNote.hidden = true; $('paused').hidden = true; $('marks').hidden = true; app.classList.add('in-title'); title.show(); };
+  /** 今日のまとめ：タイトルへ戻る前に、今日の時間・復習・続いた日数・次の復習を見せる */
+  const showToday = () => {
+    const now = Date.now(), [n, ok] = todayCount(world, now), st = streakOf(world, now), ex = daysToExam(world, now);
+    const next = Object.values(world.srs).map((c) => c.due).filter((d) => d > now).sort((a, b) => a - b)[0];
+    const dueNow = reviewCount(world);
+    showSheet(h('header', {}, h('h2', {}, '今日のまとめ'), closeBtn()),
+      h('table', { class: 'keys' },
+        h('tr', {}, h('th', {}, '遊んだ時間'), h('td', {}, fmtTime(world.dayMs[dayKey(now)] ?? 0))),
+        h('tr', {}, h('th', {}, '復習'), h('td', {}, `${n} 問（思い出せた ${ok} 問）　目標 ${DAILY_GOAL} 問${n >= DAILY_GOAL ? '　達成' : ''}`)),
+        h('tr', {}, h('th', {}, '続けた日数'), h('td', {}, `${st} 日`)),
+        h('tr', {}, h('th', {}, 'いま待っている復習'), h('td', {}, dueNow ? `${dueNow} 問` : 'なし')),
+        h('tr', {}, h('th', {}, '次の復習'), h('td', {}, next ? fmtDate(next) : '—')),
+        ex !== null ? h('tr', {}, h('th', {}, '次の試験まで'), h('td', {}, `${ex} 日`)) : null),
+      dueNow ? h('p', { class: 'muted' }, '待っている復習は、閉じる前に片づけると、間隔どおりに覚えられる。') : null,
+      h('div', { class: 'row' },
+        dueNow ? h('button', { class: 'ghost', type: 'button', id: 'today-review', onclick: () => showReview(panel()) }, `復習する（${dueNow} 問）`) : null,
+        h('button', { class: 'primary', type: 'button', id: 'today-title', onclick: () => { modal.hidden = true; sheet.replaceChildren(); toTitle(); } }, 'タイトルへ')));
+  };
 
   // ---- ループ ----
-  let miniTick = 0;
+  let miniTick = 0, idleSkip = 0;
   let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0, chapterBefore = 0, slowFrames = 0;
   const STEP = 1 / 60;
   const frame = (now: number) => {
@@ -1365,6 +1865,9 @@ function boot(data: HotData) {
           const gr = world.lastGrade;
           world.lastGrade = undefined;
           if (ev === 'goal-done') {
+            const took = world.goalMs[`${chapterBefore}:${Math.max(0, (world.progress[chapterBefore] || 1) - 1)}`];
+            if (took) window.setTimeout(() => toast(`この指令にかかった時間：${fmtTime(took)}（工場を動かしていた時間）。`, 3000), 4200);
+            buzz([20, 60, 20]);
             stamp(gr ? `評価 ${gr.g}` : '納品済');
             toast(gr ? `納品完了。研究点 +30。操業評価 ${gr.g}（毎分 ${gr.rate.toFixed(1)} 個）${gr.bonus ? `で +${gr.bonus}` : '。毎分 6 個以上で B、15 個で A、30 個で S'}。` : '納品完了。研究点 +30。次の指令が出た。', 4500);
             sfx.goal(); refreshTools(true);
@@ -1396,8 +1899,9 @@ function boot(data: HotData) {
         save();
       }
       sinceSave += dt;
-      if (sinceSave > 5) { sinceSave = 0; save(); }
-      if (!warned && now - began > SESSION_LIMIT_MS) { warned = true; toast('25分たった。ここで切り上げて休め。', 8000); }
+      if (sinceSave > 5) { sinceSave = 0; save(); saveCam(); paintSync(); }
+      if (!warned && pf.breakMin && now - began > pf.breakMin * 60000) { warned = true; toast(`${pf.breakMin} 分たった。ここで切り上げて休め。立って、遠くを見ろ。`, 8000); buzz([40, 60, 40]); }
+      if (camTo && pf.calm) { cam.x = camTo.x; cam.y = camTo.y; cam.z = camTo.z; camTo = null; }
       if (camTo) {
         const k = 1 - Math.exp(-dt * 7);
         cam.x += (camTo.x - cam.x) * k; cam.y += (camTo.y - cam.y) * k; cam.z += (camTo.z - cam.z) * k;
@@ -1407,8 +1911,10 @@ function boot(data: HotData) {
       if (lastSeen !== world.seen) { lastSeen = world.seen; refreshTools(true); }
       if (lastRes !== world.research.length) { lastRes = world.research.length; refreshTools(true); paintOpts(); paintFloor(); }
       const d0 = PERF ? performance.now() : 0;
+      const idle = pf.saver && performance.now() - lastInput > 5 * 60000 && !shotPending;
+      if (idle && ++idleSkip % 6) { hud(); placeAct(); requestAnimationFrame(frame); return; }
       const fx = fxOn(), t3 = fx && three && gw > 0;
-      const view = { dusk: palette().name === 'light' ? dusk : dusk * 0.5, floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : toolGhost() };
+      const view = { dusk: palette().name === 'light' ? dusk : dusk * 0.5, floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: moving && (moving.dx || moving.dy) ? moveGhost() : tool === 'area' ? ghostCells() : toolGhost(), lift: !!moving && !!(moving.dx || moving.dy), ports: moving ? null : selPorts(), marks: sameMarks(), allPlates: pf.plates };
       if (fx) {
         // 光の層は黒地に加算、効果の層は黒地（何もない所は効果なし）
         for (const c2 of [glowCtx, maskCtx]) { c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'source-over'; c2.globalAlpha = 1; c2.fillStyle = '#000'; c2.fillRect(0, 0, glowCv.width, glowCv.height); c2.setTransform(fxK, 0, 0, fxK, 0, 0); c2.globalCompositeOperation = 'lighter'; }
@@ -1445,6 +1951,7 @@ function boot(data: HotData) {
           else { gfxHigh = false; applyGfx(); store.setMeta({ gfx: 'plain' }); toast('動きが重いので、画質を標準に切り替えた。メニューの「画質」で戻せる。', 5000); }
         }
       }
+      if (shotPending) takeShot();
       if (++miniTick % 20 === 0) paintMini();
       if (miniTick % 30 === 0) cardTick(performance.now());
       if (++sleepTick % 60 === 0) sleepCheck();
@@ -1465,6 +1972,29 @@ function boot(data: HotData) {
   requestAnimationFrame(frame);
   document.addEventListener('visibilitychange', () => { if (document.hidden) { save(); flushAccount(); } });
 
+  applyPrefs();
+  let errTold = 0;
+  const onCrash = () => {
+    try { save(); saveCam(); } catch { /* 保存できなくても、知らせる */ }
+    if (slot && Date.now() - errTold > 30000) { errTold = Date.now(); toast('不具合が起きた。ここまでの工場は保存した。動きがおかしければ、メニューから「保存してタイトルへ戻る」で開き直せ。', 8000); }
+  };
+  window.addEventListener('error', onCrash);
+  window.addEventListener('unhandledrejection', onCrash);
+  window.addEventListener('pagehide', () => { save(); saveCam(); });
+  // 更新のお知らせ：新しい版で、はじめて工場を開いたときに 1 度だけ
+  const NEWS = '2026-11-move';
+  const showNews = () => {
+    store.setMeta({ news: NEWS });
+    showSheet(h('header', {}, h('h2', {}, '更新のお知らせ'), closeBtn()),
+      h('p', {}, h('b', {}, '置いたものを、ずらせるようになった。')),
+      h('ul', {},
+        h('li', {}, '「見る」で、置いたものを長押し → そのまま指を動かすと、ずらせる（離すと置く。ふさがっていれば赤い見本と理由が出る）。'),
+        h('li', {}, '選んだものの帯の ⇲ を押して、行き先をタップしてもよい。'),
+        h('li', {}, '「範囲」で囲んだら、囲みの中から引くと、まとめてずらせる（中の線路も一緒に）。帯の ← ↑ ↓ → で 1 マスずつ。'),
+        h('li', {}, 'ずらしたことは「元に戻す」で戻せる。')),
+      h('p', {}, 'ほかに 90 項目あまり：キーボード操作、選んだ設備の状態の一行、どこで作っている？、場所を覚える、通知の履歴、復習の数字キー・反応式・練習・苦手の一覧・連続日数・グラフ、設定の画面（振動・音量・動きを減らす・文字とボタンの大きさ・覚える確率）、全ノートの書き出し、画面写真など。'),
+      h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'news-keys', onclick: () => showKeys() }, 'キーと指の操作'), h('button', { class: 'primary', type: 'button', id: 'news-ok', onclick: closeModal }, '閉じる')));
+  };
   // 開いたまま更新されたときは、遊んでいた枠にそのまま戻る
   if (data.slot && data.save && deserialize(data.save)) {
     store.write(data.slot, data.save);

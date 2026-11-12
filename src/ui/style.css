@@ -291,6 +291,74 @@ b { font-weight: 700; }
 .pep-line .slot { min-width: 0; flex: 0 1 auto; padding: 6px 10px; font-size: 16px; }
 #area-act { position: absolute; left: 50%; top: 72px; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; align-items: center; z-index: 3; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px; padding: 6px 8px 6px 12px; box-shadow: 2px 2px 0 var(--shadow); font-size: 13px; max-width: calc(100% - 32px); }
 #area-n { flex: 1 1 180px; min-width: 0; }
+#area-act .nudge { display: inline-flex; gap: 2px; }
+#area-act .nudge button { min-width: 40px; padding: 6px 8px; }
+#area-act .nudge[hidden] { display: none; }
+/* 選んだ設備の状態の一行（操作の帯の上） */
+#act-note { position: absolute; left: 0; top: 0; z-index: 2; margin: 0; max-width: min(420px, calc(100% - 24px)); padding: 3px 10px; background: var(--card); color: var(--ink); border: 1.5px solid var(--ink); border-radius: 4px; font-size: 13px; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; will-change: transform; }
+.in-title #act-note, .in-title #marks, .in-title #paused { visibility: hidden; }
+/* 覚えた場所と、小地図の大きさ */
+#marks { position: absolute; right: var(--gr); bottom: calc(104px + 150px + 6px); z-index: 2; display: flex; gap: 4px; }
+#marks button { min-height: 32px; padding: 2px 10px; font-size: 12px; border: 1.5px solid var(--ink); border-radius: 4px; background: var(--card); color: var(--ink); }
+#marks button.set { background: var(--ink); color: var(--on-ink); }
+.mini-big #minimap { width: 340px; height: 232px; }
+.mini-big #marks { bottom: calc(104px + 232px + 6px); }
+@media (max-width: 860px), (max-height: 560px) { #marks { display: none; } }
+/* 一時停止中の帯 */
+#paused { position: absolute; left: 50%; top: 70px; transform: translateX(-50%); z-index: 2; padding: 4px 14px; border: 2px solid var(--ink); border-radius: 4px; background: var(--card); color: var(--ink); font-weight: 700; font-size: 14px; pointer-events: none; }
+#paused .muted { font-weight: 500; font-size: 12px; }
+/* 同期の印（メニューの右肩） */
+#b-menu { position: relative; }
+#sync-dot { position: absolute; right: -4px; top: -4px; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--card); background: #3c9a5f; }
+#sync-dot.busy { background: #d6a020; }
+#sync-dot.bad { background: var(--red); }
+/* 「ずらす」を押して、行き先を待っている */
+.arming #cv { cursor: crosshair; }
+/* マウスで設備の上に乗ると、押せる形のカーソル */
+#cv.over-ent { cursor: pointer; }
+/* 通知は押すと消える */
+#toast { pointer-events: auto; cursor: pointer; }
+#toast .n { margin-left: 6px; font-family: var(--font-mono); font-size: 12px; color: var(--soft); }
+/* 復習の選択肢のキー */
+.rv-choices kbd { display: inline-block; min-width: 18px; margin-right: 8px; padding: 0 4px; border: 1px solid var(--soft); border-radius: 3px; font-family: var(--font-mono); font-size: 11px; color: var(--soft); line-height: 16px; text-align: center; }
+/* 指令のヒントを隠す */
+html.no-hints #goal-hint { display: none; }
+/* キーの一覧・通知の履歴・設定 */
+table.keys { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.keys th { text-align: left; white-space: nowrap; padding: 4px 12px 4px 0; font-family: var(--font-mono); font-size: 13px; vertical-align: top; }
+table.keys td { padding: 4px 0; }
+table.keys tr + tr { border-top: 1px solid var(--rule); }
+ol.notes { padding-left: 1.2em; font-size: 14px; }
+ol.notes li { margin: 2px 0; }
+.pref-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--rule); flex-wrap: wrap; }
+.pref-row .what { display: grid; gap: 0; min-width: 0; flex: 1 1 220px; }
+.pref-row .what small { color: var(--soft); font-size: 12px; line-height: 1.4; }
+.pref-row input[type=range] { width: 160px; }
+.rv-eq { font-family: var(--font-mono); font-size: 14px; }
+.rv-bonus { color: var(--red); font-weight: 700; }
+.rv-habit { font-size: 13px; color: var(--soft); }
+.bars { display: flex; align-items: flex-end; gap: 6px; height: 90px; margin: 6px 0 2px; }
+.bars .bar { flex: 1; display: grid; align-content: end; justify-items: center; gap: 2px; font-size: 11px; color: var(--soft); height: 100%; }
+.bars .bar i { display: block; width: 100%; background: var(--ink); border-radius: 2px 2px 0 0; min-height: 1px; }
+.bars .bar i.ok { background: #3c9a5f; }
+.bars .bar b { font-family: var(--font-mono); font-weight: 600; color: var(--ink); font-size: 11px; }
+.spark { width: 100%; height: 44px; display: block; }
+/* 強化か研究ができるとき */
+#b-up.ready { position: relative; }
+#b-up.ready::after { content: ""; position: absolute; right: -4px; top: -4px; width: 10px; height: 10px; border-radius: 50%; background: var(--red); border: 1.5px solid var(--card); }
+/* タイトル：ノートごとの復習と、今朝の 10 問 */
+.slot-learn { font-size: 13px; color: var(--ink); }
+.slot-morning { font-size: 13px; color: var(--red); font-weight: 700; }
+.rx-srs { display: block; font-size: 12px; }
+/* 動きを減らす */
+html.calm *, html.calm *::before, html.calm *::after { animation: none !important; transition: none !important; }
+/* 文字を大きく：窓と札の文字（地図の絵は、拡大で大きくできる） */
+html.big-text :is(#sheet, #goal, #toast, #tip, #rvcard, #act-note, #area-act) { zoom: 1.15; }
+/* ボタンを大きく */
+html.big-btn :is(#topbtns, #area-act, #act) button { min-height: 56px; min-width: 56px; }
+html.big-btn #tools .tool { min-width: 64px; min-height: 64px; }
+/* 復習の札を右に */
+html.card-right #rvcard { left: auto; right: var(--gr); }
 /* 画面の窓が開いている間は、範囲選択の帯を出さない（窓の上に重なる） */
 #app:has(#modal:not([hidden])) #area-act { display: none; }
 #area-act button { white-space: nowrap; border: var(--bw) solid var(--ink); background: var(--card); color: var(--ink); border-radius: 4px; padding: 6px 12px; min-height: 40px; font-weight: 700; font-family: inherit; }

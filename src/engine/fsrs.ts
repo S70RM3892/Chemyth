@@ -12,8 +12,9 @@
  */
 export const W5 = [0.40255, 1.18385, 3.173, 15.69105, 7.1949, 0.5345, 1.4604, 0.0046, 1.54575, 0.1192, 1.01925, 1.9395, 0.11, 0.29605, 2.2698, 0.2315, 2.9898, 0.51655, 0.6621];
 export const DECAY = -0.5, FACTOR = 19 / 81;
-/** 狙う「思い出せる確率」。上げるほど復習が増える */
+/** 狙う「思い出せる確率」。上げるほど復習が増える。設定で 0.85・0.9・0.95 から選べる */
 export const RETENTION = 0.9;
+export const RETENTIONS = [0.85, 0.9, 0.95];
 /** 安定度の下限（日）。0 に近づくと計算が不安定になるので、15 分ほどで止める（この値は FSRS の説明にはなく、ここで決めたもの） */
 const S_MIN = 0.01;
 const DAY = 86400000;
@@ -71,6 +72,9 @@ export const shortS = (s: number, g: Grade) => s * Math.exp(W5[17] * (g - 3 + W5
 /** 1 日の区切りは朝 4 時（夜ふかしして 0 時を回っても、同じ日として扱う） */
 export const dayKey = (t: number) => { const d = new Date(t - 4 * 3600000); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
 
+/** dayKey の日付を、並べ替えられる数にする */
+export const dayNum = (k: string) => { const [y, m, d] = k.split('-').map(Number); return (y * 13 + m) * 32 + d; };
+
 /** 安定度から、間隔の目安の段（0〜5）を決める：1 日未満・1・3・7・16・35 日以上 */
 export const stage = (s: number) => (s >= 35 ? 5 : s >= 16 ? 4 : s >= 7 ? 3 : s >= 3 ? 2 : s >= 1 ? 1 : 0);
 
@@ -103,8 +107,8 @@ export function firstCard(g: Grade, now: number): Card {
 }
 
 /** 答えた結果で、次の予定を決める */
-export function review(c: Card | undefined, g: Grade, now: number, exams: number[] = [], id = ''): Card {
-  if (!c) { const f = firstCard(g, now); f.due = capByExams(now + intervalDays(f.s) * DAY, now, exams, id); return f; }
+export function review(c: Card | undefined, g: Grade, now: number, exams: number[] = [], id = '', ret = RETENTION): Card {
+  if (!c) { const f = firstCard(g, now); f.due = capByExams(now + intervalDays(f.s, ret) * DAY, now, exams, id); return f; }
   const t = Math.max(0, (now - c.last) / DAY), sameDay = dayKey(now) === dayKey(c.last);
   const r = retrievability(t, c.s);
   let s: number;
@@ -113,7 +117,7 @@ export function review(c: Card | undefined, g: Grade, now: number, exams: number
   s = Math.max(S_MIN, s);
   const d = nextD(c.d, g);
   // 忘れたものは、同じ日のうちに、もう一度出す（ここでは 10 分後。工場の画面では、正解するまで戻ってくる）
-  const due = g === 1 ? now + 10 * 60000 : capByExams(now + Math.max(intervalDays(s), sameDay ? 0.5 : 1) * DAY, now, exams, id);
+  const due = g === 1 ? now + 10 * 60000 : capByExams(now + Math.max(intervalDays(s, ret), sameDay ? 0.5 : 1) * DAY, now, exams, id);
   const b = g === 1 ? 0 : Math.max(c.b ?? 0, t);
   return { due, s, d, last: now, n: c.n + 1, l: c.l + (g === 1 ? 1 : 0), iv: stage(s), hc: undefined, full: g === 1 || undefined, t0: c.t0, b };
 }

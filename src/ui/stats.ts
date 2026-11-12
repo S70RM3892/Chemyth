@@ -10,6 +10,38 @@ import { chip, statusOf } from './config';
 import { h } from './dom';
 import { showLog, showSyllabus, unitProgress, type PanelCtx } from './panels';
 import { sfx } from './sound';
+import { DAILY_GOAL, lastDays, streakOf } from '../engine/habit';
+import { dayKey } from '../engine/fsrs';
+
+/** 縦の棒グラフ（値・棒の下の名前・2 本目の値は濃い色で重ねる） */
+function bars(id: string, rows: { name: string; v: number; v2?: number; note?: string }[], max: number): HTMLElement {
+  const m = Math.max(1, max);
+  return h('div', { class: 'bars', id }, ...rows.map((r) => {
+    const all = h('i', {}), ok = r.v2 !== undefined ? h('i', { class: 'ok' }) : null;
+    all.style.height = `${Math.round((r.v / m) * 64)}px`;
+    // 2 本目（思い出せた数）は、1 本目の下の端に重ねる
+    if (ok) { const hh = Math.round((r.v2! / m) * 64); ok.style.height = `${hh}px`; ok.style.marginTop = `-${hh}px`; }
+    return h('div', { class: 'bar', title: r.note ?? '' }, h('b', {}, String(r.v)), all, ok, h('span', {}, r.name));
+  }));
+}
+/** 復習の記録：直近 7 日の数、自信ごとの正答率、これから 7 日の予定 */
+function learnCharts(w: World): HTMLElement[] {
+  const days = lastDays(w, 7), wk = ['日', '月', '火', '水', '木', '金', '土'];
+  const dname = (k: string) => { const [y, m, d] = k.split('-').map(Number); return wk[new Date(y, m - 1, d).getDay()]; };
+  const cal = (['sure', 'maybe', 'guess'] as const).map((k, i) => { const [n, ok] = w.calib[k] ?? [0, 0]; return { name: ['確実', 'たぶん', '勘'][i], v: n ? Math.round((ok / n) * 100) : 0, note: `${n} 問中 ${ok} 問正解` }; });
+  const now = Date.now(), ahead = Array.from({ length: 7 }, (_, i) => { const k = dayKey(now + i * 86400000); return { name: i === 0 ? '今日' : dname(k), v: Object.values(w.srs).filter((c) => (i === 0 ? c.due <= now + 86400000 && dayKey(Math.max(c.due, now)) === k : dayKey(c.due) === k)).length }; });
+  return [
+    h('h3', {}, `直近 7 日の復習（連続 ${streakOf(w)} 日・毎日の目標 ${DAILY_GOAL} 問）`),
+    bars('st-week', days.map((d) => ({ name: dname(d.day), v: d.n, v2: d.ok, note: `${d.n} 問中 思い出せた ${d.ok} 問` })), Math.max(DAILY_GOAL, ...days.map((d) => d.n))),
+    h('p', { class: 'muted' }, '黒が答えた数、緑が思い出せた数（勘で当たったものは数えない）。'),
+    h('h3', {}, '自信ごとの正答率（%）'),
+    bars('st-calib', cal, 100),
+    h('p', { class: 'muted' }, '「確実」が 9 割を切るなら、思い込みでまちがえている。「勘」が高すぎるなら、自信を低く見積もっている。'),
+    h('h3', {}, 'これから 7 日の復習（予定）'),
+    bars('st-ahead', ahead, Math.max(5, ...ahead.map((a) => a.v))),
+    h('p', { class: 'muted' }, '予定が 1 日に偏るなら、その前の日に少し先取りしておけ（「復習」で期限前の問いは出ないので、図鑑の「練習」を使う）。'),
+  ];
+}
 
 const pct = (x: number) => `${Math.round(x * 100)}`;
 const mmss = (sec: number) => (sec >= 3600 ? `${Math.floor(sec / 3600)} 時間 ${Math.floor((sec % 3600) / 60)} 分` : sec >= 60 ? `${Math.floor(sec / 60)} 分 ${Math.round(sec % 60)} 秒` : `${Math.round(sec)} 秒`);
@@ -139,6 +171,7 @@ export function showStats(c: StatsCtx) {
       tile('演習', tries ? pct(clean / tries) : '—', tries ? '%' : '', tries ? `連鎖計算・構造決定を ${tries} 回解いて、全問正解 ${clean} 回` : 'メニューの連鎖計算・構造決定はまだ解いていない'),
       tile('遊んだ時間', mmss(w.playMs / 1000), '', done ? `指令 1 つあたり平均 ${mmss(w.playMs / 1000 / done)}` : ''),
     ),
+    ...learnCharts(w),
     parts.length ? h('h3', {}, '間違いの内訳') : null,
     parts.length ? h('div', { class: 'hbars' }, ...parts.map(([name, n]) => h('div', { class: 'hbar' }, h('span', {}, name), meter(n / pmax), h('span', { class: 'hbar-n' }, `${n} 回`)))) : null,
     weak.length ? h('h3', {}, '手をつけたが進んでいない単元') : null,

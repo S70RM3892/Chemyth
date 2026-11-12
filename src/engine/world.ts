@@ -1,4 +1,4 @@
-import { capByExams, dayKey, firstCard, gradeOf, migrate, review, type Card, type Confidence, type Grade } from './fsrs';
+import { capByExams, dayKey, dayNum, firstCard, gradeOf, migrate, review, RETENTION, RETENTIONS, type Card, type Confidence, type Grade } from './fsrs';
 import { recipeById, RECIPES, CONDITIONS, electronsOf, productsOf, type MachineKind, type Recipe } from '../content/recipes';
 import { HUB_AT, HUB_CENTER, HUB_DEMAND, HUB_SIZES, hubTiles, resourceAt } from '../content/map';
 import { CHAPTERS, TOTAL_GOALS, type Goal } from '../content/goals';
@@ -203,6 +203,12 @@ export interface World {
   tested: number[];
   /** 今日まちがえた問題（今夜の 10 問に入れる） */
   today: { day: string; wrong: string[] };
+  /** 日ごとの復習の数：[答えた数, 思い出せた数（勘を除く）]。直近 60 日 */
+  revDays: Record<string, [number, number]>;
+  /** 狙う「思い出せる確率」（0.85・0.9・0.95） */
+  ret: number;
+  /** 毎日の復習目標のごほうびを、最後にもらった日 */
+  bonusDay: string;
   /** 最後に終えた混ぜ注文（知らせるため。保存しない） */
   lastSide?: { s: string; n: number; got: number; ch: number; reward: number };
   /** リード文課題で正解した空欄 */
@@ -438,7 +444,7 @@ export const isMachine = (k: Kind): k is MachineKind => k === 'separator' || k =
 export const EXAMS_DEFAULT = [new Date(2027, 0, 16, 9, 0).getTime(), new Date(2027, 1, 25, 9, 0).getTime()];
 /** 答えた結果で、次に出す日を決める（FSRS）。g は 1 忘れた〜4 簡単 */
 export function rate(w: World, id: string, g: Grade, now = Date.now()) {
-  w.srs[id] = review(w.srs[id], g, now, w.exams, id);
+  w.srs[id] = review(w.srs[id], g, now, w.exams, id, w.ret);
 }
 /** 正解か不正解かだけで記録する（自信を聞かない問い） */
 export function schedule(w: World, id: string, correct: boolean, now = Date.now()) {
@@ -453,6 +459,11 @@ export function answer(w: World, id: string, ok: boolean, conf: Confidence | und
   const g = conf ? gradeOf(ok, conf) : ok ? 3 : 1;
   if (conf) { const c = (w.calib[conf] ??= [0, 0]); c[0]++; if (ok) c[1]++; }
   rate(w, id, g, now);
+  // 日ごとの復習の数（勘で当てたものは、思い出せたに数えない）
+  const rd = (w.revDays[dayKey(now)] ??= [0, 0]);
+  rd[0]++; if (ok && conf !== 'guess') rd[1]++;
+  const days = Object.keys(w.revDays);
+  if (days.length > 60) for (const old of days.sort((a, b) => dayNum(a) - dayNum(b)).slice(0, days.length - 60)) delete w.revDays[old];
   const hc = !ok && conf === 'sure';
   if (hc) { w.srs[id].hc = true; w.hcLog.push({ id, t: now }); if (w.hcLog.length > 200) w.hcLog.splice(0, w.hcLog.length - 200); }
   w.relearn = w.relearn.filter((x) => x.id !== id);
@@ -527,7 +538,7 @@ export const toolUnlocked = (w: World, need: { done?: number; chapter?: number; 
 
 export function newWorld(): World {
   const w: World = {
-    ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, exams: [...EXAMS_DEFAULT], calib: { sure: [0, 0], maybe: [0, 0], guess: [0, 0] }, relearn: [], hcLog: [], side: null, night: null, dayMs: {}, tested: [], today: { day: '', wrong: [] }, cleared: [], delivered: {}, stock: {},
+    ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, exams: [...EXAMS_DEFAULT], calib: { sure: [0, 0], maybe: [0, 0], guess: [0, 0] }, relearn: [], hcLog: [], side: null, night: null, dayMs: {}, tested: [], today: { day: '', wrong: [] }, revDays: {}, ret: RETENTION, bonusDay: '', cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
     up: { extract: 0, belt: 0, machine: 0 }, research: [], agents: [], cases: [], solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, sig: [], rails: new Map(), railRev: 0, occ: new Map(), buckets: [], playMs: 0, tick: 0, events: [], fx: [],
   };
@@ -553,6 +564,52 @@ export function restore(w: World, e: Ent): boolean {
   put(w, e);
   return true;
 }
+/**
+ * 置いたものをずらす：ents を (dx, dy) マスだけ動かす。設定・中身・向きはそのまま。昇降機は、もう一方の階の相方も一緒に動く。
+ * 行き先が、動かすもの以外でふさがっていれば何もせず、理由を返す。納品所は動かせない。
+ * 成功したら、消した元の設備と、置いた新しい設備を返す（元に戻すときに使う）。
+ */
+export function moveEnts(w: World, ents: Ent[], dx: number, dy: number): { ok: true; removed: Ent[]; added: Ent[] } | { ok: false; why: string } {
+  const set = new Set<Ent>();
+  for (const e0 of ents) {
+    const e = e0.kind === 'part' ? at(w, e0.x, e0.y) : e0;
+    if (!e) continue;
+    if (e.kind === 'hub') return { ok: false, why: '納品所は動かせない。' };
+    set.add(e);
+    if (e.kind === 'lift') { const p = liftPartner(w, e); if (p) set.add(p); }
+  }
+  if (!set.size) return { ok: false, why: '動かすものがない。' };
+  if (!dx && !dy) return { ok: true, removed: [], added: [] };
+  for (const e of set) for (const [fx, fy] of footprint(e.x + dx, e.y + dy, sizeOf(e))) {
+    const o = at(w, fx, fy);
+    if (o && !set.has(o)) return { ok: false, why: o.kind === 'hub' ? '行き先に納品所がある。' : `行き先に${MACHINE_NAME(o)}がある。` };
+  }
+  const removed = [...set], added: Ent[] = [];
+  for (const e of removed) for (const [fx, fy] of footprint(e.x, e.y, sizeOf(e))) w.ents.delete(key(fx, fy));
+  for (const e of removed) { const c: Ent = { ...e, x: e.x + dx, y: e.y + dy }; put(w, c); added.push(c); }
+  // 走っている列車の行き先の駅をずらしたら、行き先も付け替える（線路がつながっていなければ、列車は引き返す）
+  const moved = new Map(removed.filter((e) => e.kind === 'station').map((e) => [key(e.x, e.y), key(e.x + dx, e.y + dy)]));
+  if (moved.size) for (const e of w.ents.values()) if (e.kind === 'station') for (const tr of [e.tr, ...(e.xtr ?? [])]) if (tr?.to && moved.has(tr.to)) tr.to = moved.get(tr.to);
+  return { ok: true, removed, added };
+}
+/**
+ * 囲んだ範囲の線路を、設備と一緒にずらす。ずらす前の、かかわるマスの線路を返す（元に戻すときに使う）。
+ * 行き先にもともとある線路とは、つなぎ目を重ねる
+ */
+export function moveRails(w: World, r: [number, number, number, number], dx: number, dy: number): [string, number | undefined][] {
+  const inside: [number, number, number][] = [];
+  for (const [k, m] of w.rails) { const [x, y] = k.split(',').map(Number); if (x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]) inside.push([x, y, m]); }
+  if (!inside.length || (!dx && !dy)) return [];
+  const cells = new Set<string>();
+  for (const [x, y] of inside) { cells.add(key(x, y)); cells.add(key(x + dx, y + dy)); }
+  const snap = [...cells].map((k) => [k, w.rails.get(k)] as [string, number | undefined]);
+  for (const [x, y] of inside) w.rails.delete(key(x, y));
+  for (const [x, y, m] of inside) { const k = key(x + dx, y + dy); w.rails.set(k, (w.rails.get(k) ?? 0) | m); }
+  w.railRev++;
+  return snap;
+}
+const MACHINE_NAME = (e: Ent) => (e.kind === 'belt' ? 'ベルト' : e.kind === 'part' ? '装置' : 'ほかの設備');
+
 /** 2×2 の装置を置くとき、タップしたマスを含む空き場所を探す。左上のマスを返す */
 export function fitAnchor(w: World, x: number, y: number): [number, number] | null {
   for (const [ax, ay] of [[x, y], [x - 1, y], [x, y - 1], [x - 1, y - 1]]) {
@@ -1594,7 +1651,7 @@ export const SAVE_VERSION = 2;
 export function serialize(w: World): string {
   return JSON.stringify({
     v: SAVE_VERSION, ents: [...w.ents.values()].filter((e) => e.kind !== 'part'), chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
-    rails: [...w.rails], hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, exams: w.exams, calib: w.calib, relearn: w.relearn, hcLog: w.hcLog, side: w.side, night: w.night, dayMs: w.dayMs, tested: w.tested, today: w.today, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
+    rails: [...w.rails], hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, exams: w.exams, calib: w.calib, relearn: w.relearn, hcLog: w.hcLog, side: w.side, night: w.night, dayMs: w.dayMs, tested: w.tested, today: w.today, revDays: w.revDays, ret: w.ret, bonusDay: w.bonusDay, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
     discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, research: w.research, agents: w.agents, cases: w.cases, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
     playMs: Math.round(w.playMs), savedAt: Date.now(),
   });
@@ -1656,6 +1713,10 @@ export function deserialize(json: string): World | null {
     w.night = d.night && typeof d.night.day === 'string' && Array.isArray(d.night.ids) ? { day: d.night.day, ids: d.night.ids.filter((x: unknown) => typeof x === 'string'), got: d.night.got | 0, morning: typeof d.night.morning === 'number' ? d.night.morning : undefined } : null;
     w.dayMs = d.dayMs && typeof d.dayMs === 'object' ? d.dayMs : {};
     w.tested = Array.isArray(d.tested) ? d.tested.filter((x: unknown) => typeof x === 'number') : [];
+    w.revDays = {};
+    if (d.revDays && typeof d.revDays === 'object') for (const [k, v] of Object.entries(d.revDays as Record<string, unknown>)) if (Array.isArray(v) && v.length === 2) w.revDays[k] = [Number(v[0]) | 0, Number(v[1]) | 0];
+    w.ret = RETENTIONS.includes(d.ret) ? d.ret : RETENTION;
+    w.bonusDay = typeof d.bonusDay === 'string' ? d.bonusDay : '';
     w.today = d.today && typeof d.today.day === 'string' && Array.isArray(d.today.wrong) ? { day: d.today.day, wrong: d.today.wrong.filter((x: unknown) => typeof x === 'string') } : { day: '', wrong: [] };
     w.delivered = d.delivered || {};
     w.stock = d.stock || {};
@@ -1684,12 +1745,18 @@ export function deserialize(json: string): World | null {
 }
 
 /** セーブ枠の一覧に出す要約 */
-export function summarize(json: string | null): { done: number; chapter: number; playMs: number; savedAt: number; points: number; progress: number[]; grades: Record<string, string> } | null {
+/** dayKey の日付の 0 時 */
+const dayStart = (k: string) => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d).getTime(); };
+export function summarize(json: string | null, now = Date.now()): { done: number; chapter: number; playMs: number; savedAt: number; points: number; progress: number[]; grades: Record<string, string>; due: number; exam: number | null; nightDay: string; morning: boolean } | null {
   if (!json) return null;
   try {
     const d = JSON.parse(json);
     if (d.v !== SAVE_VERSION) return null;
-    return { done: (d.done ?? d.goal) | 0, chapter: d.chapter | 0, playMs: d.playMs || 0, savedAt: d.savedAt || 0, points: d.points | 0, progress: Array.isArray(d.progress) ? d.progress : [], grades: d.grades || {} };
+    const srs = d.srs && typeof d.srs === 'object' ? Object.values(d.srs as Record<string, { due?: number; iv?: number }>) : [];
+    const exams: number[] = Array.isArray(d.exams) ? d.exams.filter((x: unknown) => typeof x === 'number') : EXAMS_DEFAULT;
+    const next = exams.filter((e) => e > now).sort((a, b) => a - b)[0];
+    return { due: srs.filter((c) => typeof c?.due === 'number' && c.due <= now).length, exam: next ? Math.ceil((next - now) / 86400000) : null, nightDay: typeof d.night?.day === 'string' ? d.night.day : '', morning: !!d.night && Array.isArray(d.night.ids) && d.night.ids.length > 0 && d.night.morning === undefined && d.night.day !== dayKey(now) && now - dayStart(d.night.day) < 2 * 86400000,
+      done: (d.done ?? d.goal) | 0, chapter: d.chapter | 0, playMs: d.playMs || 0, savedAt: d.savedAt || 0, points: d.points | 0, progress: Array.isArray(d.progress) ? d.progress : [], grades: d.grades || {} };
   } catch {
     return null;
   }

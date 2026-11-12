@@ -12,6 +12,22 @@ export const SLOTS = 3;
 const slotKey = (n: number) => `chemyth-v2-slot-${n}`;
 const META = 'chemyth-v2-meta';
 
+type Cam = { x: number; y: number; z: number };
+/** 端末ごとの設定。セーブ枠とは別に置く */
+export interface Meta {
+  sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string; overlay?: boolean; music?: boolean; gfx?: 'high' | 'plain'; view3d?: 'on' | 'off'; goalFold?: boolean; minimap?: boolean;
+  sleep?: { on: boolean; bed: number; wake: number }; ext?: { day: string; until: number }; warned?: string;
+  /** 好み（prefs.ts） */
+  prefs?: Record<string, unknown>;
+  /** セーブ枠ごとの、最後に見ていた場所と、覚えた場所（2 か所） */
+  cams?: Record<string, Cam>; marks?: Record<string, (Cam | null)[]>;
+  /** 最後に見た更新のお知らせ */
+  news?: string;
+  /** 下の道具の帯で、最後に開いていた組 */
+  tab?: string;
+  /** 最後に保存できた時刻と、保存に失敗した時刻 */
+  savedAt?: number;
+}
 // セーブはこの端末のブラウザの中だけに置く。読み書きに失敗しても遊べるようにする
 export const store = {
   read(n: number): string | null { try { return localStorage.getItem(slotKey(n)); } catch { return null; } },
@@ -19,8 +35,8 @@ export const store = {
   onWrite: null as ((n: number) => void) | null,
   write(n: number, json: string, quiet = false): boolean { try { localStorage.setItem(slotKey(n), json); if (!quiet) store.onWrite?.(n); return true; } catch { return false; } },
   erase(n: number) { try { localStorage.removeItem(slotKey(n)); localStorage.removeItem(`chemyth-v2-album-${n}`); } catch { /* 同上 */ } },
-  meta(): { sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string; overlay?: boolean; music?: boolean; gfx?: 'high' | 'plain'; view3d?: 'on' | 'off'; goalFold?: boolean; minimap?: boolean; sleep?: { on: boolean; bed: number; wake: number }; ext?: { day: string; until: number }; warned?: string } { try { return JSON.parse(localStorage.getItem(META) || '{}'); } catch { return {}; } },
-  setMeta(m: { sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string; overlay?: boolean; music?: boolean; gfx?: 'high' | 'plain'; view3d?: 'on' | 'off'; goalFold?: boolean; minimap?: boolean; sleep?: { on: boolean; bed: number; wake: number }; ext?: { day: string; until: number }; warned?: string }) { try { localStorage.setItem(META, JSON.stringify({ ...store.meta(), ...m })); } catch { /* 同上 */ } },
+  meta(): Meta { try { return JSON.parse(localStorage.getItem(META) || '{}'); } catch { return {}; } },
+  setMeta(m: Meta) { try { localStorage.setItem(META, JSON.stringify({ ...store.meta(), ...m })); } catch { /* 同上 */ } },
 };
 
 export const fmtTime = (ms: number) => { const m = Math.floor(ms / 60000); return m >= 60 ? `${Math.floor(m / 60)} 時間 ${m % 60} 分` : `${m} 分`; };
@@ -111,6 +127,8 @@ export function initTitle(api: TitleApi) {
         h('div', { class: 'stack tight' }, h('b', {}, slotName(n)),
           h('span', {}, sum.done >= TOTAL_GOALS ? `全 ${TOTAL_GOALS} 指令を達成` : `${CHAPTERS[sum.chapter]?.name ?? ''}　達成 ${sum.done} / ${TOTAL_GOALS}`),
           h('span', { class: 'muted' }, `${fmtTime(sum.playMs)}　研究点 ${sum.points}　${fmtDate(sum.savedAt)}`),
+          h('span', { class: 'slot-learn' }, [sum.due ? `復習 ${sum.due} 問が待っている` : '待っている復習なし', sum.exam !== null ? `次の試験まで ${sum.exam} 日` : ''].filter(Boolean).join('　')),
+          sum.morning ? h('span', { class: 'slot-morning' }, '今朝の 10 問：昨夜の問いが、寝ている間に残ったかを確かめる。開くとすぐ出る。') : null,
           shelf(sum.progress, sum.grades)),
         h('div', { class: 'row' },
           h('button', { class: 'primary', type: 'button', id: `slot-${n}-go`, onclick: () => { sfx.ok(); api.start(n, json); } }, 'つづける'),

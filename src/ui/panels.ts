@@ -12,7 +12,9 @@ import { pretty } from '../chem/formula';
 import { TANK_CAP, RESEARCH, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { applyTestOut, canTestOut, paceOf, testOutPass, testOutQuiz } from '../engine/pace';
 import { quizFor } from '../engine/quiz';
-import { calibLine } from './review';
+import { calibLine, solveList } from './review';
+import { LEECH, leeches, recallNow } from '../engine/habit';
+import { PLATING, platingOf } from '../engine/world';
 import { researchById } from '../content/research';
 import { appearance, lookOf } from '../content/looks';
 import { AGENTS, ION_LABEL, ION_ORDER, MIXES } from '../content/ions';
@@ -158,10 +160,17 @@ export function showBook(c: PanelCtx, tab: 'el' | 'sub' | 'rx' = 'el') {
       h('div', { class: 'stack tight' }, h('b', { class: s.formula ? 'formula' : '' }, label(id)), h('span', { class: 'muted' }, `${s.name}・${s.formula ? st[s.state] : '混合物など'}`), lookOf(id) ? h('span', { class: 'look' }, swatch(lookOf(id)!.hex), appearance(id)) : null)); }));
   } else {
     const done = RECIPES.filter((r) => w.learned.includes(r.id));
-    body = done.length ? h('div', { class: 'rxlist' }, ...done.map((r) => h('details', { class: 'rx' },
-      h('summary', {}, h('b', {}, r.name), h('span', { class: 'formula' }, equation(r) + (r.machine === 'battery' ? `（e⁻ ${electronsOf(r)}）` : ''))),
-      h('p', { class: 'muted' }, `${MACHINES[r.machine].name}　${CONDITIONS[r.machine].label}：${r.accept.join(' または ')}`),
-      h('p', { class: 'note' }, r.note), h('p', { class: 'muted' }, r.source))))
+    const now = Date.now();
+    const when = (t: number) => { const d = Math.round((t - now) / 86400000); return t <= now ? 'いま' : d <= 0 ? '今日' : d === 1 ? '明日' : `${d} 日後`; };
+    body = done.length ? h('div', { class: 'rxlist' }, ...done.map((r) => {
+      const card = w.srs[`r:${r.id}`], pl = platingOf(w.srs, r.id);
+      return h('details', { class: 'rx' },
+        h('summary', {}, h('b', {}, r.name), h('span', { class: 'formula' }, equation(r) + (r.machine === 'battery' ? `（e⁻ ${electronsOf(r)}）` : '')),
+          card ? h('span', { class: 'muted rx-srs' }, `次の復習 ${when(card.due)}　いま思い出せる確率 ${Math.round(recallNow(card, now) * 100)} %${pl ? `　${PLATING[pl]}` : ''}`) : null),
+        h('p', { class: 'muted' }, `${MACHINES[r.machine].name}　${CONDITIONS[r.machine].label}：${r.accept.join(' または ')}`),
+        h('p', { class: 'note' }, r.note), h('p', { class: 'muted' }, r.source),
+        card ? h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: `book-try-${r.id}`, onclick: () => solveList(c, `練習：${r.name}`, [`r:${r.id}`], true, () => undefined) }, '練習する（予定は動かさない）')) : null);
+    }))
       : h('p', { class: 'muted' }, 'まだ正しく設定できた反応がない。');
   }
   c.show(h('header', {}, h('h2', {}, '図鑑'), closeBtn(c)), tabs,
@@ -210,8 +219,16 @@ export function showLog(c: PanelCtx) {
   const delivered = Object.entries(w.delivered).sort((a, b) => b[1] - a[1]);
   const times = Object.entries(w.goalMs).map(([k, ms]) => { const [ch, i] = k.split(':').map(Number); const g = CHAPTERS[ch]?.goals[i]; return [g ? `${CHAPTERS[ch].name.split(' ')[0]}　${sub(g.s).name}` : k, ms] as [string, number]; })
     .sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const weak = leeches(w);
+  const hcIds = (() => { const seen = new Set<string>(); return [...w.hcLog].reverse().filter((x) => (seen.has(x.id) ? false : (seen.add(x.id), true))).map((x) => x.id); })();
   c.show(
     h('header', {}, h('h2', {}, '記録'), closeBtn(c)),
+    h('h3', {}, `苦手（${LEECH} 回以上忘れた問い）`),
+    weak.length
+      ? h('table', { class: 'log' }, ...weak.slice(0, 12).map((id) => { const q = quizFor(w, id, () => 0.5, id.startsWith('k:') ? undefined : 'products'); return h('tr', {}, h('td', {}, q ? q.q : id), h('td', {}, q?.choices[0] ?? ''), h('td', { class: 'n' }, `${w.srs[id].l} 回`)); }))
+      : h('p', { class: 'muted' }, 'まだない。'),
+    weak.length ? h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'log-weak', onclick: () => solveList(c, '苦手を練習', weak, true, () => undefined) }, `いま解く（${Math.min(10, weak.length)} 問・練習）`)) : null,
+    weak.length ? h('p', { class: 'muted' }, '何度も忘れるものは、覚え方が合っていない。答えのあとの解説を読み、反応式を紙に 1 回書いてから次へ進め。') : null,
     h('h3', {}, '間違えたところ（多い順）'),
     rows.length
       ? h('table', { class: 'log' }, ...rows.map(([k, n]) => { const [a, b] = k.split('｜'); return h('tr', {}, h('td', {}, a), h('td', {}, b), h('td', { class: 'n' }, `${n}回`)); }))
@@ -223,7 +240,8 @@ export function showLog(c: PanelCtx) {
       return list.length ? h('table', { class: 'log' }, ...list.map((x) => { const q = quizFor(w, x.id, () => 0.5, x.id.startsWith('k:') ? undefined : 'products'); return h('tr', {}, h('td', {}, q ? q.q : x.id), h('td', {}, q?.choices[0] ?? '')); }))
         : h('p', { class: 'muted' }, 'まだない。');
     })(),
-    h('p', { class: 'muted' }, `自信ごとの正答率　${calibLine(w)}。「確実」の正答率が 9 割を切るなら、思い込みでまちがえている。`),
+    hcIds.length ? h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'log-hc', onclick: () => solveList(c, '自信を持ってまちがえた問いを練習', hcIds, true) }, `この一覧を解く（${Math.min(10, hcIds.length)} 問・練習）`)) : null,
+    h('p', { class: 'muted' }, `自信ごとの正答率　${calibLine(w)}。「確実」の正答率が 9 割を切るなら、思い込みでまちがえている。勘で当たった ${w.calib.guess[1]} 回は、覚えたことにしていない。`),
     h('h3', {}, '時間のかかった指令'),
     times.length ? h('table', { class: 'log' }, ...times.map(([name, ms]) => h('tr', {}, h('td', {}, name), h('td', { class: 'n' }, `${Math.max(1, Math.round(ms / 60000))} 分`)))) : h('p', { class: 'muted' }, '—'),
     h('h3', {}, 'これまでの納品'),
@@ -608,13 +626,14 @@ export function showChapters(c: PanelCtx) {
 /** 章の確認テスト：10 問。9 割以上なら、その章は最後の指令だけになる */
 export function showTestOut(c: PanelCtx, ch: number) {
   const { w } = c;
-  const qs = testOutQuiz(ch), res: { id: string; ok: boolean }[] = [];
+  const qs = testOutQuiz(ch), res: { id: string; ok: boolean }[] = [], missed: { q: string; a: string }[] = [];
   const head = () => h('header', {}, h('h2', {}, `確認テスト：${CHAPTERS[ch].name}`), closeBtn(c));
   const finish = () => {
     const right = res.filter((x) => x.ok).length, pass = testOutPass(right, res.length);
     if (pass) applyTestOut(w, ch, res);
     if (pass) sfx.goal(); else sfx.bad();
     c.show(head(), h('p', { class: 'qtext' }, `${res.length} 問中 ${right} 問正解。`),
+      missed.length ? h('div', { class: 'rv-hclist' }, h('b', {}, 'まちがえた問いと正解'), ...missed.map((m) => h('p', {}, `${m.q.replace(/→ できるものは？$/, '→ ？')}　正しくは「${m.a}」`))) : null,
       h('p', {}, pass ? `合格。この章は最後の指令だけを残した。章の反応は覚えたものとして、復習に入れた${res.some((x) => !x.ok) ? '（まちがえた反応は、今日のうちに出し直す）' : ''}。` : '9 割に届かなかった。この章は、指令を全部やれ。'),
       h('div', { class: 'row' }, pass ? h('button', { class: 'primary', type: 'button', id: 'testout-go', onclick: () => { setChapter(w, ch); c.close(); } }, 'この章へ') : null, h('button', { class: 'ghost', type: 'button', onclick: () => showChapters(c) }, '一覧へ')));
   };
@@ -628,6 +647,7 @@ export function showTestOut(c: PanelCtx, ch: number) {
       if (!result.hidden) return;
       const ok = ch2 === q.choices[0];
       res.push({ id: q.id, ok });
+      if (!ok) missed.push({ q: q.q, a: q.choices[0] });
       ok ? sfx.ok() : sfx.bad();
       for (const x of opts.children) { const el = x as HTMLButtonElement; el.disabled = true; el.classList.toggle('picked', el.textContent === q.choices[0]); el.classList.toggle('wrong', el.textContent === ch2 && !ok); }
       result.replaceChildren(h('p', {}, h('b', {}, ok ? '正解' : `不正解。正しくは「${q.choices[0]}」`)), h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'to-next', onclick: () => step(i + 1) }, i + 1 < qs.length ? '次へ' : '結果')));

@@ -9,8 +9,11 @@ export interface InputHandlers {
   stroke(tx: number, ty: number, prev: [number, number] | null): void;
   /** このマスからなぞり始めたら、地図を動かすか、なぞり書きにするか */
   mode(tx: number, ty: number): 'pan' | 'stroke';
-  /** 指を動かさずに押し続けた。true を返すと、そこからは地図を動かさず、なぞり書き（stroke）として扱う */
-  hold?(tx: number, ty: number): boolean;
+  /** 指を動かさずに押し続けた。true を返すと、そこからは地図を動かさず、なぞり書き（stroke）として扱う。
+   *  g は指の下の地面のマス（立体表示では、箱の天面に触れていても、その下の地面ではなく、視線が地面と交わるマス） */
+  hold?(tx: number, ty: number, g: [number, number]): boolean;
+  /** true の間は、マスを箱で拾わず、指の下の地面で決める（置いたものをずらしている間） */
+  groundMode?(): boolean;
   /** なぞり書きを終えて指を離した */
   end?(): void;
   /** マウスが乗っているマス。外れたら null */
@@ -45,9 +48,17 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
   // 何本かの指でたたく：最初の指から 250 ms 以内にほかの指が触れ、350 ms 以内に、ほとんど動かさずに全部離れたとき
   let firstDown = 0, camAtDown = { x: 0, y: 0, z: 0 };
   let multi: { n: number; moved: number } | null = null;
+  /** なぞっている指の、いまの位置（画面の端で地図を送るのに使う） */
+  let at: [number, number] | null = null;
 
   const rect = () => cv.getBoundingClientRect();
+  /** 指の下の地面のマス（立体表示では、視線が地面と交わるマス） */
+  const groundTile = (px: number, py: number): [number, number] => {
+    const r = rect(), g = proj?.ground(px - r.left, py - r.top);
+    return g ? [Math.floor(g[0]), Math.floor(g[1])] : [Math.floor(cam.x + (px - r.left - r.width / 2) / cam.z), Math.floor(cam.y + (py - r.top - r.height / 2) / cam.z)];
+  };
   const toTile = (px: number, py: number): [number, number] => {
+    if (h.groundMode?.()) return groundTile(px, py);
     const r = rect();
     return proj?.pick(px - r.left, py - r.top) ?? [Math.floor(cam.x + (px - r.left - r.width / 2) / cam.z), Math.floor(cam.y + (py - r.top - r.height / 2) / cam.z)];
   };
@@ -98,9 +109,9 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
         const sx0 = ev.clientX, sy0 = ev.clientY;
         holdTimer = window.setTimeout(() => {
           if (!start || moved || pts.size !== 1) return;
-          const st = toTile(sx0, sy0);
-          if (!h.hold!(st[0], st[1])) return;
-          moved = true; panning = false; last = st;
+          const st = toTile(sx0, sy0), g = groundTile(sx0, sy0);
+          if (!h.hold!(st[0], st[1], g)) return;
+          moved = true; panning = false; last = h.groundMode?.() ? g : st;
         }, HOLD_MS);
       }
     } else if (pts.size === 2) {
@@ -146,17 +157,29 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
       clamp();
       return;
     }
-    // 速くなぞってもマスを飛ばさない
-    const [tx, ty] = toTile(ev.clientX, ev.clientY);
+    at = [ev.clientX, ev.clientY];
+    walk(ev.clientX, ev.clientY);
+  });
+  /** 速くなぞってもマスを飛ばさない：直前のマスから、指の下のマスまで 1 マスずつ進める */
+  const walk = (px: number, py: number) => {
+    const [tx, ty] = toTile(px, py);
     while (last && (last[0] !== tx || last[1] !== ty)) {
       const next: [number, number] = last[0] !== tx ? [last[0] + Math.sign(tx - last[0]), last[1]] : [last[0], last[1] + Math.sign(ty - last[1])];
       h.stroke(next[0], next[1], last);
       last = next;
     }
-  });
+  };
+  /** 画面の端にどれだけ寄っているか（-1〜1）。下は道具の帯があるので広めにとる */
+  const edge = (px: number, py: number): [number, number] => {
+    const r = rect(), L = 44, T = 64, B = 132;
+    const ex = px < r.left + L ? -(1 - (px - r.left) / L) : px > r.right - L ? 1 - (r.right - px) / L : 0;
+    const ey = py < r.top + T ? -(1 - (py - r.top) / T) : py > r.bottom - B ? 1 - (r.bottom - py) / B : 0;
+    return [Math.max(-1, Math.min(1, ex)), Math.max(-1, Math.min(1, ey))];
+  };
 
   const end = (ev: PointerEvent) => {
     if (!pts.delete(ev.pointerId)) return;
+    at = null;
     clearTimeout(holdTimer);
     if (pts.size === 0 && start && moved && !panning) h.end?.();
     if (pts.size < 2) pinch = null;
@@ -188,6 +211,16 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
   return {
     /** 指を離したあとの滑り */
     tick(dt: number) {
+      // なぞり書き・ずらしている途中で指が画面の端に来たら、その向きへ地図を送る（指の下のマスも進める）
+      if (pts.size === 1 && start && moved && !panning && at) {
+        const [ex, ey] = edge(at[0], at[1]);
+        if (ex || ey) {
+          const sp = 520 * dt, [mx, my] = drag(at[0], at[1], at[0] - ex * sp, at[1] - ey * sp);
+          cam.x += mx; cam.y += my;
+          walk(at[0], at[1]);
+        }
+        return;
+      }
       if (pts.size || (Math.abs(vx) < 0.05 && Math.abs(vy) < 0.05)) return;
       cam.x += vx * dt;
       cam.y += vy * dt;

@@ -4,7 +4,7 @@ import { lineColor, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
 import { heightOf, TOP_H } from './three';
 import { flowTrace, JAM_SEC, MOVERS, type FlowTrace } from '../engine/world';
-import { at, FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { at, floorOf, FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { BRASS, BRASS_DARK, mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 import { districtsOf, type District } from '../engine/districts';
@@ -24,7 +24,11 @@ export interface FxLayers { glow: CanvasRenderingContext2D; mask: CanvasRenderin
 /** 立体表示のときに渡すもの。top：2×2 の装置と納品所、その上を通るもの（線路・札）を描く層（地面と同じ座標、透明地）。
  *  screen：画面にじかに描く層（縁の道しるべ）。boxes：箱の一覧を、ここへ書き足す（1 個につき x, y, 大きさ, 高さ, r, g, b, 層） */
 export interface Three { top: CanvasRenderingContext2D; screen: CanvasRenderingContext2D; sw: number; sh: number; project(x: number, y: number, h?: number): [number, number]; boxes: number[]; /** 1 階から見た 2 階の設備（宙に浮く板として描く） */ slabs: number[] }
-export interface View { /** 夕暮れ（実際の時刻。0 昼〜1 夜） */ dusk?: number; /** 立体表示 */ three?: Three | null; /** 光と効果の層。あれば、絵と一緒に描く */ fx?: FxLayers | null; /** 見ている階（0 が 1 階） */ floor?: number; tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string; /** 出口（out）と入口の場所。d は物が流れる向き */ ports?: { x: number; y: number; d: number; out: boolean }[] }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null }
+export interface View { /** 夕暮れ（実際の時刻。0 昼〜1 夜） */ dusk?: number; /** 立体表示 */ three?: Three | null; /** 光と効果の層。あれば、絵と一緒に描く */ fx?: FxLayers | null; /** 見ている階（0 が 1 階） */ floor?: number; tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string; /** 出口（out）と入口の場所。d は物が流れる向き */ ports?: { x: number; y: number; d: number; out: boolean }[] }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null;
+  /** 見本を持ち上げて見せる（ずらしている最中） */ lift?: boolean;
+  /** 選んだ設備の出口と入口（d は物が流れる向き） */ ports?: { x: number; y: number; d: number; out: boolean }[] | null;
+  /** 選んだ装置と同じ反応の装置（印をつける） */ marks?: Ent[] | null;
+  /** 反応式の札を、うんと近づかなくても出す */ allPlates?: boolean }
 
 // 方眼ノートに描いた工場の図面。輪郭線と斜線で描き、ぼかしや発光は使わない
 let FONT_HAND = '"Klee One", sans-serif';
@@ -280,6 +284,23 @@ const motes: Mote[] = Array.from({ length: 46 }, (_, i) => ({ x: hash(i, 3), y: 
 
 interface Particle { x: number; y: number; vx: number; vy: number; age: number; life: number; color: string; text?: string; r: number; tint?: string }
 const particles: Particle[] = [];
+/** 動きを減らす設定のときは、土ぼこりを出さない */
+let calm = false;
+export const setCalm = (v: boolean) => { calm = v; };
+/**
+ * 置いた・撤去した・ずらしたときの土ぼこり（設備の足もとから外へ散る）。
+ * place：輪が広がる、erase：設備の形が薄れて消える、move：行き先で輪が広がる。x, y は設備の左上（階のずれを含む座標）
+ */
+export function burst(x: number, y: number, size: number, kind: 'place' | 'erase' | 'move') {
+  if (calm) return;
+  const n = 6 + size * 4, cx = x + size / 2, cy = y + size / 2;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + Math.random() * 0.4, sp = 0.7 + Math.random() * 0.6;
+    particles.push({ x: cx + Math.cos(a) * size * 0.45, y: cy + Math.sin(a) * size * 0.45, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 0.2, age: 0, life: 0.35 + Math.random() * 0.25, color: 'smoke', r: 0.05 + Math.random() * 0.04, tint: kind === 'erase' ? '#8a8f96' : undefined });
+  }
+  particles.push({ x: cx, y: cy, vx: 0, vy: 0, age: 0, life: kind === 'erase' ? 0.5 : 0.32, color: kind === 'erase' ? 'gone' : 'ring', r: size / 2 });
+  if (particles.length > 900) particles.splice(0, particles.length - 900);
+}
 const born = new WeakMap<Ent, number>();
 
 function spawn(w: World, P: Palette) {
@@ -1131,28 +1152,45 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.fillStyle = P.hi; ctx.beginPath(); ctx.arc(sx(q[0]), sy(q[1]), z * 0.18, 0, Math.PI * 2); ctx.fill();
   }
 
+  /** 出口（外向き・蛍光）と入口（内向き・白）の矢印 */
+  const portArrow = (q: { x: number; y: number; d: number; out: boolean }) => {
+    const ux = DX[q.d], uy = DY[q.d], ex = sx(q.x + 0.5 + ux * (q.out ? 0.5 : -0.5)), ey = sy(q.y + 0.5 + uy * (q.out ? 0.5 : -0.5));
+    const a0 = z * 0.3, b0 = z * 0.2, bx = ex + ux * (q.out ? 0.04 : -0.34) * z, by = ey + uy * (q.out ? 0.04 : -0.34) * z;
+    ctx.beginPath();
+    ctx.moveTo(bx + ux * a0, by + uy * a0);
+    ctx.lineTo(bx - uy * b0, by + ux * b0);
+    ctx.lineTo(bx + uy * b0, by - ux * b0);
+    ctx.closePath();
+    ctx.fillStyle = q.out ? P.hi : punk ? '#f0e9dc' : P.paper; ctx.fill();
+    ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = lw(0.035); ctx.stroke();
+  };
   // ---- 設計図の見本：置ける所は蛍光、ふさがっている所は赤 ----
   if (view.ghost) {
     ctx.textAlign = 'center';
     for (const g of view.ghost) {
       const gx = sx(g.x), gy = sy(g.y), gs = g.size * z;
+      // ずらしている最中は、持ち上げたように影を落とす
+      if (view.lift) { ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(gx + 2 + z * 0.12, gy + 2 + z * 0.18, gs - 4, gs - 4); }
       ctx.fillStyle = g.ok ? (punk ? `rgba(${P.glow},0.3)` : 'rgba(255,225,77,0.45)') : 'rgba(210,63,58,0.4)';
       ctx.fillRect(gx + 2, gy + 2, gs - 4, gs - 4);
       ctx.strokeStyle = g.ok ? P.hi : P.red; ctx.lineWidth = lw(0.05); ctx.strokeRect(gx + 2, gy + 2, gs - 4, gs - 4);
       if (z >= 18) { ctx.fillStyle = punk ? '#f0e9dc' : P.ink; ctx.font = `700 ${Math.min(gs * 0.45, z * 0.5)}px ${FONT_SMALL}`; ctx.textBaseline = 'middle'; ctx.fillText(g.glyph, gx + gs / 2, gy + gs / 2 + 1); ctx.textBaseline = 'alphabetic'; }
       // 出口は外向き、入口は内向きの矢印。置く前に、どこから何が出入りするかがわかる
-      for (const q of g.ports ?? []) {
-        const ux = DX[q.d], uy = DY[q.d], ex = sx(q.x + 0.5 + ux * (q.out ? 0.5 : -0.5)), ey = sy(q.y + 0.5 + uy * (q.out ? 0.5 : -0.5));
-        const a0 = z * 0.3, b0 = z * 0.2, bx = ex + ux * (q.out ? 0.04 : -0.34) * z, by = ey + uy * (q.out ? 0.04 : -0.34) * z;
-        ctx.beginPath();
-        ctx.moveTo(bx + ux * a0, by + uy * a0);
-        ctx.lineTo(bx - uy * b0, by + ux * b0);
-        ctx.lineTo(bx + uy * b0, by - ux * b0);
-        ctx.closePath();
-        ctx.fillStyle = q.out ? P.hi : punk ? '#f0e9dc' : P.paper; ctx.fill();
-        ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = lw(0.035); ctx.stroke();
-      }
+      for (const q of g.ports ?? []) portArrow(q);
     }
+  }
+  // ---- 選んだ設備の出口と入口 ----
+  if (view.ports && z >= 14) for (const q of view.ports) portArrow(q);
+  // ---- 選んだ装置と同じ反応の装置：点線の輪で印をつける ----
+  if (view.marks?.length && z >= 10) {
+    ctx.strokeStyle = P.hi; ctx.lineWidth = lw(0.06); ctx.setLineDash([z * 0.18, z * 0.12]);
+    for (const e of view.marks) {
+      if (floorOf(e.y) !== (view.floor || 0)) continue;
+      const sz = sizeOf(e), cx0 = sx(e.x + sz / 2), cy0 = sy(e.y + sz / 2);
+      if (cx0 < -z * 2 || cy0 < -z * 2 || cx0 > cw + z * 2 || cy0 > ch + z * 2) continue;
+      ctx.beginPath(); ctx.arc(cx0, cy0, z * (sz === 2 ? 1.25 : 0.6), 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.setLineDash([]);
   }
 
   // ---- 範囲選択 ----
@@ -1193,7 +1231,7 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       if (cond) { ctx.font = `600 ${fs * 0.8}px ${FONT_UI}`; ctx.fillStyle = punk ? P.hi : P.red; ctx.fillText(cond, px + wd / 2, py + fs * 2.0, max); }
       ctx.textBaseline = 'alphabetic';
     };
-    if (z >= 70) { for (const e of w.ents.values()) if (e.recipe && e !== view.selected && inView(e)) plate(e); }
+    if (z >= (view.allPlates ? 34 : 70)) { for (const e of w.ents.values()) if (e.recipe && e !== view.selected && inView(e) && floorOf(e.y) === (view.floor || 0)) plate(e); }
     if (view.selected?.recipe && inView(view.selected)) plate(view.selected);
   }
 
@@ -1233,7 +1271,15 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     p.y += p.vy * dt;
     const k = 1 - p.age / p.life;
     ctx.globalAlpha = k;
-    if (p.color === 'smoke') {
+    if (p.color === 'ring' || p.color === 'gone') {
+      // 置いた所に広がる輪／撤去した設備の形が、縮みながら薄れる
+      const grow = p.color === 'ring' ? 1 + (1 - k) * 0.35 : 0.6 + k * 0.4, half = p.r * grow * z;
+      ctx.globalAlpha = k * (p.color === 'ring' ? 0.9 : 0.6);
+      ctx.strokeStyle = p.color === 'ring' ? P.hi : P.soft; ctx.lineWidth = lw(0.06);
+      if (p.color === 'gone') ctx.setLineDash([z * 0.15, z * 0.1]);
+      ctx.strokeRect(sx(p.x) - half, sy(p.y) - half, half * 2, half * 2);
+      ctx.setLineDash([]);
+    } else if (p.color === 'smoke') {
       // 蒸気：上がりながら広がって薄れる
       ctx.globalAlpha = k * (punk ? (light ? 0.5 : 0.3) : 0.32);
       ctx.fillStyle = p.tint ?? (punk ? (light ? '#ffffff' : '#aeb7bf') : P.soft);

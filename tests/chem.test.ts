@@ -2560,3 +2560,154 @@ describe('睡眠：今夜の 10 問・今朝の 10 問・閉店・夕暮れ', ()
     expect(morningDue(w, SLEEP_DEFAULT, new Date(2026, 10, 13, 8))).toBe(false);      // 済ませた
   });
 });
+
+describe('置いたものをずらす', () => {
+  it('設定・向き・中身を保ったまま、1 マスずつずらせる。2×2 の装置は 4 マスごと動く', async () => {
+    const { moveEnts } = await import('../src/engine/world');
+    const w = newWorld();
+    expect(place(w, 'reactor', 10, 10, 1)).toBeNull();
+    const r0 = at(w, 10, 10)!;
+    r0.recipe = 'haber'; r0.inBuf = { N2: 3 };
+    const res = moveEnts(w, [w.ents.get('11,11')!], 2, 0);  // 'part' のマスを渡しても本体ごと動く
+    expect(res.ok).toBe(true);
+    expect(at(w, 10, 10)).toBeUndefined();
+    const r1 = at(w, 12, 10)!;
+    expect([r1.kind, r1.recipe, r1.dir, r1.inBuf?.N2]).toEqual(['reactor', 'haber', 1, 3]);
+    expect(at(w, 13, 11)).toBe(r1);                 // 4 マスとも本体を指す
+    expect(w.ents.get('13,11')!.ref).toBe('12,10');
+    expect(w.ents.get('11,11')).toBeUndefined();
+    // 自分と重なる行き先（1 マスずらし）でもよい
+    expect(moveEnts(w, [r1], -1, 0).ok).toBe(true);
+    expect(at(w, 11, 10)!.kind).toBe('reactor');
+  });
+  it('行き先がふさがっていれば動かさず、理由を返す。納品所は動かせない', async () => {
+    const { moveEnts } = await import('../src/engine/world');
+    const w = newWorld();
+    place(w, 'belt', 10, 10, 0); place(w, 'splitter', 12, 10, 0);
+    const r = moveEnts(w, [at(w, 10, 10)!], 2, 0);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.why).toMatch(/ある/);
+    expect(at(w, 10, 10)!.kind).toBe('belt');
+    const hub = [...w.ents.values()].find((e) => e.kind === 'hub')!;
+    expect(moveEnts(w, [hub], 1, 0).ok).toBe(false);
+  });
+  it('まとめてずらすと、互いに重なる行き先でも動ける。昇降機は上下の組ごと動く', async () => {
+    const { moveEnts, FLOOR_DY, liftPartner } = await import('../src/engine/world');
+    const w = newWorld();
+    for (const x of [10, 11, 12]) place(w, 'belt', x, 10, 0);
+    const es = [10, 11, 12].map((x) => at(w, x, 10)!);
+    expect(moveEnts(w, es, 1, 0).ok).toBe(true);
+    expect([10, 11, 12, 13].map((x) => at(w, x, 10)?.kind ?? null)).toEqual([null, 'belt', 'belt', 'belt']);
+    expect(place(w, 'lift', 20, 10, 0)).toBeNull();
+    expect(moveEnts(w, [at(w, 20, 10)!], 0, 2).ok).toBe(true);
+    const down = at(w, 20, 12)!;
+    expect(down.kind).toBe('lift');
+    expect(liftPartner(w, down)!.y).toBe(12 + FLOOR_DY);
+    expect(at(w, 20, 10 + FLOOR_DY)).toBeUndefined();
+  });
+  it('駅をずらすと、走っている列車の行き先も付け替わる。範囲の線路も一緒にずらせる', async () => {
+    const { moveEnts, moveRails, key } = await import('../src/engine/world');
+    const w = newWorld();
+    place(w, 'station', 10, 10, 0); place(w, 'station', 60, 10, 0);
+    const a = at(w, 10, 10)!, b = at(w, 60, 10)!;
+    b.role = 'out';
+    a.tr = { p: 0.5, back: false, cargo: ['N2'], wait: 0, to: key(60, 10) };
+    expect(moveEnts(w, [b], 0, 3).ok).toBe(true);
+    expect(a.tr.to).toBe(key(60, 13));
+    addRail(w, [20, 20], [21, 20]); addRail(w, [21, 20], [22, 20]);
+    const before = w.rails.get('21,20');
+    const snap = moveRails(w, [20, 20, 22, 20], 0, 1);
+    expect(w.rails.get('21,21')).toBe(before);
+    expect(w.rails.has('21,20')).toBe(false);
+    // 元に戻す：控えた線路を書き戻す
+    for (const [k, m] of snap) { if (m) w.rails.set(k, m); else w.rails.delete(k); }
+    expect(w.rails.get('21,20')).toBe(before);
+    expect(w.rails.has('21,21')).toBe(false);
+  });
+  it('ずらしたあとも流れる（ベルトの行き先が付け替わる）', async () => {
+    const { moveEnts } = await import('../src/engine/world');
+    const w = newWorld();
+    place(w, 'belt', 10, 10, 0); place(w, 'belt', 11, 10, 0); place(w, 'vent', 13, 10, 0);
+    expect(moveEnts(w, [at(w, 10, 10)!, at(w, 11, 10)!], 1, 0).ok).toBe(true);
+    for (let i = 0; i < 60 * 4; i++) { const b = at(w, 11, 10)!; if (!b.item) b.item = { s: 'N2', p: 0, m: w.tick }; step(w, 1 / 60); }
+    expect(w.vented.N2).toBeGreaterThan(2);
+  });
+});
+
+describe('復習の習慣：今日の数・連続日数・目標・苦手・覚える確率', () => {
+  const T = new Date(2026, 10, 12, 15, 0).getTime(), DAY = 86400000;
+  it('答えるたびに今日の数が増え、勘で当てたものは思い出せたに数えない', async () => {
+    const { answer } = await import('../src/engine/world');
+    const { todayCount } = await import('../src/engine/habit');
+    const w = newWorld();
+    answer(w, 'r:haber-bosch', true, 'sure', T);
+    answer(w, 'r:contact-process', true, 'guess', T + 1000);
+    answer(w, 'r:ostwald-1', false, 'maybe', T + 2000);
+    expect(todayCount(w, T)).toEqual([3, 1]);
+  });
+  it('連続日数：今日まだでも昨日まで続いていれば数える。1 日空くと途切れる', async () => {
+    const { streakOf } = await import('../src/engine/habit');
+    const { dayKey } = await import('../src/engine/fsrs');
+    const w = newWorld();
+    w.revDays[dayKey(T - DAY)] = [3, 2]; w.revDays[dayKey(T - 2 * DAY)] = [1, 1];
+    expect(streakOf(w, T)).toBe(2);
+    w.revDays[dayKey(T)] = [1, 1];
+    expect(streakOf(w, T)).toBe(3);
+    delete w.revDays[dayKey(T - DAY)];
+    expect(streakOf(w, T)).toBe(1);
+  });
+  it('毎日の目標に達したら、1 日 1 回だけ研究点', async () => {
+    const { dailyBonus, DAILY_GOAL, DAILY_BONUS } = await import('../src/engine/habit');
+    const { dayKey } = await import('../src/engine/fsrs');
+    const w = newWorld();
+    w.revDays[dayKey(T)] = [DAILY_GOAL - 1, 5];
+    expect(dailyBonus(w, T)).toBe(false);
+    w.revDays[dayKey(T)] = [DAILY_GOAL, 5];
+    expect(dailyBonus(w, T)).toBe(true);
+    expect(w.points).toBe(DAILY_BONUS);
+    expect(dailyBonus(w, T + 1000)).toBe(false);
+    expect(w.points).toBe(DAILY_BONUS);
+  });
+  it('苦手は忘れた回数の多い順。直近 7 日は古い順に並ぶ', async () => {
+    const { leeches, lastDays } = await import('../src/engine/habit');
+    const { dayKey } = await import('../src/engine/fsrs');
+    const w = newWorld();
+    const c = (l: number) => ({ due: T, s: 1, d: 5, last: T, n: 5, l, iv: 1 });
+    w.srs = { 'r:a': c(3), 'r:b': c(5), 'r:c': c(2) };
+    expect(leeches(w)).toEqual(['r:b', 'r:a']);
+    w.revDays[dayKey(T - 6 * DAY)] = [4, 3];
+    const d = lastDays(w, 7, T);
+    expect(d.length).toBe(7);
+    expect(d[0]).toEqual({ day: dayKey(T - 6 * DAY), n: 4, ok: 3 });
+    expect(d[6].day).toBe(dayKey(T));
+  });
+  it('覚える確率を上げると間隔が縮み、保存して読み直しても残る', async () => {
+    const { review } = await import('../src/engine/fsrs');
+    const { rate } = await import('../src/engine/world');
+    const base = { due: T, s: 5, d: 5, last: T - 5 * DAY, n: 3, l: 0, iv: 2 };
+    const at85 = review(base, 3, T, [], '', 0.85).due, at95 = review(base, 3, T, [], '', 0.95).due;
+    expect(at95).toBeLessThan(at85);
+    const w = newWorld();
+    w.ret = 0.95;
+    w.srs['r:haber-bosch'] = { ...base };
+    rate(w, 'r:haber-bosch', 3, T);
+    expect(w.srs['r:haber-bosch'].due).toBe(review(base, 3, T, w.exams, 'r:haber-bosch', 0.95).due);
+    const w2 = deserialize(serialize(w))!;
+    expect(w2.ret).toBe(0.95);
+    w.ret = 0.5; // 選べない値は、読み直すと標準に戻る
+    expect(deserialize(serialize(w))!.ret).toBe(0.9);
+  });
+  it('タイトルの要約：期限の来た復習の数・次の試験までの日数・今朝の 10 問', async () => {
+    const { summarize } = await import('../src/engine/world');
+    const { dayKey } = await import('../src/engine/fsrs');
+    const w = newWorld();
+    w.srs = { 'r:a': { due: T - 1, s: 1, d: 5, last: T - DAY, n: 1, l: 0, iv: 1 }, 'r:b': { due: T + DAY, s: 1, d: 5, last: T, n: 1, l: 0, iv: 1 } };
+    w.night = { day: dayKey(T - DAY), ids: ['r:a'], got: 1 };
+    const s = summarize(serialize(w), T)!;
+    expect(s.due).toBe(1);
+    expect(s.exam).toBeGreaterThan(0);
+    expect(s.morning).toBe(true);
+    w.night.morning = 1;
+    expect(summarize(serialize(w), T)!.morning).toBe(false);
+  });
+});

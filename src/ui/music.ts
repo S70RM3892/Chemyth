@@ -7,6 +7,9 @@ let nextBar = 0, bar = 0, level = 0;
 let master: GainNode | null = null, echo: DelayNode | null = null;
 
 export const setMusic = (v: boolean) => { on = v; if (!v) fade(0); };
+let vol = 1;
+/** 音楽の大きさ（0〜1） */
+export const setMusicVolume = (v: number) => { vol = Math.max(0, Math.min(1, v)); };
 export const musicOn = () => on;
 
 const BAR = 4.8;                      // 1 小節の秒数（1 拍 1.2 秒）
@@ -63,8 +66,8 @@ export function musicTick(playing: boolean, activity: number) {
     echo.connect(master);
     master.connect(ac.destination);
   }
-  const want = on && soundOn() && playing;
-  fade(want ? 0.5 : 0);
+  const want = on && soundOn() && playing && vol > 0;
+  fade(want ? 0.5 * vol : 0);
   if (!want) { nextBar = 0; return; }
   level += (Math.max(0, Math.min(1, activity)) - level) * 0.02;
   const now = ac.currentTime;

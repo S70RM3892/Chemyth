@@ -35,6 +35,8 @@ const emit = () => { for (const f of listeners) f(); };
 
 export const accountAvailable = online;
 export const signedIn = () => !!st;
+/** 同期の様子（上の帯の小さな印と、メニューに出す） */
+export const syncState = () => ({ on: !!st, busy, trouble, lastSync, conflicts: conflicts.size });
 export const accountName = () => st?.name ?? '';
 export const onAccountChange = (f: () => void) => { listeners.add(f); };
 /** 食い違っている枠（どちらを残すか、人が選ぶ） */
