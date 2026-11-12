@@ -82,7 +82,8 @@ export function showStats(c: StatsCtx) {
   const missed = new Set(w.mistakes.filter((m) => isMachine(m.machine as Ent['kind']) && m.recipe).map((m) => m.recipe));
   const firstTry = learned.filter((r) => !missed.has(r.id)).length;
   const kStage = (id: string) => w.srs[`k:${id}`]?.iv;
-  const kFirm = KNOWLEDGE.filter((k) => (kStage(k.id) ?? -1) >= 2).length, kSeen = KNOWLEDGE.filter((k) => kStage(k.id) !== undefined).length;
+  // 定着：3 日以上空けて思い出せた
+  const kFirm = KNOWLEDGE.filter((k) => (w.srs[`k:${k.id}`]?.b ?? 0) >= 3).length, kSeen = KNOWLEDGE.filter((k) => kStage(k.id) !== undefined).length;
   const pr = Object.values(w.practice), tries = pr.reduce((a, p) => a + p.tries, 0), clean = pr.reduce((a, p) => a + p.clean, 0);
   const done = doneCount(w);
   const PART: Record<string, string> = { reactants: '原料の組み合わせ', products: '生成物', electrodes: '電極', coefficients: '係数', electrons: '電子の数', condition: '条件', equilibrium: '平衡の条件', revealed: '答えを見た', calc: '計算', isomer: '仕分け', quiz: '知識問題', passage: 'リード文' };

@@ -9,7 +9,10 @@ import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
 import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
-import { TANK_CAP, RESEARCH, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, SRS_STEPS, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { TANK_CAP, RESEARCH, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { applyTestOut, canTestOut, paceOf, testOutPass, testOutQuiz } from '../engine/pace';
+import { quizFor } from '../engine/quiz';
+import { calibLine } from './review';
 import { researchById } from '../content/research';
 import { appearance, lookOf } from '../content/looks';
 import { AGENTS, ION_LABEL, ION_ORDER, MIXES } from '../content/ions';
@@ -214,6 +217,13 @@ export function showLog(c: PanelCtx) {
       ? h('table', { class: 'log' }, ...rows.map(([k, n]) => { const [a, b] = k.split('｜'); return h('tr', {}, h('td', {}, a), h('td', {}, b), h('td', { class: 'n' }, `${n}回`)); }))
       : h('p', { class: 'muted' }, 'まだ間違いはない。'),
     h('p', { class: 'muted' }, '回数の多いものから、反応式と条件を紙に書いて確認しろ。図鑑の「反応」に解説がある。'),
+    h('h3', {}, '自信を持ってまちがえたもの（新しい順）'),
+    (() => {
+      const seen = new Set<string>(), list = [...w.hcLog].reverse().filter((x) => (seen.has(x.id) ? false : (seen.add(x.id), true))).slice(0, 15);
+      return list.length ? h('table', { class: 'log' }, ...list.map((x) => { const q = quizFor(w, x.id, () => 0.5, x.id.startsWith('k:') ? undefined : 'products'); return h('tr', {}, h('td', {}, q ? q.q : x.id), h('td', {}, q?.choices[0] ?? '')); }))
+        : h('p', { class: 'muted' }, 'まだない。');
+    })(),
+    h('p', { class: 'muted' }, `自信ごとの正答率　${calibLine(w)}。「確実」の正答率が 9 割を切るなら、思い込みでまちがえている。`),
     h('h3', {}, '時間のかかった指令'),
     times.length ? h('table', { class: 'log' }, ...times.map(([name, ms]) => h('tr', {}, h('td', {}, name), h('td', { class: 'n' }, `${Math.max(1, Math.round(ms / 60000))} 分`)))) : h('p', { class: 'muted' }, '—'),
     h('h3', {}, 'これまでの納品'),
@@ -571,72 +581,68 @@ export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
 
 // ---------------- 章の選択 ----------------
 
+/** ペースの逆算の文 */
+export function paceText(w: World): string {
+  const p = paceOf(w);
+  if (!p) return 'ペースの見込みは、遊んだ記録が 1 日分と、終えた指令が 2 つ以上たまると出る。';
+  const md = (t: number) => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()}`; };
+  const parts = p.reach.map((r, i) => `${i === 0 ? '共通テスト' : '2 次'}（${md(r.at)}、あと ${r.days} 日）までに${r.all ? '全章を終える' : r.chapter >= 0 ? `「${CHAPTERS[r.chapter].name}」まで` : '次の章も終わらない'}`);
+  return `いまのペース：遊んだ日 1 日あたり 約 ${Math.round(p.perDayMin)} 分、指令 1 つに 約 ${Math.max(1, Math.round(p.perGoalMin))} 分。残り ${p.left} 指令。${parts.join('。')}。最初の試験までに全章を終えるには、1 日 約 ${Math.round(p.needPerDayMin)} 分要る。知っている章は「確認テスト」で短くしろ。`;
+}
+
 export function showChapters(c: PanelCtx) {
   const { w } = c;
   c.show(h('header', {}, h('h2', {}, '指令の一覧'), closeBtn(c)),
     h('p', { class: 'muted' }, '章はいつでも切り替えられる。進み具合は章ごとに残る。後ろの章には、前の章で作った物質を原料に使うものがある。'),
+    h('p', { class: 'pace', id: 'pace' }, paceText(w)),
     h('div', { class: 'menu' }, ...CHAPTERS.map((ch, i) => {
       const done = w.progress[i], total = ch.goals.length, g = ch.goals[done];
-      return h('button', { class: 'ghost chapter' + (i === w.chapter ? ' picked' : ''), type: 'button', id: `chapter-${i}`,
+      const btn = h('button', { class: 'ghost chapter' + (i === w.chapter ? ' picked' : ''), type: 'button', id: `chapter-${i}`,
         onclick: () => { setChapter(w, i); sfx.ok(); c.close(); } },
-        h('span', {}, h('b', {}, ch.name), h('span', { class: 'muted' }, g ? `　次：${[g.s, ...(g.also ?? [])].map((x) => sub(x).name).join('・')}` : '　完了')),
+        h('span', {}, h('b', {}, ch.name), h('span', { class: 'muted' }, g ? `　次：${[g.s, ...(g.also ?? [])].map((x) => sub(x).name).join('・')}` : '　完了'), w.tested.includes(i) ? h('span', { class: 'pill' }, '確認テストで短縮') : null),
         h('span', { class: 'formula' }, `${done} / ${total}`));
+      return canTestOut(w, i) ? h('div', { class: 'chapter-row' }, btn, h('button', { class: 'ghost testout', type: 'button', id: `testout-${i}`, onclick: () => showTestOut(c, i) }, '確認テスト')) : btn;
     })));
 }
 
-// ---------------- 復習 ----------------
-
-export const reviewCount = (w: World) => dueIds(w).length;
-
-export function showReview(c: PanelCtx) {
+/** 章の確認テスト：10 問。9 割以上なら、その章は最後の指令だけになる */
+export function showTestOut(c: PanelCtx, ch: number) {
   const { w } = c;
-  const due = dueIds(w).filter((id) => (id.startsWith('r:') ? !!recipeById(id.slice(2)) : KNOWLEDGE.some((k) => `k:${k.id}` === id))).slice(0, 6);
-  // まだ出していない知識問題を少しずつ混ぜる
-  const fresh = KNOWLEDGE.filter((k) => !w.srs[`k:${k.id}`]).slice(0, Math.max(1, 4 - due.length)).map((k) => `k:${k.id}`);
-  const queue = [...due, ...fresh].slice(0, 7);
-  let right = 0;
+  const qs = testOutQuiz(ch), res: { id: string; ok: boolean }[] = [];
+  const head = () => h('header', {}, h('h2', {}, `確認テスト：${CHAPTERS[ch].name}`), closeBtn(c));
   const finish = () => {
-    const next = Object.values(w.srs).map((x) => x.due).sort((a, b) => a - b)[0];
-    const mins = next ? Math.max(0, Math.round((next - Date.now()) / 60000)) : 0;
-    c.show(h('header', {}, h('h2', {}, '復習'), closeBtn(c)),
-      h('p', { class: 'qtext' }, queue.length ? `${queue.length} 問中 ${right} 問正解。研究点 +${right * 3}。` : 'いま復習するものはない。'),
-      h('p', { class: 'muted' }, `正解したものは間隔を空けてまた出る（${SRS_STEPS.map((m) => (m < 60 ? `${m}分` : `${Math.round(m / 1440)}日`)).join(' → ')}）。間違えたものは 10 分後に戻ってくる。` + (next ? `次の復習は約 ${mins >= 120 ? `${Math.round(mins / 60)} 時間` : `${mins} 分`}後。` : '')));
+    const right = res.filter((x) => x.ok).length, pass = testOutPass(right, res.length);
+    if (pass) applyTestOut(w, ch, res);
+    if (pass) sfx.goal(); else sfx.bad();
+    c.show(head(), h('p', { class: 'qtext' }, `${res.length} 問中 ${right} 問正解。`),
+      h('p', {}, pass ? `合格。この章は最後の指令だけを残した。章の反応は覚えたものとして、復習に入れた${res.some((x) => !x.ok) ? '（まちがえた反応は、今日のうちに出し直す）' : ''}。` : '9 割に届かなかった。この章は、指令を全部やれ。'),
+      h('div', { class: 'row' }, pass ? h('button', { class: 'primary', type: 'button', id: 'testout-go', onclick: () => { setChapter(w, ch); c.close(); } }, 'この章へ') : null, h('button', { class: 'ghost', type: 'button', onclick: () => showChapters(c) }, '一覧へ')));
   };
-  const mark = (id: string, ok: boolean) => { schedule(w, id, ok); if (ok) { right++; w.points += 3; } };
   const step = (i: number) => {
-    const id = queue[i];
-    if (!id) { finish(); return; }
-    const head = h('p', { class: 'muted' }, `復習 ${i + 1} / ${queue.length}`);
-    if (id.startsWith('r:')) {
-      const r = recipeById(id.slice(2))!;
-      c.show();
-      openConfig(c.sheet, w, { kind: r.machine, x: -1, y: -1, dir: 0 }, c.actions, { recipe: r, done: (ok) => { mark(id, ok); step(i + 1); } });
-      c.sheet.prepend(head);
-      c.sheet.scrollTop = 0;
-      return;
-    }
-    const k = KNOWLEDGE.find((x) => `k:${x.id}` === id)!;
+    const q = qs[i];
+    if (!q) { finish(); return; }
     const result = h('div', { class: 'answer', hidden: true });
-    const opts = h('div', { class: 'menu' }, ...shuffled(k.choices).map((ch) => {
-      const b = h('button', { class: 'ghost', type: 'button' }, ch);
-      b.dataset.right = String(ch === k.choices[0]);
-      b.onclick = () => {
-        const ok = ch === k.choices[0];
-        mark(id, ok);
-        if (!ok) w.mistakes.push({ machine: 'quiz', recipe: k.id, part: 'quiz', t: Date.now() });
-        ok ? sfx.ok() : sfx.bad();
-        for (const o of opts.children) { (o as HTMLButtonElement).disabled = true; o.classList.toggle('picked', (o as HTMLElement).dataset.right === 'true'); }
-        b.classList.toggle('wrong', !ok);
-        result.replaceChildren(h('p', {}, h('b', {}, ok ? '正解。' : `不正解。正しくは「${k.choices[0]}」`)), h('p', { class: 'note' }, k.why),
-          h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'rv-next', onclick: () => step(i + 1) }, '次へ')));
-        result.hidden = false;
-      };
-      return b;
-    }));
-    c.show(h('header', {}, h('h2', {}, '復習'), closeBtn(c)), head, h('p', {}, h('span', { class: 'pill' }, k.topic)), h('p', { class: 'qtext' }, k.q), opts, result);
+    const opts = h('div', { class: 'menu' });
+    const choices = shuffledOf(q.choices);
+    for (const [k, ch2] of choices.entries()) opts.append(h('button', { class: 'ghost', type: 'button', id: `to-c-${k}`, onclick: () => {
+      if (!result.hidden) return;
+      const ok = ch2 === q.choices[0];
+      res.push({ id: q.id, ok });
+      ok ? sfx.ok() : sfx.bad();
+      for (const x of opts.children) { const el = x as HTMLButtonElement; el.disabled = true; el.classList.toggle('picked', el.textContent === q.choices[0]); el.classList.toggle('wrong', el.textContent === ch2 && !ok); }
+      result.replaceChildren(h('p', {}, h('b', {}, ok ? '正解' : `不正解。正しくは「${q.choices[0]}」`)), h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'to-next', onclick: () => step(i + 1) }, i + 1 < qs.length ? '次へ' : '結果')));
+      result.hidden = false;
+    } }, ch2));
+    c.show(head(), h('p', { class: 'muted' }, `${i + 1} / ${qs.length}　9 割以上で、この章は最後の指令だけになる。`), h('p', { class: 'qtext' }, q.q), opts, result);
   };
   step(0);
 }
+const shuffledOf = <T>(a: T[]) => { const b = [...a]; for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
+
+// ---------------- 復習 ----------------
+
+/** 復習の残り：期限の来たもの ＋ 今日まちがえて戻ってきたもの（重ならないように数える） */
+export const reviewCount = (w: World) => new Set([...dueIds(w), ...w.relearn.filter((x) => x.at <= Date.now()).map((x) => x.id)]).size;
 
 // ---------------- リード文課題 ----------------
 

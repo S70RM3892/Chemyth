@@ -15,6 +15,10 @@ export interface InputHandlers {
   end?(): void;
   /** マウスが乗っているマス。外れたら null */
   hover?(t: [number, number] | null): void;
+  /** 2 本指で軽くたたいた（元に戻す） */
+  undo?(): void;
+  /** 3 本指で軽くたたいた（やり直す） */
+  redo?(): void;
 }
 
 export const Z_MIN = 9, Z_MAX = 110;
@@ -38,6 +42,9 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
   let vx = 0, vy = 0, lastMove = 0;
   let holdTimer = 0;
   const HOLD_MS = 260;
+  // 何本かの指でたたく：最初の指から 250 ms 以内にほかの指が触れ、350 ms 以内に、ほとんど動かさずに全部離れたとき
+  let firstDown = 0, camAtDown = { x: 0, y: 0, z: 0 };
+  let multi: { n: number; moved: number } | null = null;
 
   const rect = () => cv.getBoundingClientRect();
   const toTile = (px: number, py: number): [number, number] => {
@@ -76,6 +83,9 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
     cv.setPointerCapture(ev.pointerId);
     pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
     vx = vy = 0;
+    if (pts.size === 1) { firstDown = performance.now(); camAtDown = { x: cam.x, y: cam.y, z: cam.z }; multi = null; }
+    else if (multi) multi.n = Math.max(multi.n, pts.size);
+    else if (performance.now() - firstDown < 250) multi = { n: pts.size, moved: 0 };
     if (pts.size === 1) {
       start = { x: ev.clientX, y: ev.clientY };
       moved = false;
@@ -107,6 +117,7 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
     const ox = p.x, oy = p.y;
     p.x = ev.clientX;
     p.y = ev.clientY;
+    if (multi) multi.moved += Math.hypot(p.x - ox, p.y - oy);
     if (pts.size >= 2 && pinch) {
       const n = pinchState(), [mx, my] = drag(pinch.cx, pinch.cy, n.cx, n.cy);
       cam.x += mx;
@@ -156,6 +167,12 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
     if (pts.size === 0) {
       if (!panning || performance.now() - lastMove > 80) vx = vy = 0;
       start = null;
+      if (multi && ev.type === 'pointerup' && performance.now() - firstDown < 350 && multi.moved < 30) {
+        // 2 本指の拡大・移動で少し動いた分は戻す
+        cam.x = camAtDown.x; cam.y = camAtDown.y; cam.z = camAtDown.z; vx = vy = 0;
+        if (multi.n >= 3) h.redo?.(); else h.undo?.();
+      }
+      multi = null;
     } else vx = vy = 0;
   };
   cv.addEventListener('pointerup', end);

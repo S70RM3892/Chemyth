@@ -3,12 +3,12 @@ import { HUB_CENTER, LAND, ZONES, hubRect, resourceAt, zoneAt } from './content/
 import { ELEMENTS } from './content/elements';
 import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
-import { BIG, FEED_TIERS, flamesFed, addRail, removeRail, setRailMask, stationRoutes, FLOOR_DY, floorOf, groundY, has, liftPartner, footprint, inDoors, maxLanes, mergeDirs, slotCount, slotPort, at, autoDir, beltSpeed, configure, currentGoal, extractInterval, fedTier, flowStats, goalRate, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { relearnReady, MOVERS, JAM_SEC, machineState, freeLine, lineNo, LINE_MAX, BIG, FEED_TIERS, flamesFed, addRail, removeRail, setRailMask, stationRoutes, FLOOR_DY, floorOf, groundY, has, liftPartner, footprint, inDoors, maxLanes, mergeDirs, slotCount, slotPort, at, autoDir, beltSpeed, configure, currentGoal, extractInterval, fedTier, flowStats, goalRate, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
 import { recipeById } from './content/recipes';
 import { about, chip, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
 import { attachInput, Z_MIN, type InputHandlers } from './ui/input';
-import { numPad, typeNumber, reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showReview, showSampler, showPhoresis, showSettler, showSignal, showStation, showTank, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
+import { numPad, typeNumber, reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showSampler, showTestOut, showPhoresis, showSettler, showSignal, showStation, showTank, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
 import { showDrills, showEssays, showStructure } from './ui/practice';
 import { draw, type Camera } from './ui/render';
 import { lanePaths, type LaneTile } from './engine/lanes';
@@ -26,6 +26,11 @@ import { showStats, type StatsCtx } from './ui/stats';
 import { setSound, sfx, soundOn, unlockAudio } from './ui/sound';
 import { musicOn, musicTick, setMusic } from './ui/music';
 import { initTitle, skinButtons, slotName, store, themeButtons } from './ui/title';
+import { SLEEP_DEFAULT, duskOf, eveningWindow, hhmm, isClosed, morningDue, nightDone, nightSetIds, windDown, type SleepCfg } from './engine/sleep';
+import { capByExams, dayKey } from './engine/fsrs';
+import { buildQueue, partnerOf, quizFor } from './engine/quiz';
+import { addPlayTime, canTestOut } from './engine/pace';
+import { showReview, renderQuiz, calibLine } from './ui/review';
 import { conflictSlots, flushAccount, initAccount, onAccountChange } from './ui/account';
 import { applySkin, applyTheme } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
@@ -34,7 +39,7 @@ import { drawToken, elementIcon } from './ui/token';
 type Placeable = Exclude<Kind, 'hub' | 'part'>;
 type Tool = 'pan' | 'erase' | 'area' | 'rail' | Placeable;
 /** 範囲コピーした設計図。左上からのずれで持つ */
-type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir } | { t: 'rails'; snap: [string, number | undefined][] };
+type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir } | { t: 'rails'; snap: [string, number | undefined][] } | { t: 'ch'; x: number; y: number; ch: number };
 const SESSION_LIMIT_MS = 25 * 60 * 1000;
 const BUILD: Placeable[] = ['belt', 'bridge', 'tunnel', 'lift', 'splitter', 'analyzer', 'sensor', 'gate', 'station', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'settler', 'funnel', 'phoresis', 'sampler', 'depot', 'tank', 'vent'];
 /** 道具の分類。道具が多いので、棚を分けて出す */
@@ -193,14 +198,18 @@ function boot(data: HotData) {
   };
 
   // ---- 置く・消す・回す（元に戻せる） ----
-  const undo: Op[][] = [];
+  const undo: Op[][] = [], redo: Op[][] = [];
   let group: Op[] | null = null;
-  const undoBtn = $<HTMLButtonElement>('b-undo');
+  const undoBtn = $<HTMLButtonElement>('b-undo'), redoBtn = $<HTMLButtonElement>('b-redo');
+  const paintUndo = () => { undoBtn.disabled = undo.length === 0; redoBtn.hidden = redo.length === 0; };
   const record = (op: Op) => {
     if (!group) { group = []; undo.push(group); if (undo.length > 60) undo.shift(); }
     group.push(op);
-    undoBtn.disabled = false;
+    // 新しく手を加えたら、やり直しの分は捨てる
+    redo.length = 0;
+    paintUndo();
   };
+  const clearUndo = () => { undo.length = 0; redo.length = 0; group = null; paintUndo(); };
   const doPlace = (kind: Placeable, x: number, y: number, dir: Dir): string | null => {
     const err = place(world, kind, x, y, dir);
     if (!err) record({ t: 'add', x, y });
@@ -227,19 +236,44 @@ function boot(data: HotData) {
     record({ t: 'dir', x: e.x, y: e.y, dir: e.dir });
     e.dir = dir;
   };
+  /** 手の組を逆からたどって打ち消し、打ち消した手を逆にした組（＝やり直すための組）を返す */
+  const applyOps = (g: Op[]): Op[] => {
+    const inv: Op[] = [];
+    for (const op of [...g].reverse()) {
+      if (op.t === 'add') {
+        const e = at(world, op.x, op.y);
+        if (!e || e.kind === 'hub') continue;
+        // 昇降機は 2 つで 1 組。やり直すときに両方とも戻るよう、相方も覚える
+        const p = e.kind === 'lift' ? liftPartner(world, e) : null;
+        inv.push({ t: 'del', ent: e });
+        if (p) inv.push({ t: 'del', ent: p });
+        remove(world, op.x, op.y);
+      } else if (op.t === 'del') {
+        if (restore(world, op.ent)) inv.push({ t: 'add', x: op.ent.x, y: op.ent.y });
+      } else if (op.t === 'rails') {
+        inv.push({ t: 'rails', snap: op.snap.map(([k]) => [k, world.rails.get(k)] as [string, number | undefined]) });
+        for (const [k, m] of op.snap) setRailMask(world, k, m);
+      } else if (op.t === 'ch') {
+        const e = at(world, op.x, op.y);
+        if (e) { inv.push({ t: 'ch', x: op.x, y: op.y, ch: e.ch ?? 1 }); e.ch = op.ch; e.tr = undefined; e.xtr = undefined; }
+      } else {
+        const e = at(world, op.x, op.y);
+        if (e) { inv.push({ t: 'dir', x: op.x, y: op.y, dir: e.dir }); e.dir = op.dir; }
+      }
+    }
+    return inv;
+  };
   const doUndo = () => {
     const g = undo.pop();
     group = null;
-    undoBtn.disabled = undo.length === 0;
-    if (!g) return;
-    selected = null;
-    for (const op of g.reverse()) {
-      if (op.t === 'add') remove(world, op.x, op.y);
-      else if (op.t === 'del') restore(world, op.ent);
-      else if (op.t === 'rails') for (const [k, m] of op.snap) setRailMask(world, k, m);
-      else { const e = at(world, op.x, op.y); if (e) e.dir = op.dir; }
-    }
-    toast('ひとつ前に戻した', 1400);
+    if (g) { selected = null; redo.push(applyOps(g)); toast('ひとつ前に戻した', 1200); }
+    paintUndo();
+  };
+  const doRedo = () => {
+    const g = redo.pop();
+    group = null;
+    if (g) { selected = null; undo.push(applyOps(g)); toast('やり直した', 1200); }
+    paintUndo();
   };
 
   // ---- モーダル ----
@@ -382,12 +416,14 @@ function boot(data: HotData) {
       h('h3', {}, '設定'),
       h('div', { class: 'menu' },
         h('div', { class: 'row' }, h('span', { class: 'muted' }, '見た目'), h('span', { class: 'seg' }, ...skinButtons(showMenu)), h('span', { class: 'seg' }, ...themeButtons(showMenu))),
+        item('m-sleep', (() => { const c = sleepCfg(); return c.on ? `睡眠と試験日（就寝 ${hhmm(c.bed)}・起床 ${hhmm(c.wake)}、その間は工場を閉める）` : '睡眠と試験日（閉店：なし）'; })(), () => showSleepSettings()),
         item('m-sound', soundOn() ? '音：あり' : '音：なし', () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); showMenu(); }),
         item('m-gfx', fxOn() ? '画質：高（光・発光・ゆらぎ）' : post || store.meta().gfx !== 'plain' ? '画質：標準（軽い）' : '画質：標準（この端末では高画質を使えない）', () => {
           gfxHigh = !fxOn(); slowFrames = 0; applyGfx(); resize();
           store.setMeta({ gfx: gfxHigh ? 'high' : 'plain' }); sfx.tap(); showMenu();
           if (!gfxHigh && store.meta().gfx === 'high') toast('この端末では高画質を使えない。', 2600);
         }),
+        item('m-mini', miniOn ? '全体の小地図：あり（右下。押すとその場所へ移る）' : '全体の小地図：なし', () => { miniOn = !miniOn; store.setMeta({ minimap: miniOn }); paintMini(); sfx.tap(); showMenu(); }),
         item('m-3d', threeOn() ? '立体表示：オン（傾いた視点・箱・影）' : '立体表示：オフ（真上からの平らな表示）', () => {
           three = !threeOn(); slowFrames = 0;
           if (three && !fxOn()) { gfxHigh = true; }
@@ -406,12 +442,237 @@ function boot(data: HotData) {
   $('b-up').onclick = () => showUpgrades(panel());
   $('b-book').onclick = () => showBook(panel());
   $('b-review').onclick = () => showReview(panel());
-  $('goal').onclick = () => (sandbox ? showCaseBrief() : showChapters(panel()));
+  // ---- 指令カード：たたむと細い帯。組む道具を持っている間は、自動でたたむ（押せば開く） ----
+  const goalEl = $('goal');
+  let foldPref = store.meta().goalFold === true, foldPeek = false;
+  const paintFold = () => {
+    const building = tool !== 'pan';
+    if (!building) foldPeek = false;
+    const folded = foldPref || (building && !foldPeek);
+    goalEl.classList.toggle('folded', folded);
+    $('goal-fold').setAttribute('aria-label', folded ? '指令を開く' : '指令をたたむ');
+  };
+  const setFold = (fold: boolean) => {
+    if (tool !== 'pan') { foldPeek = !fold; if (!fold) foldPref = false; }
+    else foldPref = fold;
+    store.setMeta({ goalFold: foldPref });
+    paintFold();
+  };
+  /** 夕暮れ：光のない所を沈め、光をよく広げる */
+  const duskPost = (p: (typeof POST_PRESETS)[string], time: number) => {
+    const k = palette().name === 'light' ? dusk : dusk * 0.5;
+    return { ...p, time, ambient: p.ambient * (1 - 0.3 * k), spill: p.spill * (1 + 0.9 * k), bloom: p.bloom * (1 + 0.25 * k), vignette: Math.min(0.6, p.vignette + 0.15 * k) };
+  };
+  // ---- 睡眠：今夜の 10 問、今朝の 10 問、就寝から起床までの閉店、実際の時刻の夕暮れ ----
+  const sleepCfg = (): SleepCfg => ({ ...SLEEP_DEFAULT, ...(store.meta().sleep ?? {}) });
+  const closedNow = () => { const ext = store.meta().ext; if (ext && ext.until > Date.now()) return false; return isClosed(sleepCfg(), new Date()); };
+  let dusk = duskOf(new Date());
+  /** 問いを順に出す（今夜・今朝の 10 問）。終わったら finish(正解数) */
+  const runSet = (title: string, lead: string, ids: string[], finish: (right: number) => void) => {
+    let right = 0;
+    const step = (i: number) => {
+      const id = ids[i];
+      if (!id) { finish(right); return; }
+      const q = quizFor(world, id, Math.random, world.srs[id]?.full ? undefined : undefined);
+      if (!q) { step(i + 1); return; }
+      const body = h('div', { class: 'rv-body' });
+      showSheet(h('header', {}, h('h2', {}, title), closeBtn()), h('p', { class: 'muted' }, `${lead}　${i + 1} / ${ids.length}`), body);
+      renderQuiz(body, world, q, {
+        onFull: (done) => { const r = recipeById(id.slice(2))!; showSheet(); openConfig(sheet, world, { kind: r.machine, x: -1, y: -1, dir: 0 }, sheetActions, { recipe: r, done: (ok) => { done(ok); if (ok) right++; step(i + 1); } }); },
+        onDone: (r) => { if (r.ok && r.conf !== 'guess') right++; save(); },
+        next: { label: i + 1 < ids.length ? '次へ' : '結果', go: () => step(i + 1) },
+      });
+    };
+    step(0);
+  };
+  const showNightSet = () => {
+    const ids = nightSetIds(world, Date.now());
+    if (!ids.length) { toast('今日覚えたもの・まちがえたものが、まだない。', 2400); return; }
+    runSet('今夜の 10 問', '今日覚えたもの・まちがえたもの。明日の朝、同じ問いを出す', ids, (right) => {
+      world.night = { day: dayKey(Date.now()), ids, got: right };
+      save();
+      showSheet(h('header', {}, h('h2', {}, '今夜の 10 問'), closeBtn()),
+        h('p', { class: 'qtext' }, `${ids.length} 問中 ${right} 問正解。`),
+        h('p', {}, `ここで閉じて寝ろ。眠っている間に、今日の分が固まる。明日の朝、最初に開いたときに同じ問いを出す。就寝は ${hhmm(sleepCfg().bed)}。`),
+        h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'night-title', onclick: () => { closeModal(); toTitle(); } }, 'タイトルへ')));
+    });
+  };
+  const showMorningSet = () => {
+    const n = world.night;
+    if (!n) return;
+    runSet('今朝の 10 問', `昨夜の問い（昨夜は ${n.ids.length} 問中 ${n.got} 問正解）`, n.ids, (right) => {
+      n.morning = right;
+      save();
+      const drop = n.got - right;
+      showSheet(h('header', {}, h('h2', {}, '今朝の 10 問'), closeBtn()),
+        h('p', { class: 'qtext' }, `昨夜 ${n.got} / ${n.ids.length} → 今朝 ${right} / ${n.ids.length}`),
+        h('p', {}, drop > 0 ? `${drop} 問、ひと晩で抜けた。抜けたものは今日のうちに戻ってくる。` : '寝ている間に、抜けなかった。'),
+        h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', onclick: closeModal }, '工場へ')));
+    });
+  };
+  const closingEl = $('closing');
+  const showClosing = () => {
+    if (!closingEl.hidden) return;
+    const cfg = sleepCfg(), ext = store.meta().ext, today = dayKey(Date.now());
+    $('closing-text').textContent = `就寝（${hhmm(cfg.bed)}）を過ぎた。工場は ${hhmm(cfg.wake)} まで閉める。眠っている間に、今日覚えたことが固まる。${world.night && world.night.day === today ? '' : '今夜の 10 問はやっていない。明日、早めにやれ。'}`;
+    ($('closing-extend') as HTMLButtonElement).hidden = !!ext && ext.day === today;
+    closingEl.hidden = false; rvCard.hidden = true; modal.hidden = true;
+    sfx.erase();
+  };
+  $('closing-title-btn').onclick = () => { closingEl.hidden = true; toTitle(); };
+  $('closing-extend').onclick = () => { store.setMeta({ ext: { day: dayKey(Date.now()), until: Date.now() + 15 * 60000 } }); closingEl.hidden = true; toast('15 分だけ延長した。今夜はこれ以上延ばせない。', 4000); };
+  $('b-night').onclick = () => { sfx.tap(); showNightSet(); };
+  /** 1 秒に 1 回：夕暮れ、寝る前の知らせ、閉店 */
+  let sleepTick = 0;
+  const sleepCheck = () => {
+    const now = new Date(), cfg = sleepCfg(), today = dayKey(now.getTime());
+    dusk = duskOf(now);
+    $('b-night').hidden = !(slot && !sandbox && eveningWindow(cfg, now) && !nightDone(world, now.getTime()) && nightSetIds(world, now.getTime()).length >= 3);
+    if (!slot || sandbox) return;
+    if (closedNow()) { showClosing(); return; }
+    if (windDown(cfg, now) && store.meta().warned !== today) { store.setMeta({ warned: today }); toast(`就寝 ${hhmm(cfg.bed)} まで 1 時間を切った。今夜の 10 問をやって、画面を閉じろ。`, 8000); }
+  };
+
+  /** 睡眠と試験日の設定。閉店中は変えられない（寝る時刻を、その場で後ろへずらせないように） */
+  const showSleepSettings = () => {
+    const cfg = sleepCfg(), locked = closedNow() && cfg.on;
+    const set = (patch: Partial<SleepCfg>) => { if (locked) return; store.setMeta({ sleep: { ...cfg, ...patch } }); sfx.tap(); showSleepSettings(); };
+    const stepBtn = (id: string, text: string, f: () => void) => h('button', { class: 'ghost', type: 'button', id, disabled: locked, onclick: f }, text);
+    const md = (t: number) => { const d = new Date(t); return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; };
+    const moveExam = (i: number, days: number) => { world.exams[i] += days * 86400000; const t = Date.now(); for (const k of Object.keys(world.srs)) world.srs[k].due = capByExams(world.srs[k].due, t, world.exams, k); save(); sfx.tap(); showSleepSettings(); };
+    showSheet(h('header', {}, h('h2', {}, '睡眠と試験日'), closeBtn()),
+      h('p', { class: 'muted' }, '就寝の 4 時間前から 1 時間前までに「今夜の 10 問」が出る。翌朝、最初に開いたときに同じ問いを出す（覚えた夜と思い出す朝の間に、睡眠をはさむ）。就寝から起床までは工場を閉める。10 代に勧められている睡眠は 8〜10 時間。'),
+      locked ? h('p', { class: 'feedback bad' }, '閉店中は変えられない。朝になってから変えろ。') : null,
+      h('div', { class: 'row' }, h('span', {}, '閉店'), stepBtn('sl-on', cfg.on ? 'あり' : 'なし', () => set({ on: !cfg.on }))),
+      h('div', { class: 'row' }, h('span', {}, `就寝 ${hhmm(cfg.bed)}`), stepBtn('sl-bed-dn', '− 15 分', () => set({ bed: (cfg.bed + 1440 - 15) % 1440 })), stepBtn('sl-bed-up', '＋ 15 分', () => set({ bed: (cfg.bed + 15) % 1440 }))),
+      h('div', { class: 'row' }, h('span', {}, `起床 ${hhmm(cfg.wake)}`), stepBtn('sl-wake-dn', '− 15 分', () => set({ wake: (cfg.wake + 1440 - 15) % 1440 })), stepBtn('sl-wake-up', '＋ 15 分', () => set({ wake: (cfg.wake + 15) % 1440 }))),
+      h('p', { class: 'muted', id: 'sl-hours' }, `睡眠 ${(((cfg.wake - cfg.bed + 1440) % 1440) / 60).toFixed(1)} 時間`),
+      h('h3', {}, '試験日（復習の間隔は、これをまたがない）'),
+      h('div', { class: 'row' }, h('span', {}, `共通テスト ${md(world.exams[0])}`), h('button', { class: 'ghost', type: 'button', id: 'ex0-dn', onclick: () => moveExam(0, -1) }, '− 1 日'), h('button', { class: 'ghost', type: 'button', id: 'ex0-up', onclick: () => moveExam(0, 1) }, '＋ 1 日')),
+      h('div', { class: 'row' }, h('span', {}, `2 次 ${md(world.exams[1])}`), h('button', { class: 'ghost', type: 'button', id: 'ex1-dn', onclick: () => moveExam(1, -1) }, '− 1 日'), h('button', { class: 'ghost', type: 'button', id: 'ex1-up', onclick: () => moveExam(1, 1) }, '＋ 1 日')),
+      h('p', { class: 'muted' }, '共通テストの 1/16 は大学入試センターの実施要項による。2 次の 2/25 は例年の日付で仮に置いてある。京大の募集要項が出たら合わせろ。'));
+  };
+
+  // ---- 工場の中の復習：手を止めて 8 秒たったときや、指令を終えたときに、期限の来た問いを 1 つだけ出す ----
+  //      地図はそのまま触れる。まちがえた問いは今日のうちに戻り、取り違えやすい組は続けて相手を出す
+  const rvCard = $('rvcard'), rvBody = $('rvcard-body'), rvLeft = $('rvcard-left');
+  let lastInput = performance.now(), lastCardAt = -1e9, snoozeUntil = 0;
+  const recentCards: string[] = [];
+  document.addEventListener('pointerdown', () => { lastInput = performance.now(); }, true);
+  document.addEventListener('keydown', () => { lastInput = performance.now(); }, true);
+  const nextCardId = (): string | null => {
+    const now = Date.now(), recent = recentCards.slice(-3);
+    const ready = relearnReady(world, now).filter((id) => !recent.includes(id) && quizFor(world, id));
+    if (ready.length) return ready[0];
+    const last = recentCards[recentCards.length - 1];
+    if (last) { const p = partnerOf(world, last, now, recentCards.slice(-8)); if (p && quizFor(world, p)) return p; }
+    return buildQueue(world, now, 8, []).find((id) => !recent.includes(id) && quizFor(world, id)) ?? null;
+  };
+  const hideCard = () => { rvCard.hidden = true; lastCardAt = performance.now(); };
+  const showCard = (id: string) => {
+    const q = quizFor(world, id);
+    if (!q) return;
+    recentCards.push(id); if (recentCards.length > 30) recentCards.shift();
+    rvCard.hidden = false;
+    rvLeft.textContent = `残り ${reviewCount(world)}`;
+    renderQuiz(rvBody, world, q, {
+      compact: true,
+      onFull: (done) => {
+        const r = recipeById(id.slice(2))!;
+        showSheet();
+        openConfig(sheet, world, { kind: r.machine, x: -1, y: -1, dir: 0 }, sheetActions, { recipe: r, done: (ok) => { done(ok); closeModal(); } });
+        sheet.prepend(h('p', { class: 'muted' }, '前回まちがえた反応：すべてを組み直す'));
+      },
+      onDone: () => { rvLeft.textContent = `残り ${reviewCount(world)}`; $('due').textContent = reviewCount(world) ? String(reviewCount(world)) : ''; save(); },
+      next: { label: '次の問い', go: () => { const n = nextCardId(); if (n) showCard(n); else { hideCard(); toast('いま出す問いは、もうない。', 1800); } } },
+    });
+  };
+  $('rvcard-later').onclick = () => { snoozeUntil = performance.now() + 5 * 60000; hideCard(); sfx.tap(); };
+  $('rvcard-close').onclick = () => { hideCard(); sfx.tap(); };
+  const cardTick = (now: number) => {
+    if (!slot || sandbox || !rvCard.hidden || !modal.hidden || now < snoozeUntil || closedNow()) return;
+    if (now - lastInput < 8000 || now - lastCardAt < 45000) return;
+    const id = nextCardId();
+    if (id) showCard(id); else lastCardAt = now;
+  };
+
+  // ---- 全体の小地図：いまの階の設備を点で描き、止まった装置と詰まった荷に印をつける。押す・なぞると、その場所へ移る ----
+  const mini = $<HTMLCanvasElement>('minimap'), mctx = mini.getContext('2d')!;
+  let miniOn = store.meta().minimap !== false;
+  let miniMap = { ox: 0, oy: 0, k: 1 };
+  function paintMini() {
+    mini.hidden = !miniOn || !slot;
+    if (mini.hidden || !mini.clientWidth) return;
+    const W = mini.clientWidth, Hh = mini.clientHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (mini.width !== Math.round(W * dpr)) { mini.width = Math.round(W * dpr); mini.height = Math.round(Hh * dpr); }
+    mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    mctx.clearRect(0, 0, W, Hh);
+    const P = palette(), hr = hubRect(world.hubSize);
+    const vw = cw / 2 / cam.z, vh = ch / 2 / cam.z;
+    let x0 = Math.min(hr.x, cam.x - vw), y0 = Math.min(hr.y, cam.y - vh), x1 = Math.max(hr.x + hr.s, cam.x + vw), y1 = Math.max(hr.y + hr.s, cam.y + vh);
+    const here: Ent[] = [];
+    for (const e of world.ents.values()) {
+      if (e.kind === 'part' || floorOf(e.y) !== floor) continue;
+      here.push(e);
+      const gy = groundY(e.y);
+      if (e.x < x0) x0 = e.x; if (e.x + 1 > x1) x1 = e.x + 1; if (gy < y0) y0 = gy; if (gy + 1 > y1) y1 = gy + 1;
+    }
+    x0 -= 3; y0 -= 3; x1 += 3; y1 += 3;
+    const k = Math.min((W - 8) / (x1 - x0), (Hh - 8) / (y1 - y0)), ox = (W - (x1 - x0) * k) / 2 - x0 * k, oy = (Hh - (y1 - y0) * k) / 2 - y0 * k;
+    miniMap = { ox, oy, k };
+    const px = (x: number) => ox + x * k, py = (y: number) => oy + y * k, dot = Math.max(1.2, k);
+    const jams: [number, number][] = [], stops: Ent[] = [];
+    for (const e of here) {
+      const gy = groundY(e.y), sz = sizeOf(e);
+      if (MOVERS.has(e.kind)) {
+        mctx.fillStyle = P.soft; mctx.fillRect(px(e.x), py(gy), dot, dot);
+        const it = e.item ?? e.items?.find((x) => !!x);
+        if (it && (it.w || 0) > JAM_SEC) jams.push([e.x, gy]);
+      } else {
+        mctx.fillStyle = MACHINES[e.kind as keyof typeof MACHINES]?.color ?? P.ink;
+        mctx.fillRect(px(e.x), py(gy), Math.max(2, sz * k), Math.max(2, sz * k));
+        if ((isMachine(e.kind) && e.recipe && machineState(e) === 2 && (e.stuck || 0) > 2.5) || e.bad) stops.push(e);
+      }
+    }
+    mctx.fillStyle = P.red; mctx.fillRect(px(hr.x), py(hr.y), Math.max(3, hr.s * k), Math.max(3, hr.s * k));
+    mctx.fillStyle = 'rgba(235,150,30,0.95)';
+    for (const [x, y] of jams) { mctx.beginPath(); mctx.arc(px(x + 0.5), py(y + 0.5), 2.2, 0, Math.PI * 2); mctx.fill(); }
+    mctx.strokeStyle = P.red; mctx.lineWidth = 2;
+    for (const e of stops) { mctx.beginPath(); mctx.arc(px(e.x + sizeOf(e) / 2), py(groundY(e.y) + sizeOf(e) / 2), 4.5, 0, Math.PI * 2); mctx.stroke(); }
+    // いま見ている範囲
+    mctx.strokeStyle = P.ink; mctx.lineWidth = 1.5;
+    mctx.strokeRect(px(cam.x - vw), py(cam.y - vh), vw * 2 * k, vh * 2 * k);
+    mini.title = `止まった装置 ${stops.length} 台・詰まった荷 ${jams.length} か所`;
+  }
+  const miniGo = (ev: PointerEvent) => {
+    const r = mini.getBoundingClientRect();
+    camTo = { x: (ev.clientX - r.left - miniMap.ox) / miniMap.k, y: (ev.clientY - r.top - miniMap.oy) / miniMap.k, z: cam.z };
+  };
+  let miniDrag = false;
+  mini.addEventListener('pointerdown', (ev) => { ev.stopPropagation(); mini.setPointerCapture(ev.pointerId); miniDrag = true; miniGo(ev); sfx.tap(); });
+  mini.addEventListener('pointermove', (ev) => { if (miniDrag) miniGo(ev); });
+  mini.addEventListener('pointerup', () => { miniDrag = false; });
+  mini.addEventListener('pointercancel', () => { miniDrag = false; });
+  $('goal-fold').onclick = (ev) => { ev.stopPropagation(); sfx.tap(); setFold(!goalEl.classList.contains('folded')); };
+  goalEl.onclick = () => {
+    // たたんであるときは、押すと開く（章の一覧は、開いてからもう一度押す）
+    if (goalEl.classList.contains('folded')) { sfx.tap(); setFold(false); return; }
+    if (sandbox) showCaseBrief(); else showChapters(panel());
+  };
   const speedBtn = $('b-speed');
   const paintSpeed = () => { speedBtn.textContent = speed === 0 ? '⏸ 停止中' : `▶ ×${speed}`; speedBtn.classList.toggle('hot', speed !== 1); };
   speedBtn.onclick = () => { speed = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length]; paintSpeed(); sfx.tap(); };
   undoBtn.onclick = doUndo;
-  undoBtn.disabled = true;
+  redoBtn.onclick = doRedo;
+  paintUndo();
+  // キーボード：Ctrl（⌘）+ Z で元に戻す、Ctrl + Shift + Z か Ctrl + Y でやり直す
+  document.addEventListener('keydown', (ev) => {
+    const tag = (ev.target as HTMLElement | null)?.tagName;
+    if (!slot || !(ev.ctrlKey || ev.metaKey) || tag === 'INPUT' || tag === 'TEXTAREA' || !modal.hidden) return;
+    const k = ev.key.toLowerCase();
+    if (k === 'z' && !ev.shiftKey) { ev.preventDefault(); doUndo(); }
+    else if ((k === 'z' && ev.shiftKey) || k === 'y') { ev.preventDefault(); doRedo(); }
+  });
 
   // ---- 道具バー ----
   const bar = $('tools'), tip = $('tip');
@@ -431,6 +692,7 @@ function boot(data: HotData) {
     clearTimeout(tipTimer);
     tipTimer = window.setTimeout(() => { tip.hidden = true; }, clone ? 9000 : 5200);
     paintOpts();
+    paintFold();
   };
   let tipTimer = 0;
   /** 道具ごとの切り替え（棚の右端）：ベルトは引く本数、設備は置く向き */
@@ -587,6 +849,8 @@ function boot(data: HotData) {
   const railStart = (x: number, y: number) => [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => at(world, x + dx, y + dy)?.kind === 'station' || world.rails.has(`${x + dx},${y + dy}`));
   const pullsBelt = (x: number, y: number) => { const e = at(world, x, y); return !!e && e.kind !== 'hub' && e.kind !== 'vent'; };
   const H: Required<InputHandlers> = {
+    undo: () => { if (modal.hidden) doUndo(); },
+    redo: () => { if (modal.hidden) doRedo(); },
     begin: () => { group = null; camTo = null; cross = null; railsLaid = 0; tip.hidden = true; lanePath = []; laneLaid.clear(); holding = false; },
     // 設備の道具で空いたマスを押し続けると、見本が出て、指で場所を選べる。離すと置く
     hold(x, y) {
@@ -668,6 +932,7 @@ function boot(data: HotData) {
     stroke: (x, y, prev) => H.stroke(x, F(y), prev && [prev[0], F(prev[1])]),
     hold: (x, y) => H.hold(x, F(y)),
     hover: (t) => H.hover(t && [t[0], F(t[1])]),
+    undo: H.undo, redo: H.redo,
   }, {
     ground: (px, py) => (threeOn() ? camera3(cam, cw, ch).unproject(px, py, 0) : null),
     pick: (px, py) => (threeOn() ? pickTile(camera3(cam, cw, ch), px, py, (x, y) => at(world, x, F(y))) : null),
@@ -711,11 +976,47 @@ function boot(data: HotData) {
     areaAct.hidden = tool !== 'area';
     $('area-n').textContent = bp ? (ghost ? `設計図 ${blueprint!.length} 個。場所を変えるなら別のマスをタップ。` : `設計図 ${blueprint!.length} 個。置きたい場所の左上をタップ。`) : areaRect() ? `${n} 個を選択中` : 'なぞって四角く囲め。';
     $('area-copy').hidden = $('area-del').hidden = bp || n === 0;
+    $('area-num').hidden = bp || !inArea().some((e) => NUMBERED.includes(e.kind));
     $('area-rot').hidden = $('area-save').hidden = $('area-put').hidden = !bp;
     ($('area-put') as HTMLButtonElement).disabled = !ghost;
     $('area-lib').hidden = bp;
     $('area-cancel').hidden = !bp && !areaRect();
   }
+  // ---- 番号をまとめて振る：囲んだ検知器・弁・貨物駅に、連番か同じ番号を付ける（元に戻せる） ----
+  const NUMBERED = ['sensor', 'gate', 'station'];
+  const showNumbering = () => {
+    const all = inArea().filter((e) => NUMBERED.includes(e.kind));
+    if (!all.length) return;
+    const sig = all.filter((e) => e.kind !== 'station'), sta = all.filter((e) => e.kind === 'station');
+    let target: 'sig' | 'sta' = sig.length ? 'sig' : 'sta', seq = true, text = '';
+    const pickedEnts = () => (target === 'sig' ? sig : sta)
+      // 読む順（上の行から、左から）
+      .slice().sort((a, b) => groundY(a.y) - groundY(b.y) || a.x - b.x);
+    const used = () => [...world.ents.values()].filter((e) => (target === 'sig' ? e.kind === 'sensor' || e.kind === 'gate' : e.kind === 'station') && !pickedEnts().includes(e)).map((e) => e.ch || 1);
+    const startNo = () => (text ? lineNo(+text) : freeLine(used()));
+    const again = () => {
+      const es = pickedEnts(), s0 = startNo(), nums = es.map((_, i) => lineNo(seq ? s0 + i : s0));
+      const seg = (id: string, on: boolean, label: string, f: () => void) => h('button', { class: 'ghost' + (on ? ' picked on' : ''), type: 'button', id, onclick: () => { f(); sfx.tap(); again(); } }, label);
+      showSheet(h('header', {}, h('h2', {}, '番号を振る'), closeBtn()),
+        h('p', { class: 'muted' }, '囲んだ設備に、上の行から左から順に番号を付ける。付けたあとでも「元に戻す」で戻せる。'),
+        h('div', { class: 'row' },
+          sig.length ? seg('num-sig', target === 'sig', `検知器と弁 ${sig.length} 個（信号の番号）`, () => { target = 'sig'; }) : null,
+          sta.length ? seg('num-sta', target === 'sta', `貨物駅 ${sta.length} 個（路線番号）`, () => { target = 'sta'; }) : null),
+        h('div', { class: 'row' }, seg('num-seq', seq, '連番', () => { seq = true; }), seg('num-same', !seq, 'すべて同じ番号', () => { seq = false; })),
+        h('p', { class: 'eq', id: 'num-start' }, `${seq ? '最初の番号' : '番号'}：${s0}${text ? '' : '（空き番号）'}`),
+        h('div', { class: 'keys numpad' }, ...['7', '8', '9', '4', '5', '6', '1', '2', '3', '⌫', '0'].map((k) =>
+          h('button', { class: 'key ' + (k === '⌫' ? 'fn' : 'n'), type: 'button', id: `pad-${k === '⌫' ? 'del' : k}`, onclick: () => { text = k === '⌫' ? text.slice(0, -1) : (text + k).replace(/^0+/, '').slice(0, 4); again(); } }, k))),
+        h('p', { class: 'muted', id: 'num-preview' }, `付く番号：${nums.slice(0, 12).join('、')}${nums.length > 12 ? ' …' : ''}${seq && s0 + es.length - 1 > LINE_MAX ? `（${LINE_MAX} を超える分は ${LINE_MAX} になる）` : ''}`),
+        h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'num-ok', onclick: () => {
+          group = null;
+          es.forEach((e, i) => { if ((e.ch || 1) === nums[i]) return; record({ t: 'ch', x: e.x, y: e.y, ch: e.ch ?? 1 }); e.ch = nums[i]; e.tr = undefined; e.xtr = undefined; });
+          group = null;
+          sfx.ok(); closeModal(); toast(`${es.length} 個に番号を振った。`, 2200); save();
+        } }, `${es.length} 個に振る`)));
+    };
+    again();
+  };
+  $('area-num').onclick = showNumbering;
   const toStamps = (r: [number, number, number, number], es: Ent[]): Stamp[] => es.map((e) => ({ kind: e.kind as Placeable, dx: e.x - r[0], dy: e.y - r[1], dir: e.dir, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, test: e.test, sub: e.sub, ch: e.ch, role: e.role }));
   $('area-copy').onclick = () => {
     const r = areaRect(), es = inArea();
@@ -813,7 +1114,7 @@ function boot(data: HotData) {
 
   // ---- 課題：本編とは別の小さな工場を開く ----
   const resetView = () => {
-    undo.length = 0; group = null; selected = null; undoBtn.disabled = true; shownGoal = ''; clone = null; hover = null;
+    clearUndo(); selected = null; shownGoal = ''; clone = null; hover = null;
     setFloor(0); paintFloor();
     cam.x = hubCX; cam.y = hubCY; cam.z = nearZoom(); camTo = null;
     refreshTools(false);
@@ -1001,6 +1302,9 @@ function boot(data: HotData) {
       $('goal-rate').textContent = g.rate ? each.trim() : each || f.goalPerMin > 0 ? each + (f.goalPerMin <= 0 ? '' : `${f.goalPerMin.toFixed(1)} 個/分${f.etaSec !== null && f.etaSec > 0 ? `　あと約 ${f.etaSec >= 90 ? `${Math.round(f.etaSec / 60)} 分` : `${Math.max(5, Math.round(f.etaSec / 5) * 5)} 秒`}` : ''}`) : '';
     } else if (!g) $('goal-rate').textContent = '';
     $('goal-bar').style.width = g ? `${Math.min(100, (goalCount(world) / requiredOf(world, g)) * 100)}%` : '100%';
+    const side = world.side, sideEl = $('goal-side');
+    sideEl.hidden = !side;
+    if (side) sideEl.textContent = `混ぜ注文：${label(side.s)} を ${side.got} / ${side.n}（${CHAPTERS[side.ch].name.split(' ')[0]}の物質）　研究点 +${side.reward}`;
   };
 
   // ---- アカウント：セーブを書くたびに、少しあとで預ける。ほかの端末が先へ進めていたら、知らせる ----
@@ -1017,7 +1321,7 @@ function boot(data: HotData) {
     start(n, json) {
       world = (json && deserialize(json)) || newWorld();
       slot = n;
-      undo.length = 0; group = null; selected = null; undoBtn.disabled = true; shownGoal = ''; speed = 1; paintSpeed(); clone = null;
+      clearUndo(); selected = null; shownGoal = ''; speed = 1; paintSpeed(); clone = null;
       cam.x = hubCX; cam.y = hubCY; cam.z = nearZoom(); camTo = null;
       $('b-fit').textContent = '全体';
       title.hide();
@@ -1029,11 +1333,14 @@ function boot(data: HotData) {
       began = performance.now(); warned = false;
       save();
       if (!json) showHelp(true);
+      else if (closedNow()) showClosing();
+      else if (morningDue(world, sleepCfg(), new Date())) showMorningSet();
     },
   });
-  const toTitle = () => { leaveCase(); save(); slot = 0; selected = null; app.classList.add('in-title'); title.show(); };
+  const toTitle = () => { rvCard.hidden = true; leaveCase(); save(); slot = 0; selected = null; app.classList.add('in-title'); title.show(); };
 
   // ---- ループ ----
+  let miniTick = 0;
   let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0, chapterBefore = 0, slowFrames = 0;
   const STEP = 1 / 60;
   const frame = (now: number) => {
@@ -1041,7 +1348,7 @@ function boot(data: HotData) {
     prev = now;
     if (slot) {
       // 「限られた原料」は、予想を答えるまで動かさない
-      if (modal.hidden && !(sandbox?.c.kind === 'limit' && !world.pred)) {
+      if (modal.hidden && closingEl.hidden && !(sandbox?.c.kind === 'limit' && !world.pred)) {
         acc += dt * speed;
         let guard = 0;
         const s0 = PERF ? performance.now() : 0;
@@ -1080,6 +1387,10 @@ function boot(data: HotData) {
           fireworks(12 + fl.length * 2);
         }
         if (ev === 'all-done') fireworks(36);
+        if (ev === 'side-new' && world.side) toast(`混ぜ注文：${CHAPTERS[world.side.ch].name}の ${label(world.side.s)} を ${world.side.n} 個。指令とは別に納めると研究点 +${world.side.reward}。`, 6000);
+        if (ev === 'side-done' && world.lastSide) { toast(`混ぜ注文を終えた（${label(world.lastSide.s)}）。研究点 +${world.lastSide.reward}。`, 4500); sfx.goal(); }
+        if (ev === 'goal-done' || ev === 'chapter-done') lastCardAt = -1e9;
+        if (ev === 'chapter-done' && canTestOut(world, world.chapter)) window.setTimeout(() => toast(`次は「${CHAPTERS[world.chapter].name}」。知っている章なら、指令の札を押して章の一覧から「確認テスト」（10 問、9 割で章を短縮）。`, 8000), 4500);
         if (ev === 'wrong-sample' && now - lastWrong > 2500) { lastWrong = now; toast('違う物質が納品所に入った。2 個減点。検査を見直せ。', 3200); sfx.bad(); }
         if (ev === 'all-done') { toast('すべての指令を終えた。', 6000); sfx.goal(); }
         save();
@@ -1097,7 +1408,7 @@ function boot(data: HotData) {
       if (lastRes !== world.research.length) { lastRes = world.research.length; refreshTools(true); paintOpts(); paintFloor(); }
       const d0 = PERF ? performance.now() : 0;
       const fx = fxOn(), t3 = fx && three && gw > 0;
-      const view = { floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : toolGhost() };
+      const view = { dusk: palette().name === 'light' ? dusk : dusk * 0.5, floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: tool === 'area' ? ghostCells() : toolGhost() };
       if (fx) {
         // 光の層は黒地に加算、効果の層は黒地（何もない所は効果なし）
         for (const c2 of [glowCtx, maskCtx]) { c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'source-over'; c2.globalAlpha = 1; c2.fillStyle = '#000'; c2.fillRect(0, 0, glowCv.width, glowCv.height); c2.setTransform(fxK, 0, 0, fxK, 0, 0); c2.globalCompositeOperation = 'lighter'; }
@@ -1119,11 +1430,11 @@ function boot(data: HotData) {
           ground: gndCv, top: topCv, rect: [cam2.x - gw / 2 / cam.z, cam2.y - gh / 2 / cam.z, cam2.x + gw / 2 / cam.z, cam2.y + gh / 2 / cam.z],
           vp: new Float32Array(c3.vp), boxes: boxBuf, count: boxes.length / 8, slabs: slabs.length / 8, topH: TOP_H,
           ink: [((ink >> 16) & 255) / 255, ((ink >> 8) & 255) / 255, (ink & 255) / 255], shadow: pal.name === 'light' ? 0.3 : 0.5, glowScreen: fw ? glowSCv : null,
-        }, glowCv, maskCv, { ...POST_PRESETS[pal.key], time: now / 1000 });
+        }, glowCv, maskCv, duskPost(POST_PRESETS[pal.key], now / 1000));
       } else {
         draw(ctx, cw, ch, world, cam, now / 1000, dt, { ...view, fx: fx ? { glow: glowCtx, mask: maskCtx } : null });
         drawFireworks(ctx, cw, ch, dt, fx ? glowCtx : null);
-        if (fx) post!.render(cv, glowCv, maskCv, { ...POST_PRESETS[palette().key], time: now / 1000 });
+        if (fx) post!.render(cv, glowCv, maskCv, duskPost(POST_PRESETS[palette().key], now / 1000));
       }
       if (fx) {
         // 遅い端末では、自動で軽い表示に戻す（3 秒ほど、1 コマ 45 ms を超え続けたら）。立体表示 → 平らな高画質 → 標準、の順
@@ -1134,6 +1445,10 @@ function boot(data: HotData) {
           else { gfxHigh = false; applyGfx(); store.setMeta({ gfx: 'plain' }); toast('動きが重いので、画質を標準に切り替えた。メニューの「画質」で戻せる。', 5000); }
         }
       }
+      if (++miniTick % 20 === 0) paintMini();
+      if (miniTick % 30 === 0) cardTick(performance.now());
+      if (++sleepTick % 60 === 0) sleepCheck();
+      if (!sandbox && !document.hidden) addPlayTime(world, dt * 1000);
       if (PERF) { PERF.draw.push(performance.now() - d0); if (PERF.draw.length > 600) { PERF.draw.shift(); PERF.step.shift(); } }
       hud();
     }

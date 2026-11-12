@@ -1,3 +1,4 @@
+import { capByExams, dayKey, firstCard, gradeOf, migrate, review, type Card, type Confidence, type Grade } from './fsrs';
 import { recipeById, RECIPES, CONDITIONS, electronsOf, productsOf, type MachineKind, type Recipe } from '../content/recipes';
 import { HUB_AT, HUB_CENTER, HUB_DEMAND, HUB_SIZES, hubTiles, resourceAt } from '../content/map';
 import { CHAPTERS, TOTAL_GOALS, type Goal } from '../content/goals';
@@ -182,8 +183,28 @@ export interface World {
   hubSize: number;
   /** 指令ごとにかかった時間（ミリ秒）。キーは '章:番号' */
   goalMs: Record<string, number>;
-  /** 復習の予定。キーは 'r:反応id' か 'k:知識id' */
-  srs: Record<string, { due: number; iv: number }>;
+  /** 復習の予定（FSRS）。キーは 'r:反応id' か 'k:知識id' */
+  srs: Record<string, Card>;
+  /** 試験の日時（共通テスト、2 次）。復習の間隔は、これをまたがない */
+  exams: number[];
+  /** 自信ごとの、答えた数と正解した数 */
+  calib: Record<Confidence, [number, number]>;
+  /** 今日まちがえた（または勘で当てた）問題。正解するまで、今日のうちに戻ってくる。at より前には出さない */
+  relearn: { id: string; at: number }[];
+  /** 自信を持ってまちがえた記録（新しい 200 件） */
+  hcLog: { id: string; t: number }[];
+  /** 混ぜ注文：前の章の物質を、いまの指令とは別に納める */
+  side: { s: string; n: number; got: number; ch: number; reward: number } | null;
+  /** 今夜の 10 問と、翌朝の確認。day は夜の日付、ids は出した問題、got は夜の正解数、morning は朝の正解数 */
+  night: { day: string; ids: string[]; got: number; morning?: number } | null;
+  /** 日ごとの遊んだ時間（ミリ秒）。直近 60 日 */
+  dayMs: Record<string, number>;
+  /** 確認テストで短くした章 */
+  tested: number[];
+  /** 今日まちがえた問題（今夜の 10 問に入れる） */
+  today: { day: string; wrong: string[] };
+  /** 最後に終えた混ぜ注文（知らせるため。保存しない） */
+  lastSide?: { s: string; n: number; got: number; ch: number; reward: number };
   /** リード文課題で正解した空欄 */
   cleared: string[];
   delivered: Record<string, number>;
@@ -412,19 +433,49 @@ export const key = (x: number, y: number) => `${x},${y}`;
 export const isMachine = (k: Kind): k is MachineKind => k === 'separator' || k === 'electrolyzer' || k === 'reactor' || k === 'battery' || k === 'collector';
 
 
-/** 復習の間隔（分）。正解するたびに次へ進み、間違えると最初に戻る */
-export const SRS_STEPS = [10, 60 * 24, 60 * 24 * 3, 60 * 24 * 7, 60 * 24 * 16, 60 * 24 * 35];
+/** 試験の日時の初期値。共通テストは 2027 年 1 月 16 日（大学入試センターの実施要項）。
+ *  2 次（京大の前期日程）は、令和 9 年度の募集要項がまだ出ていないので、例年どおりの 2 月 25 日にしてある。要項が出たら直せる */
+export const EXAMS_DEFAULT = [new Date(2027, 0, 16, 9, 0).getTime(), new Date(2027, 1, 25, 9, 0).getTime()];
+/** 答えた結果で、次に出す日を決める（FSRS）。g は 1 忘れた〜4 簡単 */
+export function rate(w: World, id: string, g: Grade, now = Date.now()) {
+  w.srs[id] = review(w.srs[id], g, now, w.exams, id);
+}
+/** 正解か不正解かだけで記録する（自信を聞かない問い） */
 export function schedule(w: World, id: string, correct: boolean, now = Date.now()) {
-  const cur = w.srs[id];
-  const iv = correct && cur ? Math.min(SRS_STEPS.length - 1, cur.iv + 1) : 0;
-  w.srs[id] = { iv, due: now + SRS_STEPS[iv] * 60000 };
+  rate(w, id, correct ? 3 : 1, now);
+}
+/**
+ * 自信と正誤を記録して、次の予定を決める。まちがえたもの・勘で当てたものは、今日のうちに正解するまで戻ってくる
+ * （自信を持ってまちがえたものは早めに：1 分後。ほかは 3 分後）。正解すれば、その日の戻りから外す。
+ */
+export function answer(w: World, id: string, ok: boolean, conf: Confidence | undefined, now = Date.now()): Grade {
+  // 自信を聞かなかった問い（すべてを組み直す問い）は、正誤だけで決める
+  const g = conf ? gradeOf(ok, conf) : ok ? 3 : 1;
+  if (conf) { const c = (w.calib[conf] ??= [0, 0]); c[0]++; if (ok) c[1]++; }
+  rate(w, id, g, now);
+  const hc = !ok && conf === 'sure';
+  if (hc) { w.srs[id].hc = true; w.hcLog.push({ id, t: now }); if (w.hcLog.length > 200) w.hcLog.splice(0, w.hcLog.length - 200); }
+  w.relearn = w.relearn.filter((x) => x.id !== id);
+  if (g === 1) {
+    w.relearn.push({ id, at: now + (hc ? 60000 : 180000) });
+    const day = dayKey(now);
+    if (w.today.day !== day) w.today = { day, wrong: [] };
+    if (!ok && !w.today.wrong.includes(id)) w.today.wrong.push(id);
+  }
+  return g;
+}
+/** 今日のうちに出し直す問題のうち、もう出してよいもの（日をまたいだものは捨てる） */
+export function relearnReady(w: World, now = Date.now()): string[] {
+  const today = dayKey(now);
+  w.relearn = w.relearn.filter((x) => dayKey(x.at) === today || x.at > now);
+  return w.relearn.filter((x) => x.at <= now).map((x) => x.id);
 }
 /** 習熟メッキ：その反応の復習の間隔が伸びるほど、装置が銅 → 銀 → 金になる。復習でまちがえると間隔が最初に戻り、メッキも剥がれる。
  *  0 なし、1 銅（3 日空けて覚えていた）、2 銀（7 日）、3 金（16 日以上） */
 export const PLATING = ['', '銅', '銀', '金'];
 export function platingOf(srs: World['srs'], recipeId: string | undefined): 0 | 1 | 2 | 3 {
-  const iv = recipeId ? srs[`r:${recipeId}`]?.iv ?? 0 : 0;
-  return iv >= 4 ? 3 : iv >= 3 ? 2 : iv >= 2 ? 1 : 0;
+  const b = recipeId ? srs[`r:${recipeId}`]?.b ?? 0 : 0;
+  return b >= 16 ? 3 : b >= 7 ? 2 : b >= 3 ? 1 : 0;
 }
 /** 灯りのともる資源地：その資源地を使う指令を 1 つでも達成したところ */
 export function litZones(w: World): Set<string> {
@@ -476,7 +527,7 @@ export const toolUnlocked = (w: World, need: { done?: number; chapter?: number; 
 
 export function newWorld(): World {
   const w: World = {
-    ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, cleared: [], delivered: {}, stock: {},
+    ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, exams: [...EXAMS_DEFAULT], calib: { sure: [0, 0], maybe: [0, 0], guess: [0, 0] }, relearn: [], hcLog: [], side: null, night: null, dayMs: {}, tested: [], today: { day: '', wrong: [] }, cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
     up: { extract: 0, belt: 0, machine: 0 }, research: [], agents: [], cases: [], solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, sig: [], rails: new Map(), railRev: 0, occ: new Map(), buckets: [], playMs: 0, tick: 0, events: [], fx: [],
   };
@@ -732,7 +783,8 @@ export function learn(w: World, r: Recipe, firstTry: boolean): number {
   for (const [s] of r.outputs) discover(w, s);
   if (w.learned.includes(r.id)) return 0;
   w.learned.push(r.id);
-  schedule(w, `r:${r.id}`, false);
+  // はじめて覚えた：一度でできたなら「思い出せた」、まちがえながらなら「忘れた」から始める。10 分後に一度確かめる
+  w.srs[`r:${r.id}`] = firstCard(firstTry ? 3 : 1, Date.now());
   const gain = firstTry ? 15 : 8;
   w.points += gain;
   return gain;
@@ -826,6 +878,91 @@ function through(w: World, b: Ent, d: Dir, depth = 0): boolean {
   return !!n && depth <= 8 && emits(w, n, b.x, b.y, d, depth);
 }
 
+// ---------------- 流れをたどる（どこから来て、どこへ行き、どこで止まっているか） ----------------
+/** 物を運ぶだけの設備（反応も貯蔵もしない） */
+export const MOVERS = new Set<Kind>(['belt', 'splitter', 'analyzer', 'sensor', 'gate', 'tunnel', 'bridge', 'lift']);
+export interface FlowTrace {
+  /** 下流（物が行く先）の運ぶ設備のマス。近い順 */
+  down: [number, number][];
+  /** 上流（物が来る元）の運ぶ設備のマス */
+  up: [number, number][];
+  /** 流れの行き着く先（装置・納品所・駅など）と、流れの元（採取機・装置など） */
+  sinks: [number, number][];
+  sources: [number, number][];
+  /** 流れが止まっている先頭：下流でいちばん先の「待っている荷」と、その理由 */
+  head: { x: number; y: number; s: string; why: string } | null;
+}
+/** 運ぶ設備 n から、荷が出ていく向き。inDir は入ってきた向き（立体交差はまっすぐ抜ける） */
+function moverOuts(w: World, n: Ent, inDir: Dir): { x: number; y: number; d: Dir }[] {
+  const step = (d: Dir) => ({ x: n.x + DX[d], y: n.y + DY[d], d });
+  switch (n.kind) {
+    case 'splitter': return [0, 1, 2].map((i) => step(portDir(n.dir, i)));
+    case 'analyzer': return [0, 1].map((i) => step(portDir(n.dir, i)));
+    case 'bridge': return [step(inDir)];
+    case 'tunnel': { const p = tunnelPair(w, n); return p ? [{ x: p.x, y: p.y, d: n.dir }] : [step(n.dir)]; }
+    case 'lift': { if (n.role === 'in') { const p = liftPartner(w, n); return p ? [{ x: p.x, y: p.y, d: p.dir }] : []; } return [step(n.dir)]; }
+    default: return [step(n.dir)];
+  }
+}
+/** 待っている荷が、なぜ先へ進めないか */
+function stuckWhy(w: World, n: Ent, s: string): string {
+  if (n.kind === 'gate' && !signalOn(w, n.ch) === (n.test !== 'off')) return `弁が閉じている（${n.ch || 1} 番の信号が${n.test === 'off' ? '点いている' : '来ていない'}）`;
+  const outs = moverOuts(w, n, n.dir);
+  const t = outs.length === 1 ? at(w, outs[0].x, outs[0].y) : undefined;
+  if (outs.length === 1 && !t) return 'この先に何もない（行き止まり）';
+  if (!t) return '出口がどれもふさがっている';
+  if (t.kind === 'belt' && t.dir === (outs[0].d + 2) % 4) return '先のベルトが向かい合っている';
+  if (t.kind === 'station') return t.role === 'out' ? '降ろす駅には入れられない' : '駅がいっぱい（列車が追いつかない）';
+  if (t.kind === 'tank') return t.sub && t.sub !== s && (t.cnt || 0) + (t.rcn || 0) > 0 ? 'タンクに別の物質が入っている' : 'タンクがいっぱい';
+  if (t.kind === 'settler' || t.kind === 'funnel' || t.kind === 'phoresis') return !sepReady(t.kind, t.test) ? '分ける装置の設定が決まっていない' : t.bad === s ? 'この装置では分けられない物質' : '分ける装置が手いっぱい';
+  if (t.recipe !== undefined || isMachine(t.kind)) {
+    const r = recipeById(t.recipe);
+    if (!r) return '装置の反応が決まっていない';
+    if (!r.inputs.some(([id]) => id === s)) return 'この装置の反応では使わない物質';
+    return outputBlocked(t, r) ? '装置の出口が詰まっている（生成物の行き先がない）' : '装置の入口がいっぱい（反応が追いつかない）';
+  }
+  if (MOVERS.has(t.kind)) return '先が詰まっている';
+  return 'この先が受け取らない';
+}
+export function flowTrace(w: World, e: Ent, cap = 800): FlowTrace {
+  const res: FlowTrace = { down: [], up: [], sinks: [], sources: [], head: null };
+  if (!MOVERS.has(e.kind)) return res;
+  const k2 = (x: number, y: number) => `${x},${y}`;
+  // 下流
+  const seenD = new Set<string>(), sinkSet = new Set<string>();
+  let best = -1;
+  const qd: { x: number; y: number; d: Dir; depth: number }[] = [{ x: e.x, y: e.y, d: e.dir, depth: 0 }];
+  while (qd.length && res.down.length < cap) {
+    const c = qd.shift()!, n = at(w, c.x, c.y);
+    if (!n) continue;
+    if (!MOVERS.has(n.kind)) { const kk = k2(n.x, n.y); if (!sinkSet.has(kk)) { sinkSet.add(kk); res.sinks.push([n.x, n.y]); } continue; }
+    const kk = `${n.x},${n.y},${n.kind === 'bridge' ? c.d % 2 : 0}`;
+    if (seenD.has(kk)) continue;
+    seenD.add(kk);
+    res.down.push([n.x, n.y]);
+    const items = n.kind === 'bridge' ? (n.items ?? []).filter((it): it is Item => !!it) : n.item ? [n.item] : [];
+    for (const it of items) if ((it.w || 0) > 1 && c.depth > best) { best = c.depth; res.head = { x: n.x, y: n.y, s: it.s, why: stuckWhy(w, n, it.s) }; }
+    for (const o of moverOuts(w, n, c.d)) qd.push({ x: o.x, y: o.y, d: o.d, depth: c.depth + 1 });
+  }
+  // 上流
+  const seenU = new Set<string>([k2(e.x, e.y)]), srcSet = new Set<string>();
+  const qu: Ent[] = [e];
+  while (qu.length && res.up.length < cap) {
+    const n = qu.shift()!;
+    const feeders: Ent[] = [];
+    for (const d of [0, 1, 2, 3] as Dir[]) { const m = at(w, n.x - DX[d], n.y - DY[d]); if (m && m !== n && emits(w, m, n.x, n.y, d)) feeders.push(m); }
+    // 地下ベルトの出口と、昇降機の出口は、地上のとなりからではなく、対になる入口から来る
+    if (n.kind === 'tunnel') for (let k = 1, R = tunnelRange(w); k <= R; k++) { const m = at(w, n.x - DX[n.dir] * k, n.y - DY[n.dir] * k); if (m?.kind === 'tunnel' && m.dir === n.dir && tunnelPair(w, m) === n) { feeders.push(m); break; } }
+    if (n.kind === 'lift' && n.role === 'out') { const p = liftPartner(w, n); if (p) feeders.push(p); }
+    for (const m of feeders) {
+      const kk = k2(m.x, m.y);
+      if (MOVERS.has(m.kind)) { if (!seenU.has(kk)) { seenU.add(kk); res.up.push([m.x, m.y]); qu.push(m); } }
+      else if (!srcSet.has(kk)) { srcSet.add(kk); res.sources.push([m.x, m.y]); }
+    }
+  }
+  return res;
+}
+
 /** (x,y) へ流れ込んでくるものがあれば、その進行方向を返す。prefer の向きを優先する */
 export function inflow(w: World, x: number, y: number, prefer?: Dir): Dir | null {
   const order: Dir[] = prefer === undefined ? [0, 1, 2, 3] : [prefer, ((prefer + 1) % 4) as Dir, ((prefer + 3) % 4) as Dir];
@@ -866,6 +1003,8 @@ function deliver(w: World, s: string, x: number, y: number, rc?: boolean, quiet 
   w.delivered[s] = (w.delivered[s] || 0) + 1;
   bucket(w).deliver++;
   feed(w, s);
+  // 混ぜ注文
+  if (w.side && w.side.s === s) { w.side.got++; if (w.side.got >= w.side.n) { w.points += w.side.reward; w.events.push('side-done'); w.lastSide = w.side; w.side = null; } }
   const g = currentGoal(w), ch = w.chapter;
   if (!g) return;
   if (g.rate) {
@@ -922,6 +1061,28 @@ function feed(w: World, s: string) {
   }
 }
 
+/**
+ * 混ぜ注文：指令を 2 つ終えるごとに、前に終えた章の物質を 1 つ、いまの指令とは別に頼む（章をまたいで混ぜて思い出させる）。
+ * その物質を作る反応のうち、復習の期限がいちばん近いものを選ぶ。終えた章がなければ出さない。
+ */
+export function maybeSideOrder(w: World, force = false) {
+  if (w.side || (!force && doneCount(w) % 2 !== 0)) return;
+  const cands: { s: string; ch: number; due: number }[] = [];
+  CHAPTERS.forEach((c, ci) => {
+    if (ci === w.chapter) return;
+    c.goals.forEach((g, gi) => {
+      if (gi >= (w.progress[ci] || 0) || g.rate || g.also || g.strict || g.s === 'e' || !hasSub(g.s)) return;
+      const due = Math.min(...RECIPES.filter((r) => productsOf(r).some(([s]) => s === g.s)).map((r) => w.srs[`r:${r.id}`]?.due ?? Infinity));
+      cands.push({ s: g.s, ch: ci, due });
+    });
+  });
+  if (!cands.length) return;
+  cands.sort((a, b) => a.due - b.due || a.ch - b.ch);
+  const pick = cands[0], n = 5 + Math.min(7, pick.ch);
+  w.side = { s: pick.s, n, got: 0, ch: pick.ch, reward: 10 + 2 * n };
+  w.events.push('side-new');
+}
+
 function finishGoal(w: World, g: Goal, ch: number) {
   w.rateWin = []; w.hold = 0;
   {
@@ -937,6 +1098,7 @@ function finishGoal(w: World, g: Goal, ch: number) {
     w.progress[ch]++;
     w.counts[ch] = 0;
     w.points += 30;
+    maybeSideOrder(w);
     if (growHub(w)) w.events.push('hub-grow');
     if (w.progress[ch] < CHAPTERS[ch].goals.length) { w.events.push('goal-done'); return; }
     // 章を終えたら、まだ残っている次の章へ進む
@@ -1432,7 +1594,7 @@ export const SAVE_VERSION = 2;
 export function serialize(w: World): string {
   return JSON.stringify({
     v: SAVE_VERSION, ents: [...w.ents.values()].filter((e) => e.kind !== 'part'), chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
-    rails: [...w.rails], hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
+    rails: [...w.rails], hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, exams: w.exams, calib: w.calib, relearn: w.relearn, hcLog: w.hcLog, side: w.side, night: w.night, dayMs: w.dayMs, tested: w.tested, today: w.today, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
     discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, research: w.research, agents: w.agents, cases: w.cases, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
     playMs: Math.round(w.playMs), savedAt: Date.now(),
   });
@@ -1480,9 +1642,21 @@ export function deserialize(json: string): World | null {
     w.hubSize = HUB_SIZES.includes(d.hubSize) ? d.hubSize : 2;
     for (const [x, y] of hubTiles(w.hubSize)) w.ents.set(key(x, y), { kind: 'hub', x, y, dir: 0 });
     if (growHub(w)) w.events.push('hub-grow');
-    w.srs = d.srs || {};
+    // 古い版の { iv, due } は FSRS の形に読み替える
+    w.srs = {};
+    for (const [k, v] of Object.entries(d.srs || {})) if (v && typeof v === 'object') w.srs[k] = migrate(v as Parameters<typeof migrate>[0]);
     w.cleared = d.cleared || [];
-    for (const id of d.learned || []) if (!w.srs[`r:${id}`] && recipeById(id)) w.srs[`r:${id}`] = { iv: 0, due: Date.now() };
+    for (const id of d.learned || []) if (!w.srs[`r:${id}`] && recipeById(id)) w.srs[`r:${id}`] = migrate({ iv: 0, due: Date.now() });
+    w.exams = Array.isArray(d.exams) && d.exams.length === 2 && d.exams.every((x: unknown) => typeof x === 'number' && x > 0) ? d.exams : [...EXAMS_DEFAULT];
+    w.calib = { sure: [0, 0], maybe: [0, 0], guess: [0, 0] };
+    for (const k of ['sure', 'maybe', 'guess'] as Confidence[]) { const v = d.calib?.[k]; if (Array.isArray(v) && v.length === 2) w.calib[k] = [v[0] | 0, v[1] | 0]; }
+    w.relearn = Array.isArray(d.relearn) ? d.relearn.filter((x: { id?: unknown; at?: unknown }) => typeof x?.id === 'string' && typeof x?.at === 'number') : [];
+    w.hcLog = Array.isArray(d.hcLog) ? d.hcLog.filter((x: { id?: unknown; t?: unknown }) => typeof x?.id === 'string' && typeof x?.t === 'number').slice(-200) : [];
+    w.side = d.side && typeof d.side.s === 'string' && hasSub(d.side.s) ? { s: d.side.s, n: d.side.n | 0, got: d.side.got | 0, ch: d.side.ch | 0, reward: d.side.reward | 0 } : null;
+    w.night = d.night && typeof d.night.day === 'string' && Array.isArray(d.night.ids) ? { day: d.night.day, ids: d.night.ids.filter((x: unknown) => typeof x === 'string'), got: d.night.got | 0, morning: typeof d.night.morning === 'number' ? d.night.morning : undefined } : null;
+    w.dayMs = d.dayMs && typeof d.dayMs === 'object' ? d.dayMs : {};
+    w.tested = Array.isArray(d.tested) ? d.tested.filter((x: unknown) => typeof x === 'number') : [];
+    w.today = d.today && typeof d.today.day === 'string' && Array.isArray(d.today.wrong) ? { day: d.today.day, wrong: d.today.wrong.filter((x: unknown) => typeof x === 'string') } : { day: '', wrong: [] };
     w.delivered = d.delivered || {};
     w.stock = d.stock || {};
     w.discovered = [...new Set([...w.discovered, ...(d.discovered || [])])].filter(hasSub);

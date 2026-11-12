@@ -69,6 +69,13 @@ b { font-weight: 700; }
 #goal::after { content: "指令"; position: absolute; right: 10px; bottom: 8px; width: 44px; height: 44px; border: 2px solid var(--red); border-radius: 50%; color: var(--red); font-family: var(--font-hand); font-weight: 600; font-size: 14px; display: grid; place-items: center; transform: rotate(-12deg); opacity: 0.75; pointer-events: none; }
 .goal-top { display: flex; justify-content: space-between; color: var(--soft); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
 #goal-count { font-family: var(--font-mono); color: var(--ink); }
+/* 指令カードをたたむ：名前と進み具合だけの細い帯にする。組んでいる間は自動でたたむ */
+#goal-fold { margin-left: 8px; min-width: 30px; min-height: 26px; padding: 0 6px; border: 1px solid var(--soft); border-radius: 4px; background: transparent; color: var(--ink); font-size: 13px; line-height: 1; cursor: pointer; }
+#goal.folded { padding-top: 6px; padding-bottom: 8px; gap: 2px; }
+#goal.folded #goal-ico, #goal.folded #goal-hint, #goal.folded #goal-rate { display: none; }
+#goal.folded::after { display: none; }
+#goal.folded #goal-name { font-size: 15px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#goal.folded #goal-fold { transform: rotate(180deg); }
 .goal-main { display: flex; align-items: center; gap: 10px; }
 #goal-ico { width: 44px; height: 44px; flex: 0 0 auto; }
 #goal-name { font-family: var(--font-hand); font-weight: 600; font-size: 20px; line-height: 1.35; min-width: 0; }
@@ -103,6 +110,42 @@ b { font-weight: 700; }
 @keyframes stamp { 0% { opacity: 0; transform: scale(1.7) rotate(-14deg); } 14% { opacity: 0.92; transform: scale(1) rotate(-14deg); } 70% { opacity: 0.92; transform: scale(1) rotate(-14deg); } 100% { opacity: 0; transform: scale(1) rotate(-14deg); } }
 
 /* ---- 道具：筆箱 ---- */
+/* 閉店：シャッターが下りて、工場を止める */
+#closing { position: absolute; inset: 0; z-index: 8; display: grid; place-items: center; }
+#closing .shutter { position: absolute; inset: 0; background: repeating-linear-gradient(180deg, #3a3f48 0 26px, #2b2f36 26px 30px); box-shadow: inset 0 -12px 0 #1d2026; transform-origin: top; animation: shutter 1.6s cubic-bezier(.3,.8,.4,1) both; }
+[data-skin="arcane"] #closing .shutter { background: repeating-linear-gradient(180deg, #2a2440 0 26px, #1f1a33 26px 30px); }
+[data-skin="note"] #closing .shutter { background: repeating-linear-gradient(180deg, #33415c 0 26px, #27324a 26px 30px); }
+@keyframes shutter { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+#closing .closing-plate { position: relative; background: var(--card); color: var(--ink); border: var(--bw) solid var(--ink); border-radius: 6px; padding: 18px 22px; width: min(460px, calc(100% - 32px)); box-shadow: 4px 4px 0 rgba(0,0,0,0.35); animation: fade 0.4s 1.2s both; display: grid; gap: 10px; }
+#closing b { font-family: var(--font-hand); font-size: 24px; }
+#closing p { margin: 0; line-height: 1.7; }
+/* 今夜の 10 問：就寝の 4 時間前から 1 時間前まで、上の段に出る */
+#b-night { background: var(--hi-soft); font-weight: 700; }
+/* 工場の中の復習：左下、道具の段の上。地図は、そのまま触れる */
+#rvcard { position: absolute; left: var(--gl); bottom: 104px; width: min(390px, calc(100% - var(--gl) - var(--gr))); max-height: 56vh; overflow-y: auto; background: var(--card); color: var(--ink); border: var(--bw) solid var(--ink); border-radius: 6px; box-shadow: 3px 3px 0 var(--shadow); padding: 8px 12px 12px; z-index: 3; }
+.in-title #rvcard { display: none; }
+#rvcard .rv-top { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+#rvcard .rv-top .grow { flex: 1; }
+#rvcard .rv-top button { min-height: 32px; padding: 2px 10px; font-size: 13px; }
+#rvcard .qtext { font-size: 15px; line-height: 1.5; margin: 6px 0 8px; }
+#rvcard .note { font-size: 13px; }
+.rv-head { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill.contrast { background: var(--hi-soft); border-style: dashed; }
+.rv-choices.compact button { font-size: 14px; padding: 6px 10px; min-height: 40px; text-align: left; }
+.rv-choices button.chosen { outline: 3px solid var(--hi); outline-offset: 1px; }
+.rv-conf { align-items: center; gap: 6px; margin-top: 8px; }
+.rv-conf button { min-width: 72px; }
+.rv-hc { color: var(--red); }
+.rv-hclist { border: 2px solid var(--red); border-radius: 4px; padding: 8px 10px; margin: 8px 0; font-size: 14px; }
+#goal-side { margin: 4px 52px 0 0; padding: 2px 8px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); background: var(--card); border: 1px dashed var(--soft); border-radius: 4px; }
+.chapter-row { display: flex; gap: 6px; align-items: stretch; }
+.chapter-row .chapter { flex: 1; }
+.chapter-row .testout { white-space: nowrap; }
+.pace { font-size: 13px; line-height: 1.6; background: var(--hi-soft); padding: 8px 10px; border-radius: 4px; }
+/* 全体の小地図：右下、道具の段の上。押すとその場所へ移る */
+#minimap { position: absolute; right: var(--gr); bottom: 104px; width: 220px; height: 150px; background: color-mix(in srgb, var(--card) 90%, transparent); border: var(--bw) solid var(--ink); border-radius: 6px; box-shadow: 3px 3px 0 var(--shadow); z-index: 2; touch-action: none; cursor: pointer; }
+.in-title #minimap { visibility: hidden; }
+@media (max-width: 860px), (max-height: 560px) { #minimap { display: none; } }
 #dock { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 var(--gr) calc(6px + env(safe-area-inset-bottom, 0px)) var(--gl); display: grid; justify-items: center; gap: 4px; pointer-events: none; }
 #tip { margin: 0; text-align: center; font-size: 12.5px; line-height: 1.4; background: var(--card); border: 1px solid var(--rule); border-radius: 3px; padding: 3px 12px; max-width: min(100%, 720px); animation: tip-in 0.18s ease-out; }
 @keyframes tip-in { from { opacity: 0; transform: translateY(4px); } }
@@ -123,7 +166,7 @@ b { font-weight: 700; }
 .tool.on .l { color: var(--ink); }
 
 /* ---- シート：ノートの 1 ページ ---- */
-#modal { position: absolute; inset: 0; background: color-mix(in srgb, var(--paper) 72%, transparent); display: grid; place-items: center; padding: 16px var(--gr) 16px var(--gl); animation: fade 0.15s ease; }
+#modal { z-index: 6; position: absolute; inset: 0; background: color-mix(in srgb, var(--paper) 72%, transparent); display: grid; place-items: center; padding: 16px var(--gr) 16px var(--gl); animation: fade 0.15s ease; }
 @keyframes fade { from { opacity: 0; } }
 #sheet { width: min(680px, 100%); max-height: 100%; overflow-y: auto; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 3px; padding: 20px 24px 24px; display: grid; gap: 14px; user-select: text; -webkit-user-select: text; box-shadow: 7px 7px 0 var(--shadow); animation: up 0.18s ease; }
 @keyframes up { from { transform: translateY(10px); opacity: 0; } }
@@ -248,6 +291,8 @@ b { font-weight: 700; }
 .pep-line .slot { min-width: 0; flex: 0 1 auto; padding: 6px 10px; font-size: 16px; }
 #area-act { position: absolute; left: 50%; top: 72px; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; align-items: center; z-index: 3; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px; padding: 6px 8px 6px 12px; box-shadow: 2px 2px 0 var(--shadow); font-size: 13px; max-width: calc(100% - 32px); }
 #area-n { flex: 1 1 180px; min-width: 0; }
+/* 画面の窓が開いている間は、範囲選択の帯を出さない（窓の上に重なる） */
+#app:has(#modal:not([hidden])) #area-act { display: none; }
 #area-act button { white-space: nowrap; border: var(--bw) solid var(--ink); background: var(--card); color: var(--ink); border-radius: 4px; padding: 6px 12px; min-height: 40px; font-weight: 700; font-family: inherit; }
 #area-act #area-del { color: var(--red); }
 .in-title #area-act { display: none; }

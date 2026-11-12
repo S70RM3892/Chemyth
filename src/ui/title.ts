@@ -19,8 +19,8 @@ export const store = {
   onWrite: null as ((n: number) => void) | null,
   write(n: number, json: string, quiet = false): boolean { try { localStorage.setItem(slotKey(n), json); if (!quiet) store.onWrite?.(n); return true; } catch { return false; } },
   erase(n: number) { try { localStorage.removeItem(slotKey(n)); localStorage.removeItem(`chemyth-v2-album-${n}`); } catch { /* 同上 */ } },
-  meta(): { sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string; overlay?: boolean; music?: boolean; gfx?: 'high' | 'plain'; view3d?: 'on' | 'off' } { try { return JSON.parse(localStorage.getItem(META) || '{}'); } catch { return {}; } },
-  setMeta(m: { sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string; overlay?: boolean; music?: boolean; gfx?: 'high' | 'plain'; view3d?: 'on' | 'off' }) { try { localStorage.setItem(META, JSON.stringify({ ...store.meta(), ...m })); } catch { /* 同上 */ } },
+  meta(): { sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string; overlay?: boolean; music?: boolean; gfx?: 'high' | 'plain'; view3d?: 'on' | 'off'; goalFold?: boolean; minimap?: boolean; sleep?: { on: boolean; bed: number; wake: number }; ext?: { day: string; until: number }; warned?: string } { try { return JSON.parse(localStorage.getItem(META) || '{}'); } catch { return {}; } },
+  setMeta(m: { sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string; overlay?: boolean; music?: boolean; gfx?: 'high' | 'plain'; view3d?: 'on' | 'off'; goalFold?: boolean; minimap?: boolean; sleep?: { on: boolean; bed: number; wake: number }; ext?: { day: string; until: number }; warned?: string }) { try { localStorage.setItem(META, JSON.stringify({ ...store.meta(), ...m })); } catch { /* 同上 */ } },
 };
 
 export const fmtTime = (ms: number) => { const m = Math.floor(ms / 60000); return m >= 60 ? `${Math.floor(m / 60)} 時間 ${m % 60} 分` : `${m} 分`; };

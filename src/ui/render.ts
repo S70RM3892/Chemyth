@@ -3,11 +3,15 @@ import { ELEMENTS } from '../content/elements';
 import { lineColor, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
 import { heightOf, TOP_H } from './three';
+import { flowTrace, JAM_SEC, MOVERS, type FlowTrace } from '../engine/world';
 import { at, FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { BRASS, BRASS_DARK, mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 import { districtsOf, type District } from '../engine/districts';
 import { equationOf, hexOf, reactionLookById } from '../content/looks';
+import { drawScene } from './scene';
+import { planScene } from '../content/sceneplan';
+import type { Recipe } from '../content/recipes';
 import { recipeById } from '../content/recipes';
 import { agentById, ionsOf, settle } from '../content/ions';
 import { washById } from '../content/extract';
@@ -20,7 +24,7 @@ export interface FxLayers { glow: CanvasRenderingContext2D; mask: CanvasRenderin
 /** 立体表示のときに渡すもの。top：2×2 の装置と納品所、その上を通るもの（線路・札）を描く層（地面と同じ座標、透明地）。
  *  screen：画面にじかに描く層（縁の道しるべ）。boxes：箱の一覧を、ここへ書き足す（1 個につき x, y, 大きさ, 高さ, r, g, b, 層） */
 export interface Three { top: CanvasRenderingContext2D; screen: CanvasRenderingContext2D; sw: number; sh: number; project(x: number, y: number, h?: number): [number, number]; boxes: number[]; /** 1 階から見た 2 階の設備（宙に浮く板として描く） */ slabs: number[] }
-export interface View { /** 立体表示 */ three?: Three | null; /** 光と効果の層。あれば、絵と一緒に描く */ fx?: FxLayers | null; /** 見ている階（0 が 1 階） */ floor?: number; tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string; /** 出口（out）と入口の場所。d は物が流れる向き */ ports?: { x: number; y: number; d: number; out: boolean }[] }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null }
+export interface View { /** 夕暮れ（実際の時刻。0 昼〜1 夜） */ dusk?: number; /** 立体表示 */ three?: Three | null; /** 光と効果の層。あれば、絵と一緒に描く */ fx?: FxLayers | null; /** 見ている階（0 が 1 階） */ floor?: number; tool: string; selected: Ent | null; stats?: boolean; /** 範囲選択 [x0, y0, x1, y1]（両端を含む） */ area?: [number, number, number, number] | null; /** 設計図を置こうとしている場所の見本 */ ghost?: { x: number; y: number; size: number; ok: boolean; dir: number; glyph: string; /** 出口（out）と入口の場所。d は物が流れる向き */ ports?: { x: number; y: number; d: number; out: boolean }[] }[] | null; /** 敷いている途中の線路（マスの中心の列） */ rail?: [number, number][] | null }
 
 // 方眼ノートに描いた工場の図面。輪郭線と斜線で描き、ぼかしや発光は使わない
 let FONT_HAND = '"Klee One", sans-serif';
@@ -320,6 +324,8 @@ function railGeo(w: World): Int32Array {
 let SIG: number[] = [];
 /** 区画の集計は 1 秒半に 1 回でよい */
 let distCache: { w: World; tick: number; n: number; list: District[] } | null = null;
+/** 流れをたどった結果（選んだものが同じあいだは、20 tick ごとに計り直す） */
+let flowCache: { e: Ent; w: World; tick: number; f: FlowTrace } | null = null;
 function districts(w: World): District[] {
   if (!distCache || distCache.w !== w || Math.abs(w.tick - distCache.tick) > 90 || distCache.n !== w.ents.size) distCache = { w, tick: w.tick, n: w.ents.size, list: districtsOf(w) };
   return distCache.list;
@@ -720,8 +726,22 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     pipe(cx - z / 2, cy, cx + z / 2, cy);
   }
   /** まとまった荷の個数の札（×10 など）。荷の右下に出す。引いた視野では出さない */
+  /**
+   * まとまった荷は、個数ぶんの山で描く（9 個まで。係数がそのまま、ベルトの上に数として見える）。10 個からは 9 個の山に個数の札を添える。
+   * 引いた視野では、ひとつの粒で描く
+   */
+  const load = (x: number, y: number, s: string, n: number | undefined) => {
+    const k = Math.min(9, n || 1);
+    if (far || k <= 1) { token(ctx, P, x, y, z, s, far); if (!far) stack(x, y, n); return; }
+    const spots = HEAP[k], zz = z * (k <= 4 ? 0.62 : 0.5);
+    // 山の影
+    ctx.fillStyle = punk ? 'rgba(0,0,0,0.32)' : 'rgba(20,30,50,0.16)';
+    ctx.beginPath(); ctx.ellipse(x + z * 0.03, y + z * 0.25, z * (k <= 4 ? 0.3 : 0.38), z * 0.09, 0, 0, Math.PI * 2); ctx.fill();
+    for (const [dx, dy] of spots) token(ctx, P, x + dx * z, y + dy * z - z * 0.04, zz, s, true);
+    if ((n || 1) >= 10) stack(x, y, n);
+  };
   const stack = (x: number, y: number, n: number | undefined) => {
-    if (!n || n < 2 || z < 22) return;
+    if (!n || n < 10 || z < 22) return;
     const tx = `×${n}`, fs = Math.max(9, z * 0.21), wd = fs * (0.6 * tx.length + 0.5), bx = x + z * 0.2, by = y + z * 0.21;
     rr(ctx, bx - wd / 2, by - fs * 0.62, wd, fs * 1.24, fs * 0.35);
     ctx.fillStyle = punk ? '#0b0d10' : P.ink; ctx.fill();
@@ -735,15 +755,14 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       // ごく引いた視野：物質は、その色の小さな点で示す
       ctx.fillStyle = b.e.item.s === 'e' ? P.hi : sub(b.e.item.s).color;
       ctx.fillRect(sx(b.e.x + 0.5 + ox) - z * 0.2, sy(b.e.y + 0.5 + oy) - z * 0.2, z * 0.4, z * 0.4);
-    } else { token(ctx, P, sx(b.e.x + 0.5 + ox), sy(b.e.y + 0.5 + oy), z, b.e.item.s, far); stack(sx(b.e.x + 0.5 + ox), sy(b.e.y + 0.5 + oy), b.e.item.n); }
+    } else load(sx(b.e.x + 0.5 + ox), sy(b.e.y + 0.5 + oy), b.e.item.s, b.e.item.n);
   }
   for (const e of w.ents.values()) {
     if (e.kind !== 'bridge' || !e.items || !inView(e)) continue;
     e.items.forEach((it, a) => {
       if (!it) return;
       const d = it.d ?? a;
-      token(ctx, P, sx(e.x + 0.5 + DX[d] * (it.p - 0.5)), sy(e.y + 0.5 + DY[d] * (it.p - 0.5)), z, it.s);
-      stack(sx(e.x + 0.5 + DX[d] * (it.p - 0.5)), sy(e.y + 0.5 + DY[d] * (it.p - 0.5)), it.n);
+      load(sx(e.x + 0.5 + DX[d] * (it.p - 0.5)), sy(e.y + 0.5 + DY[d] * (it.p - 0.5)), it.s, it.n);
     });
   }
 
@@ -783,6 +802,22 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       continue;
     }
     machine(ctx, P, sx(e.x + sz / 2), sy(e.y + sz / 2), z * pop * sz, z, e, t);
+    // ---- 粒子まで拡大：うんと近づくと、装置の天面が「粒子の窓」に変わり、いま進んでいる反応の原子の組み替えが見える ----
+    if (z >= ZOOM_IN && sz === 2 && e.recipe && isMachine(e.kind)) {
+      const r = recipeById(e.recipe);
+      if (r) {
+        const a = Math.min(1, (z - ZOOM_IN) / 20), cx2 = sx(e.x + 1), cy2 = sy(e.y + 1), ww = z * 1.62, hh = ww * (SW_H / SW_W);
+        const img = sceneImage(r, e.busy ? Math.min(0.999, e.prog || 0) : (t * 0.12) % 0.2);
+        ctx.save(); ctx.globalAlpha = a;
+        rr(ctx, cx2 - ww / 2 - 4, cy2 - hh / 2 - 4, ww + 8, hh + 8, 10); ctx.fillStyle = P.paper; ctx.fill();
+        ctx.strokeStyle = arcane ? BRASS : P.ink; ctx.lineWidth = Math.max(2, z * 0.04); ctx.stroke();
+        ctx.drawImage(img, cx2 - ww / 2, cy2 - hh / 2, ww, hh);
+        ctx.font = `700 ${Math.max(10, z * 0.1)}px ${FONT_UI}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+        ctx.fillStyle = P.soft; ctx.fillText(e.busy ? '粒子の世界：いま反応している' : '粒子の世界：原料待ち', cx2 - ww / 2 + 6, cy2 - hh / 2 + 4);
+        ctx.textBaseline = 'alphabetic';
+        ctx.restore();
+      }
+    }
     if (G) {
       // 動いている装置は光をこぼす。色は、その反応で生じる気体や液の色（なければスキンの光の色）。熱する反応は橙に光り、上の空気がゆらぐ
       const mcx = sx(e.x + sz / 2), mcy = sy(e.y + sz / 2);
@@ -842,6 +877,47 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   }
 
   use(base);
+  // ---- 詰まりの見える化：稼働率の札を出しているとき、荷が待っているマスを、待った時間で黄 → 赤に塗る ----
+  if (view.stats && !veryFar) {
+    for (const e of w.ents.values()) {
+      if (!MOVERS.has(e.kind) || !inView(e)) continue;
+      const its = e.kind === 'bridge' ? e.items ?? [] : [e.item];
+      let wt = 0;
+      for (const it of its) if (it && (it.w || 0) > wt) wt = it.w || 0;
+      if (wt < 0.3) continue;
+      const k = Math.min(1, wt / JAM_SEC), col = k >= 1 ? '214,48,49' : '235,165,35';
+      rr(ctx, sx(e.x) + z * 0.06, sy(e.y) + z * 0.06, z * 0.88, z * 0.88, z * 0.14);
+      ctx.fillStyle = `rgba(${col},${0.16 + 0.22 * k})`; ctx.fill();
+      ctx.strokeStyle = `rgba(${col},0.95)`; ctx.lineWidth = Math.max(1.5, z * 0.05); ctx.stroke();
+    }
+  }
+  // ---- 流れをたどる：選んだベルトなどから、下流（水色）と上流（紫）を光らせ、流れが止まっている先頭に理由を出す ----
+  const selT = view.selected && MOVERS.has(view.selected.kind) ? view.selected : null;
+  if (selT) {
+    if (!flowCache || flowCache.e !== selT || flowCache.w !== w || Math.abs(w.tick - flowCache.tick) > 20) flowCache = { e: selT, w, tick: w.tick, f: flowTrace(w, selT) };
+    const f = flowCache.f, vis = (x: number, y: number) => x >= x0 - 2 && x <= x1 + 2 && y - off >= y0 - 2 && y - off <= y1 + 2;
+    const tiles = (list: [number, number][], rgb: string) => {
+      ctx.fillStyle = `rgba(${rgb},0.3)`; ctx.strokeStyle = `rgba(${rgb},0.9)`; ctx.lineWidth = Math.max(1, z * 0.035);
+      for (const [x, y] of list) { if (!vis(x, y)) continue; rr(ctx, sx(x) + z * 0.14, sy(y) + z * 0.14, z * 0.72, z * 0.72, z * 0.2); ctx.fill(); ctx.stroke(); }
+    };
+    const ends = (list: [number, number][], rgb: string) => {
+      ctx.strokeStyle = `rgba(${rgb},0.95)`; ctx.lineWidth = Math.max(2, z * 0.07); ctx.setLineDash([z * 0.18, z * 0.12]);
+      for (const [x, y] of list) { const n = at(w, x, y); if (!n || !vis(x, y)) continue; const sz2 = sizeOf(n); rr(ctx, sx(n.x) + z * 0.04, sy(n.y) + z * 0.04, z * (sz2 - 0.08), z * (sz2 - 0.08), z * 0.16); ctx.stroke(); }
+      ctx.setLineDash([]);
+    };
+    tiles(f.up, '150,90,230'); tiles(f.down, '30,165,220');
+    ends(f.sources, '150,90,230'); ends(f.sinks, '30,165,220');
+    if (f.head && vis(f.head.x, f.head.y)) {
+      const hx = sx(f.head.x + 0.5), hy = sy(f.head.y + 0.5), pulse = 0.5 + 0.5 * Math.sin(t * 6);
+      ctx.strokeStyle = P.red; ctx.lineWidth = Math.max(2.5, z * 0.08);
+      ctx.beginPath(); ctx.arc(hx, hy, z * (0.62 + 0.08 * pulse), 0, Math.PI * 2); ctx.stroke();
+      const tx = `止まっている：${label(f.head.s)}　${f.head.why}`, fs = Math.max(11, Math.min(14, z * 0.3));
+      ctx.font = `700 ${fs}px ${FONT_UI}`;
+      const tw = ctx.measureText(tx).width + fs * 1.2, ty = hy + z * 0.95 + fs * 0.9, bx = Math.max(6, Math.min(cw - tw - 6, hx - tw / 2));
+      rr(ctx, bx, ty - fs * 0.8, tw, fs * 1.6, 5); ctx.fillStyle = P.plate; ctx.fill(); ctx.strokeStyle = P.red; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = P.ink; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(tx, bx + fs * 0.6, ty + 0.5); ctx.textBaseline = 'alphabetic';
+    }
+  }
   // 闇の炉：稼働中の装置と納品所は、暗がりに光をこぼす
   if ((punk || arcane) && !light && !G) {
     ctx.globalCompositeOperation = 'lighter';
@@ -896,6 +972,21 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     }
   }
 
+  // ---- 夕暮れ（実際の時刻）：平らな表示で後処理がないときは、ここで地図を暮れさせ、動いている装置と納品所に灯りをともす。
+  //      後処理（WebGL）があるときは、光のない所を沈める処理を後処理に任せ、ここでは灯りだけを足す ----
+  const dusk = view.dusk ?? 0;
+  if (dusk > 0.01 && !off) {
+    if (!G && !three) {
+      ctx.fillStyle = `rgba(14,20,44,${0.36 * dusk})`; ctx.fillRect(0, 0, cw, ch);
+      ctx.globalCompositeOperation = 'lighter';
+      const pool = (x: number, y: number, r: number, rgb: string, a: number) => { const g = ctx.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, `rgba(${rgb},${a})`); g.addColorStop(1, `rgba(${rgb},0)`); ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2); };
+      for (const e of w.ents.values()) if (e.busy && inView(e)) pool(sx(e.x + sizeOf(e) / 2), sy(e.y + sizeOf(e) / 2), z * (0.8 + sizeOf(e) * 0.6), '255,214,140', 0.32 * dusk);
+      pool(sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), z * hr.s * 1.2, '255,150,90', 0.3 * dusk);
+      ctx.globalCompositeOperation = 'source-over';
+    } else if (G) {
+      for (const e of w.ents.values()) if (e.busy && inView(e)) glow(sx(e.x + sizeOf(e) / 2), sy(e.y + sizeOf(e) / 2), z * (0.8 + sizeOf(e) * 0.6), '255,214,140', 0.35 * dusk);
+    }
+  }
   // 線路・列車・札は装置の上を通るので、立体表示では天面の層に描く
   if (T) use(T);
   // ---- 貨物線：設備の上を越える高架の線路と列車。
@@ -1270,6 +1361,37 @@ function ambient(ctx: CanvasRenderingContext2D, P: Palette, cw: number, ch: numb
     ctx.globalCompositeOperation = 'source-over';
   }
 }
+
+/** 粒子の窓が出はじめる拡大率（1 マスのピクセル数）。最大の拡大は 110 */
+const ZOOM_IN = 72;
+/** 粒子の窓の絵（反応ごとに 1 枚の画面外の絵に描き、それを貼る） */
+const SW_W = 360, SW_H = 210;
+const scenes = new Map<string, { cv: HTMLCanvasElement; c: CanvasRenderingContext2D; plan: ReturnType<typeof planScene> }>();
+onThemeChange(() => scenes.clear());
+function sceneImage(r: Recipe, phase: number): HTMLCanvasElement {
+  let s = scenes.get(r.id);
+  if (!s) {
+    const cv = document.createElement('canvas'); cv.width = SW_W * 2; cv.height = SW_H * 2;
+    const c = cv.getContext('2d')!; c.scale(2, 2);
+    s = { cv, c, plan: planScene(r, SW_W, SW_H) };
+    scenes.set(r.id, s);
+    if (scenes.size > 24) scenes.delete(scenes.keys().next().value as string);
+  }
+  drawScene(s.c, s.plan, r, SW_W, SW_H, phase);
+  return s.cv;
+}
+
+/** 荷の山の並び：個数ごとの、粒の位置（マスに対する割合）。下の段から積み、奥の粒を先に描く */
+const HEAP: [number, number][][] = [[], [[0, 0]],
+  [[-0.11, 0.05], [0.11, 0.05]],
+  [[0, -0.1], [-0.12, 0.08], [0.12, 0.08]],
+  [[-0.11, -0.09], [0.11, -0.09], [-0.11, 0.1], [0.11, 0.1]],
+  [[-0.1, -0.08], [0.1, -0.08], [-0.2, 0.1], [0, 0.1], [0.2, 0.1]],
+  [[0, -0.2], [-0.1, -0.04], [0.1, -0.04], [-0.2, 0.12], [0, 0.12], [0.2, 0.12]],
+  [[-0.17, -0.04], [0, -0.04], [0.17, -0.04], [-0.26, 0.12], [-0.09, 0.12], [0.09, 0.12], [0.26, 0.12]],
+  [[0, -0.2], [-0.17, -0.04], [0, -0.04], [0.17, -0.04], [-0.26, 0.12], [-0.09, 0.12], [0.09, 0.12], [0.26, 0.12]],
+  [[-0.09, -0.2], [0.09, -0.2], [-0.17, -0.04], [0, -0.04], [0.17, -0.04], [-0.26, 0.12], [-0.09, 0.12], [0.09, 0.12], [0.26, 0.12]],
+];
 
 function token(ctx: CanvasRenderingContext2D, P: Palette, x: number, y: number, z: number, s: string, flat = false) {
   const d = z * 0.78;
