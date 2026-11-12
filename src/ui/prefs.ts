@@ -50,6 +50,10 @@ export interface Prefs {
   autoOpen: boolean;
   /** 就寝の 1 時間前から、効果音と音楽を少しずつ小さくする */
   windVol: boolean;
+  /** 片手で使う：地図の端に拡大・縮小のボタン（＋ と −）を出す */
+  zoomBtns: boolean;
+  /** 片手で使う：道具の棚と拡大・縮小のボタンを寄せる側 */
+  hand: 'left' | 'center' | 'right';
 }
 
 const media = (q: string) => typeof matchMedia === 'function' && matchMedia(q).matches;
@@ -57,6 +61,7 @@ const reduced = () => media('(prefers-reduced-motion: reduce)');
 export const PREFS_DEFAULT = (): Prefs => ({
   vib: true, haptics: 1, sfxVol: 1, musicVol: 1, calm: reduced(), textSize: 0, bigText: false, bigButtons: false, dusk: true, hints: true, plates: false, cardSide: 'left', breakMin: 25, miniBig: false, saver: true,
   cvd: false, contrast: media('(prefers-contrast: more)'), dim: 0, dimNight: true, toastTop: false, clock: false, autoOpen: false, windVol: true,
+  zoomBtns: false, hand: 'center',
 });
 
 const clamp01 = (v: unknown, d: number) => (typeof v === 'number' && isFinite(v) ? Math.min(1, Math.max(0, v)) : d);
@@ -70,6 +75,7 @@ export function prefs(): Prefs {
     dusk: b('dusk'), hints: b('hints'), plates: b('plates'), cardSide: m.cardSide === 'right' ? 'right' : 'left', breakMin: m.breakMin === 0 || m.breakMin === 50 ? m.breakMin : 25,
     miniBig: b('miniBig'), saver: b('saver'),
     cvd: b('cvd'), contrast: b('contrast'), dim: m.dim === 1 || m.dim === 2 || m.dim === 3 ? m.dim : 0, dimNight: b('dimNight'), toastTop: b('toastTop'), clock: b('clock'), autoOpen: b('autoOpen'), windVol: b('windVol'),
+    zoomBtns: b('zoomBtns'), hand: m.hand === 'left' || m.hand === 'right' ? m.hand : 'center',
   };
 }
 const listeners: ((p: Prefs) => void)[] = [];
@@ -84,6 +90,10 @@ export function setPrefs(p: Partial<Prefs>) {
   next.vib = next.haptics > 0; next.bigText = next.textSize > 0;
   store.setMeta({ prefs: next as unknown as Record<string, unknown> });
   applyPrefs();
+}
+/** ほかの場所に置いていた古い好みを引き取る。まだ好みにない項目だけ（画面への反映は、このあとの applyPrefs で） */
+export function adoptPrefs(p: Partial<Prefs>) {
+  store.setMeta({ prefs: { ...p, ...(store.meta().prefs ?? {}) } });
 }
 /** 好みを初期値に戻す */
 export function resetPrefs() {
@@ -103,6 +113,8 @@ export function applyPrefs() {
   root.classList.toggle('cvd', p.cvd);
   root.classList.toggle('hc', p.contrast);
   root.classList.toggle('toast-top', p.toastTop);
+  root.classList.toggle('hand-left', p.hand === 'left');
+  root.classList.toggle('hand-right', p.hand === 'right');
   for (const f of listeners) f(p);
 }
 

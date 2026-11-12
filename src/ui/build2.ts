@@ -15,7 +15,7 @@ import { findRoute, type RouteStep } from '../engine/route';
 import { acceptsFrom, beltLine, dupSpot, looseOutputs, nameOf, reversedDirs, stockOf, whyNot, xEnts, xStamps, type Rect, type Xform } from '../engine/shape';
 import { at, BIG, configure, DX, DY, floorOf, FLOOR_DY, groundY, inflow, isMachine, MOVERS, PIN_MAX, PIN_NOTE, sizeOf, type Dir, type Ent, type Kind, type World } from '../engine/world';
 import { $, h } from './dom';
-import { buzz } from './prefs';
+import { adoptPrefs, buzz, onPrefs, prefs, setPrefs, type Prefs } from './prefs';
 import type { Camera, View } from './render';
 import { sfx } from './sound';
 import { palette } from './theme';
@@ -66,15 +66,23 @@ export interface B2Ctx {
   setTab(id: string): void;
 }
 
-/** この端末だけの好み：最近の道具、★ の道具、拡大縮小のボタン、道具の棚の位置 */
-interface Mine { recent: string[]; fav: string[]; zoom: boolean; hand: 'left' | 'center' | 'right' }
+/** この端末だけの記録：最近の道具、★ の道具（拡大縮小のボタンと道具の棚の位置は、設定の好み prefs にある） */
+interface Mine { recent: string[]; fav: string[] }
 const KEY = 'chemyth-v2-build';
 const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 40) : []);
 function readMine(): Mine {
   try {
-    const m = JSON.parse(localStorage.getItem(KEY) || '{}');
-    return { recent: strs(m.recent), fav: strs(m.fav), zoom: m.zoom === true, hand: m.hand === 'left' || m.hand === 'right' ? m.hand : 'center' };
-  } catch { return { recent: [], fav: [], zoom: false, hand: 'center' }; }
+    const m = JSON.parse(localStorage.getItem(KEY) || '{}'), mine = { recent: strs(m.recent), fav: strs(m.fav) };
+    // 以前は拡大縮小のボタンと道具の棚の位置もここに置いていて、設定の「初期値に戻す」と設定のファイルから漏れていた。好みへ移して、ここからは消す
+    if ('zoom' in m || 'hand' in m) {
+      const old: Partial<Prefs> = {};
+      if (m.zoom === true) old.zoomBtns = true;
+      if (m.hand === 'left' || m.hand === 'right') old.hand = m.hand;
+      if (Object.keys(old).length) adoptPrefs(old);
+      try { localStorage.setItem(KEY, JSON.stringify(mine)); } catch { /* 残せなくても使える */ }
+    }
+    return mine;
+  } catch { return { recent: [], fav: [] }; }
 }
 const ARROWS = ['→', '↓', '←', '↑'];
 /** 中にこれだけたまっていたら、消す前に確かめる */
@@ -166,8 +174,9 @@ export function initBuild2(c: B2Ctx) {
     h('button', { type: 'button', id: 'zoom-in', ariaLabel: '拡大', onclick: () => { c.zoom(1.25); sfx.tap(); } }, '+'),
     h('button', { type: 'button', id: 'zoom-out', ariaLabel: '縮小', onclick: () => { c.zoom(0.8); sfx.tap(); } }, '−'));
   c.app.append(zoomEl);
-  const applyHand = () => { const r = document.documentElement; r.classList.toggle('hand-left', mine.hand === 'left'); r.classList.toggle('hand-right', mine.hand === 'right'); };
-  applyHand();
+  // ボタンを出すかと棚を寄せる側は、設定の好み（寄せる側は html の class にして、applyPrefs が付ける）
+  let zoomBtns = prefs().zoomBtns;
+  onPrefs((p) => { zoomBtns = p.zoomBtns; });
 
   // ---- 最近の道具（棚の右端に 3 つ）・★ の棚・同じものをもう一度 ----
   const recentEl = h('div', { id: 'recent', hidden: true, title: '最近使った道具' });
@@ -479,7 +488,7 @@ export function initBuild2(c: B2Ctx) {
       cloneBar.hidden = !cl;
       if (cl) { const r = recipeById(cl.recipe); $('clone-text').textContent = `${nameOf(cl.kind as Kind)}${r ? `（${r.name}）` : cl.sub ? `（${label(cl.sub)}）` : ''}をコピー中。タップした所に、同じ設定で貼る。`; }
     }
-    const zOn = mine.zoom && c.slot() > 0;
+    const zOn = zoomBtns && c.slot() > 0;
     if (zoomEl.hidden === zOn) zoomEl.hidden = !zOn;
     const k = `${c.tool()}|${c.placeDir()}|${last?.kind}|${last?.dir}`;
     if (k !== againKey) { againKey = k; paintRecent(); }
@@ -541,12 +550,13 @@ export function initBuild2(c: B2Ctx) {
 
   /** 設定の画面に足す行（片手で使う） */
   const prefRows = (refresh: () => void) => {
-    const seg = <T,>(id: string, cur: T, opts: [T, string][], set: (v: T) => void) => h('span', { class: 'seg', role: 'group' }, ...opts.map(([v, name], i) => h('button', { type: 'button', id: `${id}-${i}`, class: cur === v ? 'on' : '', onclick: () => { set(v); write(); sfx.tap(); refresh(); } }, name)));
+    const seg = <T,>(id: string, cur: T, opts: [T, string][], set: (v: T) => void) => h('span', { class: 'seg', role: 'group' }, ...opts.map(([v, name], i) => h('button', { type: 'button', id: `${id}-${i}`, class: cur === v ? 'on' : '', onclick: () => { set(v); sfx.tap(); refresh(); } }, name)));
     const row = (what: string, note: string, ctl: HTMLElement) => h('div', { class: 'pref-row' }, h('div', { class: 'what' }, h('b', {}, what), note ? h('small', {}, note) : null), ctl);
+    const p = prefs();
     return [
       h('h3', {}, '片手で使う（この端末）'),
-      row('拡大・縮小のボタン', '地図の端に ＋ と − を出す。2 本指を使わずに拡大・縮小できる。', seg('p-zoom', mine.zoom, [[true, 'あり'], [false, 'なし']], (v) => { mine.zoom = v; })),
-      row('道具の棚の位置', '持つ手の側に寄せる。拡大・縮小のボタンも、同じ側に出る。', seg<Mine['hand']>('p-hand', mine.hand, [['left', '左'], ['center', '中央'], ['right', '右']], (v) => { mine.hand = v; applyHand(); })),
+      row('拡大・縮小のボタン', '地図の端に ＋ と − を出す。2 本指を使わずに拡大・縮小できる。', seg('p-zoom', p.zoomBtns, [[true, 'あり'], [false, 'なし']], (v) => setPrefs({ zoomBtns: v }))),
+      row('道具の棚の位置', '持つ手の側に寄せる。拡大・縮小のボタンも、同じ側に出る。', seg<Prefs['hand']>('p-hand', p.hand, [['left', '左'], ['center', '中央'], ['right', '右']], (v) => setPrefs({ hand: v }))),
     ];
   };
 
