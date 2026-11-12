@@ -307,10 +307,64 @@ export function initSettings2(ctx: Ctx2) {
     if (++n % 8 === 0 && syncState().trouble === 'offline' && navigator.onLine !== false) void syncAll();
   }, 15000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { dayTick(); paintClock(); paintDim(); paintVolume(); } });
-  // 縦長の狭い画面：指令の札の下の端を測る（範囲選択の帯と「停止中」を、その下に出す）
-  const goal = $('goal'), app = $('app');
-  const measure = () => { const r = goal.getBoundingClientRect(), a = app.getBoundingClientRect(); app.style.setProperty('--goal-b', `${Math.round((r.height ? r.bottom : r.top) - a.top)}px`); };
-  if (typeof ResizeObserver === 'function') new ResizeObserver(measure).observe(goal);
-  window.addEventListener('resize', measure);
+  watchLayout();
   dayTick();
+}
+
+/**
+ * 画面の枠を測って、#app の CSS 変数にする（上と下に出す札を、指令の札・上の帯・下の道具の段に重ねないため）。
+ * --goal-b・--goal-r：指令の札の下と右の端。--top-b：指令の札・上の帯（集中表示では「表示を戻す」）の、下の端のいちばん低い所。
+ * --band-b：範囲選択の帯・コピー中の帯の下の端（出ていなければ 0）。--dock-h：下の道具の段（説明と棚）の上の端から、画面の下までの高さ。
+ * 拡大・縮小のボタン（片手で使う）は、手の側の端の空いた所の真ん中に置く（--z2-l・--z2-r。入らない側は z2-l-full・z2-r-full）
+ */
+function watchLayout() {
+  const app = $('app'), goal = $('goal'), top = $('topbtns'), dock = $('dock');
+  // 変わったときだけ書く（書くと、#app の中の見た目をすべて計算し直す）
+  const last = new Map<string, string>();
+  const px = (k: string, v: number) => { const s = `${Math.round(v)}px`; if (last.get(k) !== s) { last.set(k, s); app.style.setProperty(k, s); } };
+  const box = (id: string) => { const e = document.getElementById(id); if (!e || e.hidden) return null; const r = e.getBoundingClientRect(); return r.width && r.height ? r : null; };
+  const placeZoom = (a: DOMRect) => {
+    const z = document.getElementById('zoom2');
+    if (!z || z.hidden || !z.offsetHeight) return;
+    const zw = z.offsetWidth, zh = z.offsetHeight;
+    for (const left of [true, false]) {
+      // 端の列（端から、ボタンの幅と余白まで）にかかる札だけを見る
+      const x0 = left ? a.left : a.right - zw - 24, x1 = x0 + zw + 24;
+      const hits = (r: DOMRect | null): r is DOMRect => !!r && r.left < x1 && r.right > x0;
+      let hi = a.top + 8, lo = a.bottom - 8;
+      for (const id of ['goal', 'topbtns', 'focus-exit', 'area-act', 'clone-bar']) { const r = box(id); if (hits(r)) hi = Math.max(hi, r.bottom + 8); }
+      for (const id of ['bar', 'minimap', 'marks', 'rvcard']) { const r = box(id); if (hits(r)) lo = Math.min(lo, r.top - 8); }
+      const mid = (a.top + a.bottom - zh) / 2;
+      px(left ? '--z2-l' : '--z2-r', Math.max(hi, Math.min(mid, lo - zh)) - a.top);
+      app.classList.toggle(left ? 'z2-l-full' : 'z2-r-full', lo - hi < zh);
+    }
+  };
+  let raf = 0;
+  const measure = () => {
+    raf = 0;
+    const a = app.getBoundingClientRect(), g = goal.getBoundingClientRect(), t = top.getBoundingClientRect(), d = dock.getBoundingClientRect();
+    const gb = (g.height ? g.bottom : g.top) - a.top;
+    px('--goal-b', gb);
+    px('--goal-r', g.width ? g.right - a.left : 0);
+    const fx = box('focus-exit');
+    px('--top-b', Math.max(gb, t.height ? t.bottom - a.top : 0, fx ? fx.bottom - a.top : 0));
+    px('--band-b', Math.max(0, ...['area-act', 'clone-bar'].map((id) => { const r = box(id); return r ? r.bottom - a.top : 0; })));
+    // 道具の説明は、スキンによっては段の外（段の上）に浮かせているので、別に測る
+    const tip = box('tip');
+    px('--dock-h', d.height ? a.bottom - Math.min(d.top, tip ? tip.top : d.top) : 0);
+    placeZoom(app.getBoundingClientRect());
+  };
+  // 測った値で上の帯の幅が変わり、また測る…が同じ描画のうちに回らないよう、次の描画の前にまとめて測る
+  const later = () => { if (!raf) raf = requestAnimationFrame(measure); };
+  measure();
+  if (typeof ResizeObserver === 'function') {
+    const ro = new ResizeObserver(later);
+    for (const id of ['goal', 'topbtns', 'dock', 'tip', 'rvcard', 'minimap', 'marks', 'zoom2', 'focus-exit', 'area-act', 'clone-bar']) { const e = document.getElementById(id); if (e) ro.observe(e); }
+  }
+  // 手の側・復習の札の側・小地図の大きさ（html の class）、小地図を隠したときの場所のボタンの位置（#app の class）でも変わる
+  // （同じ class を書き直しただけのときは測らない。小地図を出さない間は、毎秒なんども書き直している）
+  const mo = new MutationObserver((recs) => { if (recs.some((r) => r.oldValue !== (r.target as Element).getAttribute(r.attributeName!))) later(); });
+  mo.observe(document.documentElement, { attributes: true, attributeOldValue: true, attributeFilter: ['class', 'data-skin'] });
+  mo.observe(app, { attributes: true, attributeOldValue: true, attributeFilter: ['class'] });
+  window.addEventListener('resize', later);
 }
