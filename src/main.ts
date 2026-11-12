@@ -24,7 +24,7 @@ import { PLAIN_LOOK, POST_PRESETS, createPost, type Post } from './ui/gl';
 import { TOP_H, camera3, heightOf, pickTile, planeSize } from './ui/three';
 import { palette } from './ui/theme';
 import { FLAMES } from './content/looks';
-import { decodeBlueprint, encodeBlueprint, type Stamp } from './engine/blueprint';
+import { cleanStamp, decodeBlueprint, encodeBlueprint, type Stamp } from './engine/blueprint';
 import { showStats, type StatsCtx } from './ui/stats';
 import { paintPts, showAchievements, statsTick } from './ui/achieve';
 import { showChain } from './ui/chain';
@@ -1710,8 +1710,10 @@ function boot(data: HotData) {
     group = null;
     let ok = 0;
     // 大きい装置から先に置く（ベルトに場所を取られないように）
-    for (const b of [...blueprint].sort((p, q) => sizeOfKind(q.kind) - sizeOfKind(p.kind))) {
-      if (doPlace(b.kind, x + b.dx, y + b.dy, b.dir)) continue;
+    for (const b0 of [...blueprint].sort((p, q) => sizeOfKind(q.kind) - sizeOfKind(p.kind))) {
+      // 保存しておいた設計図も、貼る前に確かめる（前の版で読み込んだ、知らない物質の設定などで地図が止まらないように）
+      const b = cleanStamp(b0);
+      if (!b || doPlace(b.kind, x + b.dx, y + b.dy, b.dir)) continue;
       ok++;
       const placed = at(world, x + b.dx, y + b.dy)!;
       const r = recipeById(b.recipe);

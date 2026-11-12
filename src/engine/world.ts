@@ -5,7 +5,8 @@ import { CHAPTERS, TOTAL_GOALS, type Goal } from '../content/goals';
 import { hasSub, label, sub } from '../content/substances';
 import { isBalanced, parseFormula } from '../chem/formula';
 import { ELEMENTS } from '../content/elements';
-import { isPositive, setById } from '../content/samples';
+import { isPositive, setById, testById } from '../content/samples';
+import { MACHINES } from '../content/machines';
 import { RESEARCH, researchById, type Research } from '../content/research';
 import { FLAMES } from '../content/looks';
 import { isSep, sepAccepts, sepReady, sepRefusal, sepRun, sepSlots } from '../content/sep';
@@ -380,6 +381,8 @@ export function layRail(w: World, corners: [number, number][]) {
   for (let i = 1; i < corners.length; i++) {
     let [x, y] = corners[i - 1];
     const [tx, ty] = corners[i];
+    // 整数でない角（NaN や 0.5 など）は、いつまでも行き着かないので飛ばす
+    if (![x, y, tx, ty].every(Number.isSafeInteger)) continue;
     while (x !== tx || y !== ty) {
       const nx = x !== tx ? x + Math.sign(tx - x) : x, ny = x !== tx ? y : y + Math.sign(ty - y);
       addRail(w, [x, y], [nx, ny]);
@@ -1733,28 +1736,122 @@ export function serialize(w: World): string {
   });
 }
 
+/** 置ける設備の種類か（納品所と 'part' は含まない）。'constructor' のような、どのオブジェクトにもある名前は種類ではない */
+export const isPlaceable = (k: unknown): k is Exclude<Kind, 'hub' | 'part'> => typeof k === 'string' && Object.prototype.hasOwnProperty.call(MACHINES, k);
+/** sub に入れてよい値か。搬出口とタンクは物質、試薬棚は物質か試料の組（'set:A'）。ほかの設備は持たない */
+export function subOk(kind: Kind, s: unknown): s is string {
+  if (typeof s !== 'string') return false;
+  if (kind === 'sampler' && s.startsWith('set:')) return !!setById(s.slice(4));
+  return (kind === 'sampler' || kind === 'depot' || kind === 'tank') && hasSub(s);
+}
+/** test に入れてよい値か。設備ごとに、設定の画面で選べるものだけを通す */
+export function testOk(kind: Kind, t: unknown): t is string {
+  if (typeof t !== 'string') return false;
+  const is = t.startsWith('is:') && hasSub(t.slice(3));
+  switch (kind) {
+    case 'analyzer': return is || !!testById(t);
+    case 'sensor': return is || t === 'jam';
+    case 'gate': return t === 'on' || t === 'off';
+    case 'tank': return t === 'hold';
+    case 'settler': case 'funnel': case 'phoresis': return sepReady(kind, t);
+    default: return false;
+  }
+}
+const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isDir = (v: unknown): v is Dir => v === 0 || v === 1 || v === 2 || v === 3;
+/** 物質の並び。知らない物質や文字でないものは外す。bang：駅の荷（搬出口から出たものは先頭に '!'） */
+const subList = (a: unknown, bang = false): string[] => (Array.isArray(a) ? a.filter((s): s is string => typeof s === 'string' && hasSub(bang && s.startsWith('!') ? s.slice(1) : s)) : []);
+/** 保存から読んだ荷。知らない物質なら null */
+function readItem(it: unknown): Item | null {
+  if (!it || typeof it !== 'object' || typeof (it as Item).s !== 'string' || !hasSub((it as Item).s)) return null;
+  const c: Item = { ...(it as Item), m: 0 };
+  if (!fin(c.p)) c.p = 0;
+  if (c.n !== undefined && !(Number.isSafeInteger(c.n) && c.n > 0)) delete c.n;
+  if (c.d !== undefined && !isDir(c.d)) delete c.d;
+  if (c.w !== undefined && !fin(c.w)) delete c.w;
+  return c;
+}
+function readTrain(t: unknown): Train | undefined {
+  if (!t || typeof t !== 'object') return undefined;
+  const o = t as Train;
+  return { ...o, p: fin(o.p) ? o.p : 0, back: o.back === true, cargo: subList(o.cargo, true), wait: fin(o.wait) ? o.wait : 0, to: typeof o.to === 'string' ? o.to : undefined, held: undefined };
+}
+/** 数を持つ欄。数でなければ消す（NaN や文字が混ざると、動かすときや描くときに止まる） */
+const NUM_KEYS = ['rr', 'timer', 'prog', 'cnt', 'rcn', 'left', 'n', 'u', 'pw', 'stuck', 'badT', 'ins', 'cars'] as const;
+/**
+ * 保存から読んだ設備を確かめる。種類や位置がおかしければ null。
+ * 知らない物質・反応・設定や、形の合わない中身は外して、設備は残す（書き換えられたセーブや、人からもらったセーブで、地図が止まらないように）
+ */
+function readEnt(o: unknown): Ent | null {
+  if (!o || typeof o !== 'object') return null;
+  const e = o as Ent;
+  if (!(e.kind === 'hub' || isPlaceable(e.kind)) || !Number.isSafeInteger(e.x) || !Number.isSafeInteger(e.y)) return null;
+  if (!isDir(e.dir)) e.dir = 0;
+  if (e.big !== undefined && !(e.big === true && BIG.includes(e.kind))) delete e.big;
+  delete e.ref;
+  if (e.sub !== undefined && !subOk(e.kind, e.sub)) delete e.sub;
+  if (e.test !== undefined && !testOk(e.kind, e.test)) delete e.test;
+  if (e.ch !== undefined) e.ch = lineNo(Number(e.ch));
+  if (e.role !== undefined && e.role !== 'in' && e.role !== 'out') delete e.role;
+  for (const k of NUM_KEYS) if (e[k] !== undefined && !fin(e[k])) delete e[k];
+  // 中身の物質がわからないタンクは、空として読む
+  if (e.kind === 'tank' && e.sub === undefined) { e.cnt = 0; e.rcn = 0; }
+  for (const k of ['li', 'pri'] as const) if (e[k] !== undefined && !isDir(e[k])) delete e[k];
+  if (e.ts !== undefined && !(Array.isArray(e.ts) && e.ts.length === 3 && e.ts.every(fin))) delete e.ts;
+  if (e.st !== undefined && e.st !== 'gas' && e.st !== 'liquid' && e.st !== 'solid') delete e.st;
+  if (e.bad !== undefined && !(typeof e.bad === 'string' && hasSub(e.bad))) delete e.bad;
+  // 反応：出口の物質は、その反応の生成物でなければならない（違うと、反応が終わったときに止まる）
+  if (e.recipe !== undefined || e.outOrder !== undefined) {
+    const r = recipeById(e.recipe);
+    if (!r || !Array.isArray(e.outOrder) || !e.outOrder.every((s) => typeof s === 'string' && r.outputs.some(([x]) => x === s))) clearRecipe(e);
+    else {
+      if (!(Array.isArray(e.outBuf) && e.outBuf.length === e.outOrder.length && e.outBuf.every(fin))) e.outBuf = e.outOrder.map(() => 0);
+      if (!e.inBuf || typeof e.inBuf !== 'object' || Array.isArray(e.inBuf)) e.inBuf = {};
+      else for (const [s, n] of Object.entries(e.inBuf)) if (!fin(n) || !hasSub(s)) delete e.inBuf[s];
+      if (e.outSlot !== undefined && !(Array.isArray(e.outSlot) && e.outSlot.every((v) => Number.isInteger(v) && v >= 0 && v <= 5))) delete e.outSlot;
+    }
+  }
+  // 中身：知らない物質の荷は捨てる
+  if (e.item !== undefined) e.item = readItem(e.item);
+  if (e.items !== undefined) e.items = Array.isArray(e.items) ? e.items.map(readItem) : e.kind === 'bridge' ? [null, null] : undefined;
+  for (const k of ['buf', 'buf2', 'buf3'] as const) if (e[k] !== undefined) e[k] = subList(e[k], e.kind === 'station' && k === 'buf');
+  if (e.tr !== undefined) e.tr = readTrain(e.tr);
+  if (e.xtr !== undefined) e.xtr = Array.isArray(e.xtr) ? e.xtr.map(readTrain).filter((t): t is Train => !!t) : undefined;
+  // 一時停止と名前（古いセーブにはない）
+  if (e.off !== undefined && e.off !== true) delete e.off;
+  if (e.memo !== undefined) { const m = typeof e.memo === 'string' ? e.memo.trim().slice(0, 12) : ''; if (m) e.memo = m; else delete e.memo; }
+  return e;
+}
+/** 古いセーブの、駅ごとの線路の角。形のおかしいものは null */
+const legacyRail = (a: unknown): [number, number][] | null =>
+  Array.isArray(a) && a.length >= 2 && a.length <= 1000 && a.every((p) => Array.isArray(p) && fin(p[0]) && fin(p[1])) ? a.map(([x, y]) => [Math.floor(x), Math.floor(y)] as [number, number]) : null;
+/** 古いセーブから地図へ移す線路の、マス数の上限（ふつうのセーブは数百マス。書き換えられた巨大な値で固まらないように） */
+const LEGACY_RAIL_MAX = 100000;
+/** 物質ごとの数の表。数でない値と、知らない物質は外す */
+const tallies = (o: unknown): Record<string, number> => {
+  const r: Record<string, number> = {};
+  if (o && typeof o === 'object') for (const [s, n] of Object.entries(o)) if (fin(n) && hasSub(s)) r[s] = n;
+  return r;
+};
+/** 表のはずの値。表でなければ空の表にする（数や文字のままだと、書き足すときに止まる） */
+const table = <T,>(o: unknown): Record<string, T> => (o && typeof o === 'object' && !Array.isArray(o) ? (o as Record<string, T>) : {});
+
 export function deserialize(json: string): World | null {
   try {
     const d = JSON.parse(json);
     if (d.v !== SAVE_VERSION || !Array.isArray(d.ents)) return null;
     const w = newWorld();
     w.ents = new Map();
-    for (const e of d.ents as Ent[]) if (e.kind !== 'part') restore(w, e);
+    for (const o of d.ents as unknown[]) { const e = readEnt(o); if (e) restore(w, e); }
     if (Array.isArray(d.rails)) for (const row of d.rails) if (Array.isArray(row) && typeof row[0] === 'string' && Number.isInteger(row[1]) && row[1] > 0 && row[1] < 16) w.rails.set(row[0], row[1]);
-    // 古いセーブ：駅ごとに持っていた線路を、地図の線路へ移す
+    // 古いセーブ：駅ごとに持っていた線路を、地図の線路へ移す（形のおかしいもの、長すぎるものは移さない）
+    let railLeft = LEGACY_RAIL_MAX;
     for (const e of w.ents.values()) {
-      if (e.rail && e.rail.length >= 2) layRail(w, e.rail.map(([x, y]) => [Math.floor(x), Math.floor(y)] as [number, number]));
+      const pts = legacyRail(e.rail);
+      const len = pts ? pts.reduce((s, p, i) => (i ? s + Math.abs(p[0] - pts[i - 1][0]) + Math.abs(p[1] - pts[i - 1][1]) : 0), 0) : 0;
+      if (pts && len <= railLeft) { railLeft -= len; layRail(w, pts); }
       e.rail = undefined; e.railTo = undefined;
       for (const t2 of [e.tr, ...(e.xtr ?? [])]) if (t2) t2.held = undefined;
-    }
-    for (const e of w.ents.values()) {
-      if (e.recipe && !recipeById(e.recipe)) clearRecipe(e);
-      if (e.item && !hasSub(e.item.s)) e.item = null;
-      if (e.item) e.item.m = 0;
-      if (e.items) e.items = e.items.map((it) => (it && hasSub(it.s) ? { ...it, m: 0 } : null));
-      // 一時停止と名前（古いセーブにはない）
-      if (e.off !== undefined && e.off !== true) delete e.off;
-      if (e.memo !== undefined) { const m = typeof e.memo === 'string' ? e.memo.trim().slice(0, 12) : ''; if (m) e.memo = m; else delete e.memo; }
     }
     if (Array.isArray(d.progress)) {
       w.progress = CHAPTERS.map((c, i) => Math.min(c.goals.length, d.progress[i] | 0));
@@ -1771,8 +1868,8 @@ export function deserialize(json: string): World | null {
         left -= n;
       });
     }
-    w.seen = Math.max(d.seen | 0, w.chapter);
-    w.goalMs = d.goalMs || {};
+    w.seen = Math.min(CHAPTERS.length - 1, Math.max(d.seen | 0, w.chapter));
+    w.goalMs = table(d.goalMs);
     // 納品所は保存された大きさで置き直す。達成数に足りなければ広げる（古いセーブ）
     for (const [k, e] of w.ents) if (e.kind === 'hub') w.ents.delete(k);
     w.hubSize = HUB_SIZES.includes(d.hubSize) ? d.hubSize : 2;
@@ -1781,14 +1878,14 @@ export function deserialize(json: string): World | null {
     // 古い版の { iv, due } は FSRS の形に読み替える
     w.srs = {};
     for (const [k, v] of Object.entries(d.srs || {})) if (v && typeof v === 'object') w.srs[k] = migrate(v as Parameters<typeof migrate>[0]);
-    w.cleared = d.cleared || [];
-    for (const id of d.learned || []) if (!w.srs[`r:${id}`] && recipeById(id)) w.srs[`r:${id}`] = migrate({ iv: 0, due: Date.now() });
+    w.cleared = Array.isArray(d.cleared) ? d.cleared : [];
+    for (const id of Array.isArray(d.learned) ? d.learned : []) if (!w.srs[`r:${id}`] && recipeById(id)) w.srs[`r:${id}`] = migrate({ iv: 0, due: Date.now() });
     w.exams = Array.isArray(d.exams) && d.exams.length === 2 && d.exams.every((x: unknown) => typeof x === 'number' && x > 0) ? d.exams : [...EXAMS_DEFAULT];
     w.calib = { sure: [0, 0], maybe: [0, 0], guess: [0, 0] };
     for (const k of ['sure', 'maybe', 'guess'] as Confidence[]) { const v = d.calib?.[k]; if (Array.isArray(v) && v.length === 2) w.calib[k] = [v[0] | 0, v[1] | 0]; }
     w.relearn = Array.isArray(d.relearn) ? d.relearn.filter((x: { id?: unknown; at?: unknown }) => typeof x?.id === 'string' && typeof x?.at === 'number') : [];
     w.hcLog = Array.isArray(d.hcLog) ? d.hcLog.filter((x: { id?: unknown; t?: unknown }) => typeof x?.id === 'string' && typeof x?.t === 'number').slice(-200) : [];
-    w.side = d.side && typeof d.side.s === 'string' && hasSub(d.side.s) ? { s: d.side.s, n: d.side.n | 0, got: d.side.got | 0, ch: d.side.ch | 0, reward: d.side.reward | 0 } : null;
+    w.side = d.side && typeof d.side.s === 'string' && hasSub(d.side.s) ? { s: d.side.s, n: d.side.n | 0, got: d.side.got | 0, ch: Math.max(0, Math.min(CHAPTERS.length - 1, d.side.ch | 0)), reward: d.side.reward | 0 } : null;
     w.night = d.night && typeof d.night.day === 'string' && Array.isArray(d.night.ids) ? { day: d.night.day, ids: d.night.ids.filter((x: unknown) => typeof x === 'string'), got: d.night.got | 0, morning: typeof d.night.morning === 'number' ? d.night.morning : undefined } : null;
     w.dayMs = d.dayMs && typeof d.dayMs === 'object' ? d.dayMs : {};
     w.tested = Array.isArray(d.tested) ? d.tested.filter((x: unknown) => typeof x === 'number') : [];
@@ -1798,26 +1895,26 @@ export function deserialize(json: string): World | null {
     w.bonusDay = typeof d.bonusDay === 'string' ? d.bonusDay : '';
     w.study = readStudy(d.study);
     w.today = d.today && typeof d.today.day === 'string' && Array.isArray(d.today.wrong) ? { day: d.today.day, wrong: d.today.wrong.filter((x: unknown) => typeof x === 'string') } : { day: '', wrong: [] };
-    w.delivered = d.delivered || {};
-    w.stock = d.stock || {};
-    w.discovered = [...new Set([...w.discovered, ...(d.discovered || [])])].filter(hasSub);
-    w.learned = d.learned || [];
-    w.mistakes = d.mistakes || [];
+    w.delivered = tallies(d.delivered);
+    w.stock = tallies(d.stock);
+    w.discovered = [...new Set([...w.discovered, ...(Array.isArray(d.discovered) ? d.discovered : [])])].filter((s) => typeof s === 'string' && hasSub(s));
+    w.learned = Array.isArray(d.learned) ? d.learned : [];
+    w.mistakes = Array.isArray(d.mistakes) ? d.mistakes : [];
     w.points = d.points | 0;
     w.up = { extract: d.up?.extract | 0, belt: d.up?.belt | 0, machine: d.up?.machine | 0 };
-    w.solved = d.solved || [];
+    w.solved = Array.isArray(d.solved) ? d.solved : [];
     w.agents = Array.isArray(d.agents) ? d.agents.filter((x: unknown) => typeof x === 'string') : [];
     w.cases = Array.isArray(d.cases) ? d.cases.filter((x: unknown) => typeof x === 'string') : [];
     w.research = (Array.isArray(d.research) ? d.research : []).filter((id: string) => RESEARCH.some((r) => r.id === id));
-    w.practice = d.practice || {};
-    w.made = d.made || {};
-    w.vented = d.vented || {};
-    w.spilled = d.spilled || {};
-    w.emitted = d.emitted || {};
-    w.grades = d.grades || {};
-    w.fed = d.fed || {};
-    w.multi = d.multi || {};
-    w.playMs = d.playMs || 0;
+    w.practice = table(d.practice);
+    w.made = tallies(d.made);
+    w.vented = tallies(d.vented);
+    w.spilled = tallies(d.spilled);
+    w.emitted = tallies(d.emitted);
+    w.grades = table(d.grades);
+    w.fed = table(d.fed);
+    w.multi = table(d.multi);
+    w.playMs = fin(d.playMs) ? d.playMs : 0;
     w.fname = typeof d.fname === 'string' && d.fname.trim() ? d.fname.trim().slice(0, FNAME_MAX) : undefined;
     w.pins = Array.isArray(d.pins) ? d.pins.filter((p: { x?: unknown; y?: unknown }) => Number.isInteger(p?.x) && Number.isInteger(p?.y)).slice(0, PIN_MAX).map((p: { x: number; y: number; note?: unknown }) => ({ x: p.x, y: p.y, note: typeof p.note === 'string' ? p.note.slice(0, PIN_NOTE) : '' })) : [];
     // 1 時間の流れ：数の並びのうち、形の合うものだけを、分の古い順に読む

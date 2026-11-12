@@ -1,7 +1,5 @@
 import { recipeById } from '../content/recipes';
-import { hasSub } from '../content/substances';
-import { MACHINES } from '../content/machines';
-import { LINE_MAX } from './world';
+import { isPlaceable, LINE_MAX, subOk, testOk } from './world';
 import type { Dir, Kind } from './world';
 
 /** 設計図の 1 個ぶん：左上からの位置、向き、設定 */
@@ -31,6 +29,29 @@ export function encodeBlueprint(name: string, stamps: Stamp[]): string {
   return HEAD + b64(JSON.stringify({ n: name.slice(0, 30), s: rows }));
 }
 
+const int = (v: unknown, lo: number, hi: number): v is number => typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
+
+/**
+ * 1 個ぶんを確かめる。種類・位置・向きがおかしければ null。知らない反応や物質、その設備では選べない設定は外して、設備だけ残す。
+ * span：左上からの広さの上限（受け取った文字列は BP_SPAN まで。自分で囲んだ範囲には上限がない）
+ */
+export function cleanStamp(o: Partial<Record<keyof Stamp, unknown>>, span = Infinity): Stamp | null {
+  const { kind, dx, dy, dir, recipe, outOrder, outSlot, test, sub, ch, role } = o;
+  if (!isPlaceable(kind) || !int(dx, 0, span) || !int(dy, 0, span) || !int(dir, 0, 3)) return null;
+  const b: Stamp = { kind, dx, dy, dir: dir as Dir };
+  // 反応は、その装置の反応で、出口の物質がその生成物のときだけ写す
+  const r = typeof recipe === 'string' ? recipeById(recipe) : undefined;
+  if (r && r.machine === kind && Array.isArray(outOrder) && outOrder.length <= 6 && outOrder.every((s) => typeof s === 'string' && r.outputs.some(([x]) => x === s))) {
+    b.recipe = r.id; b.outOrder = [...outOrder];
+    if (Array.isArray(outSlot) && outSlot.length === outOrder.length && outSlot.every((v) => int(v, 0, 5))) b.outSlot = [...outSlot];
+  }
+  if (testOk(kind, test)) b.test = test;
+  if (subOk(kind, sub)) b.sub = sub;
+  if (int(ch, 1, LINE_MAX)) b.ch = ch;
+  if (role === 'in' || role === 'out') b.role = role;
+  return b;
+}
+
 /** 文字列から設計図を読む。読めない・中身がおかしいときは null。知らない反応や物質の設定は外して、設備だけ残す */
 export function decodeBlueprint(text: string): { name: string; stamps: Stamp[] } | null {
   try {
@@ -38,22 +59,12 @@ export function decodeBlueprint(text: string): { name: string; stamps: Stamp[] }
     if (!t.startsWith(HEAD)) return null;
     const d = JSON.parse(unb64(t.slice(HEAD.length)));
     if (!d || !Array.isArray(d.s) || d.s.length === 0 || d.s.length > BP_MAX) return null;
-    const int = (v: unknown, lo: number, hi: number) => typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
     const stamps: Stamp[] = [];
     for (const row of d.s) {
       if (!Array.isArray(row)) return null;
       const [kind, dx, dy, dir, recipe, outOrder, outSlot, test, sub, ch, role] = row;
-      if (typeof kind !== 'string' || !(kind in MACHINES) || !int(dx, 0, BP_SPAN) || !int(dy, 0, BP_SPAN) || !int(dir, 0, 3)) return null;
-      const b: Stamp = { kind: kind as Stamp['kind'], dx, dy, dir };
-      const r = typeof recipe === 'string' ? recipeById(recipe) : undefined;
-      if (r && r.machine === kind && Array.isArray(outOrder) && outOrder.every((s) => typeof s === 'string' && (s === 'e' || hasSub(s))) && outOrder.length <= 6) {
-        b.recipe = r.id; b.outOrder = outOrder;
-        if (Array.isArray(outSlot) && outSlot.length === outOrder.length && outSlot.every((v) => int(v, 0, 5))) b.outSlot = outSlot;
-      }
-      if (typeof test === 'string' && test.length <= 40) b.test = test;
-      if (typeof sub === 'string' && sub.length <= 40) b.sub = sub;
-      if (int(ch, 1, LINE_MAX)) b.ch = ch;
-      if (role === 'in' || role === 'out') b.role = role;
+      const b = cleanStamp({ kind, dx, dy, dir, recipe, outOrder, outSlot, test, sub, ch, role }, BP_SPAN);
+      if (!b) return null;
       stamps.push(b);
     }
     return { name: typeof d.n === 'string' && d.n.trim() ? d.n.trim().slice(0, 30) : '受け取った設計図', stamps };
