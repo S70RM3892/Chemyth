@@ -15,7 +15,7 @@ import { hasSub, label, sub } from '../content/substances';
 import { dayKey, dayNum, review, type Card } from './fsrs';
 import { leeches, recallNow } from './habit';
 import { chapterRecipes } from './pace';
-import { CONFUSABLE, partsFor, topicOf, type Quiz } from './quiz';
+import { CONFUSABLE, condsInProducts, nameTells, partsFor, topicOf, type Quiz } from './quiz';
 import { platingOf, type Mistake, type World } from './world';
 import { NIGHT_KEEP, WHY_KEEP, type NightRec, type Why } from './study';
 
@@ -38,9 +38,9 @@ function productShape(r: Recipe): string {
 }
 /**
  * 答える前のヒント。問いに出ていない手がかりを 1 つ出し、答えそのものは出さない。使うと、覚え具合は「たぶん」までになる。
- * - 生成物を問う：装置と条件は問いに出ているので、反応の名前（名前に生成物が入っているときは、生成物の数と状態）
+ * - 生成物を問う：装置と条件は問いに出ているので、反応の名前（名前に生成物の名前・式や、問いで伏せた条件が入っているときは、生成物の数と状態）
  * - 係数を問う：装置と条件。まちがいの式を 1 つ消す
- * - 条件・極を問う：反応式（条件と極は入っていない）
+ * - 条件・極を問う：反応式（条件と極は入っていない。問いがもう反応式で出ているか、式に条件が入っているときは、選択肢を 2 つに絞る）
  * - 知識：単元は問いの上に出ているので、選択肢を 2 つに絞る
  */
 export function hintFor(q: Quiz): Hint | null {
@@ -48,11 +48,14 @@ export function hintFor(q: Quiz): Hint | null {
   if (q.part === 'k') return q.choices.length > 2 ? { text: '選択肢を 2 つに絞った。', drop: q.choices.slice(2) } : null;
   const r = recipeById(q.id.slice(2));
   if (!r) return null;
-  if (q.part === 'products') return { text: productsOf(r).some(([s]) => r.name.includes(label(s))) ? productShape(r) : `反応の名前：${r.name}`, drop: [] };
+  if (q.part === 'products') {
+    const tells = nameTells(r, productsOf(r).map(([s]) => s)) || condsInProducts(r).some((c) => r.name.includes(c));
+    return { text: tells ? productShape(r) : `反応の名前：${r.name}`, drop: [] };
+  }
   if (q.part === 'coef') return { text: `${MACHINES[r.machine].name}・${CONDITIONS[r.machine].label}：${r.accept.join(' または ')}。両辺の原子の数を、元素ごとに数えて比べろ。`, drop: q.choices.slice(3) };
   const eq = equationOf(r);
-  // 条件の名前が反応式に入っているとき（加硫 → 加硫ゴム など）は、式を見せずに選択肢を 2 つに絞る
-  if (q.part === 'cond' && r.accept.some((c) => eq.includes(c))) return { text: '選択肢を 2 つに絞った。', drop: q.choices.slice(2) };
+  // 条件の名前が反応式に入っているとき（加硫 → 加硫ゴム など）は、式を見せずに選択肢を 2 つに絞る。問いがもう反応式で出ているときも
+  if ((q.part === 'cond' && r.accept.some((c) => eq.includes(c))) || q.q.includes(eq)) return { text: '選択肢を 2 つに絞った。', drop: q.choices.slice(2) };
   return { text: `反応式：${eq}`, drop: [] };
 }
 
@@ -137,20 +140,18 @@ export const weekReport = (w: World, now = Date.now()) => ({ cur: weekStats(w, n
 export interface Forecast { exam: number; name: string; days: number; cards: number; total: number; perDay: number }
 /**
  * 次の試験の日までに、いま覚えている問いの復習が何回来るか。どの問いも毎回思い出せた（G = 3）として、FSRS の間隔で先へ進めて数える。
- * 試験日をまたぐ間隔は作らない（capByExams）ので、最後の復習が試験の 2 日前より前なら、試験の前にもう 1 回出る。
+ * 試験日をまたぐ間隔は作らない（capByExams）ので、試験の手前 10 日間の 1 回も、実際の予定と同じように入る。
  * 忘れたものは今日のうちに戻ってくるので、実際はこれより多くなる。これから覚える問いは入っていない。
  */
 export function forecast(w: World, now = Date.now()): Forecast | null {
   const exam = w.exams.filter((e) => e > now).sort((a, b) => a - b)[0];
   if (!exam) return null;
-  const cut = exam - 2 * DAY;
   let total = 0, cards = 0;
   for (const [id, c0] of Object.entries(w.srs)) {
     if (!known(id)) continue;
     cards++;
-    let c: Card = c0, t = Math.max(c0.due, now), last = -Infinity, guard = 0;
-    while (t < exam && guard++ < 400) { total++; last = t; c = review(c, 3, t, [], id, w.ret); t = c.due; }
-    if (last < cut) total++;
+    let c: Card = c0, t = Math.max(c0.due, now), guard = 0;
+    while (t < exam && guard++ < 400) { total++; c = review(c, 3, t, w.exams, id, w.ret); t = c.due; }
   }
   const days = Math.max(1, Math.ceil((exam - now) / DAY));
   return { exam, name: w.exams.indexOf(exam) === 0 ? '共通テスト' : '2 次', days, cards, total, perDay: total / days };

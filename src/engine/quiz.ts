@@ -9,7 +9,7 @@ import { KNOWLEDGE } from '../content/knowledge';
 import { CONDITIONS, productsOf, recipeById, RECIPES, type Recipe } from '../content/recipes';
 import { MACHINES } from '../content/machines';
 import { equationOf } from '../content/looks';
-import { label } from '../content/substances';
+import { label, sub } from '../content/substances';
 import { isBalanced } from '../chem/formula';
 import { dayKey } from './fsrs';
 import type { World } from './world';
@@ -20,6 +20,21 @@ export interface Quiz { id: string; part: Part; topic: string; q: string; choice
 const shuffle = <T>(a: T[], rnd: () => number) => { const b = [...a]; for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
 const join = (list: string[]) => list.map(label).join(' + ');
 const uniq = (list: string[], not: string) => [...new Set(list)].filter((x) => x !== not && x.trim() !== '');
+/** 物質を指すことば（式・名前・別名） */
+const wordsOf = (s: string) => { const x = sub(s); return [label(s), x.name, ...(x.aliases ?? [])].filter((t): t is string => !!t); };
+/**
+ * 反応の名前に、その物質を指すことばが入っているか（名前を見せると答えが分かる）。
+ * 原料の名前の一部としてだけ出てくるもの（「硫酸銅(II)水溶液」の「硫酸」や「銅」、「海水」の「水」）は数えない。
+ */
+export function nameTells(r: Recipe, ids: string[]): boolean {
+  const name = r.name, ins = r.inputs.map(([s]) => sub(s).name);
+  const at = (w: string) => { const out: number[] = []; for (let i = name.indexOf(w); i >= 0; i = name.indexOf(w, i + 1)) out.push(i); return out; };
+  // name の i 文字目からの len 文字が、原料の名前の中に収まっているか
+  const inside = (i: number, len: number) => ins.some((n) => at(n).some((j) => j <= i && i + len <= j + n.length));
+  return ids.some((s) => wordsOf(s).some((w) => at(w).some((i) => !inside(i, w.length))));
+}
+/** 生成物の名前のもとになった条件（加硫 → 加硫ゴム）。問いやヒントに出すと、答えが分かる */
+export const condsInProducts = (r: Recipe) => r.accept.filter((c) => productsOf(r).some(([s]) => wordsOf(s).some((w) => w.includes(c))));
 
 /** その反応で問えるところ */
 export function partsFor(r: Recipe): Part[] {
@@ -53,11 +68,18 @@ export function recipeQuiz(r: Recipe, part: Part, rnd: () => number): Quiz | nul
   const pick3 = (cands: string[], right: string) => shuffle(uniq(cands, right), rnd).slice(0, 3);
   if (part === 'products') {
     const right = join(productsOf(r).map(([s]) => s));
-    const near = RECIPES.filter((x) => x !== r && !x.mix && productsOf(x).length && (x.machine === r.machine || x.inputs.some(([s]) => r.inputs.some(([t]) => t === s))));
+    // 生成物の名前が条件から来ているとき（加硫 → 加硫ゴム）は、条件を伏せる
+    const hide = condsInProducts(r).includes(r.accept[0]);
+    // 同じ装置・同じ原料で、問いに出す条件でもできる別の生成物（Al₂O₃ + C の CO と CO₂ など）も正しい（工場の採点 judge と同じ）。まちがいの選択肢には出さない
+    const setOf = (x: Recipe) => productsOf(x).map(([s]) => s).sort().join('+'), inKey = (x: Recipe) => x.inputs.map(([s]) => s).sort().join('+');
+    const ok = new Set(RECIPES.filter((x) => x.machine === r.machine && inKey(x) === inKey(r) && (hide || x.accept.includes(r.accept[0]))).map(setOf));
+    const cands = RECIPES.filter((x) => x !== r && !x.mix && productsOf(x).length && !ok.has(setOf(x)));
+    const near = cands.filter((x) => x.machine === r.machine || x.inputs.some(([s]) => r.inputs.some(([t]) => t === s)));
     let wrong = pick3(near.map((x) => join(productsOf(x).map(([s]) => s))), right);
-    if (wrong.length < 3) wrong = [...wrong, ...pick3(RECIPES.filter((x) => x !== r && productsOf(x).length).map((x) => join(productsOf(x).map(([s]) => s))), right)].filter((x, i, a) => a.indexOf(x) === i).slice(0, 3);
+    if (wrong.length < 3) wrong = [...wrong, ...pick3(cands.map((x) => join(productsOf(x).map(([s]) => s))), right)].filter((x, i, a) => a.indexOf(x) === i).slice(0, 3);
     if (wrong.length < 3) return null;
-    return { id, part, topic, q: `${MACHINES[r.machine].name}：${join(r.inputs.map(([s]) => s))}（${CONDITIONS[r.machine].label}：${r.accept[0]}）→ できるものは？`, choices: [right, ...wrong], why };
+    const cond = hide ? ' ' : `（${CONDITIONS[r.machine].label}：${r.accept[0]}）`;
+    return { id, part, topic, q: `${MACHINES[r.machine].name}：${join(r.inputs.map(([s]) => s))}${cond}→ できるものは？`, choices: [right, ...wrong], why };
   }
   if (part === 'coef') {
     const wrong = wrongCoefs(r, rnd);
@@ -70,22 +92,29 @@ export function recipeQuiz(r: Recipe, part: Part, rnd: () => number): Quiz | nul
     const used = RECIPES.filter((x) => x.machine === r.machine && x !== r).flatMap((x) => x.accept).filter((o) => opts.includes(o));
     const wrong = [...pick3(used, r.accept[0]), ...pick3(opts, r.accept[0])].filter((x, i, a) => a.indexOf(x) === i).slice(0, 3);
     if (wrong.length < 3) return null;
-    return { id, part, topic, q: `「${r.name}」の${CONDITIONS[r.machine].label}は？`, choices: [r.accept[0], ...wrong], why };
+    // 名前に条件が入っているとき（石炭の乾留・油脂のけん化など）は、名前の代わりに反応式で問う。式にも入っているとき（加硫ゴム）は、原料だけで問う
+    const tells = (t: string) => r.accept.some((c) => t.includes(c)), eq = equationOf(r);
+    const what = !tells(r.name) ? r.name : !tells(eq) ? eq : `${join(r.inputs.map(([s]) => s))} → ？`;
+    return { id, part, topic, q: `「${what}」の${CONDITIONS[r.machine].label}は？`, choices: [r.accept[0], ...wrong], why };
   }
   if (part === 'pole') {
     if (r.machine === 'battery' && r.neg && r.pos) {
       const others = RECIPES.filter((x) => x.machine === 'battery' && x !== r).flatMap((x) => [x.neg, x.pos]).filter((x): x is string => !!x);
-      const wrong = pick3([r.pos, ...others, 'Cu', 'Zn', 'PbO₂', 'O2', 'H2'].map((s) => (s.match(/[₀-₉]/) ? s : label(s))), label(r.neg));
+      // 正極の物質は、いつも選択肢に入れる（負極と正極の取り違えを問う。鉛蓄電池の「鉛」だけで答えが決まらないように）
+      const pos = label(r.pos);
+      const wrong = [pos, ...pick3([...others, 'Cu', 'Zn', 'PbO₂', 'O2', 'H2'].map((s) => (s.match(/[₀-₉]/) ? s : label(s))), label(r.neg)).filter((x) => x !== pos)].slice(0, 3);
       if (wrong.length < 3) return null;
       return { id, part, topic, q: `「${r.name}」で、負極で酸化される（電子を出す）のは？`, choices: [label(r.neg), ...wrong], why };
     }
     const ps = productsOf(r), poles = r.poles ?? 'ca';
     const anode = ps.filter((_, i) => poles[i] === 'a').map(([s]) => s), cathode = ps.filter((_, i) => poles[i] === 'c').map(([s]) => s);
     if (!anode.length || !cathode.length) return null;
-    const right = join(anode);
-    const wrong = pick3([join(cathode), ...['O2', 'H2', 'Cl2', 'Cu', 'Na', 'I2', 'Ag', 'NaOH'].filter((s) => !anode.includes(s)).map((s) => label(s))], right);
+    const right = join(anode), other = join(cathode);
+    // 陰極に生じるものは、いつも選択肢に入れる（陽極と陰極の取り違えを問う）
+    const wrong = [other, ...pick3(['O2', 'H2', 'Cl2', 'Cu', 'Na', 'I2', 'Ag', 'NaOH'].filter((s) => !anode.includes(s)).map((s) => label(s)), right).filter((x) => x !== other)].slice(0, 3);
     if (wrong.length < 3) return null;
-    return { id, part, topic, q: `「${r.name}」で、陽極に生じるのは？`, choices: [right, ...wrong], why };
+    // 名前に陽極の生成物が入っているとき（陽極で CO が生じる場合）は、名前の代わりに反応式で問う
+    return { id, part, topic, q: `「${nameTells(r, anode) ? equationOf(r) : r.name}」で、陽極に生じるのは？`, choices: [right, ...wrong], why };
   }
   return null;
 }
@@ -121,7 +150,7 @@ const RAW_GROUPS: { name: string; ids: string[] }[] = [
   { name: '水酸化物の沈殿', ids: ['k:ppt-cuoh2', 'k:ppt-feoh2', 'k:ppt-feoh3', 'k:ppt-aloh3'] },
   { name: '錯イオンの形と色', ids: ['k:cx-ag', 'k:cx-cu', 'k:cx-zn', 'k:cx-fe'] },
   { name: '炎色反応', ids: ['k:flame-li', 'k:flame-sr', 'k:flame-k'] },
-  { name: '指示薬の変色域', ids: ['k:ind-pp', 'k:ind-mo', 'k:ind-which'] },
+  { name: '指示薬の変色域', ids: ['k:ind-pp', 'k:ind-mo', 'k:ind-which', 'k:ion-titr'] },
   { name: '付加重合・縮合重合・開環重合', ids: ['r:polyethylene', 'r:pvc', 'r:polystyrene', 'r:pet', 'r:nylon66', 'r:nylon6', 'r:phenol-resin', 'r:urea-resin'] },
   { name: '糖の加水分解（酵素と生成物）', ids: ['r:starch-hydrolysis', 'r:maltose-hydrolysis', 'r:inversion', 'r:cellulase', 'k:pl-lactose'] },
   { name: 'アセチレンへの付加', ids: ['r:vinyl-chloride', 'r:acetylene-hydration', 'r:vinyl-acetate', 'r:trimerization', 'r:acrylonitrile'] },
