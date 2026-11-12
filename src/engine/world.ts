@@ -592,12 +592,14 @@ export function restore(w: World, e: Ent): boolean {
 }
 /**
  * 置いたものをずらす：ents を (dx, dy) マスだけ動かす。設定・中身・向きはそのまま。昇降機は、もう一方の階の相方も一緒に動く。
- * 行き先が、動かすもの以外でふさがっていれば何もせず、理由を返す。納品所は動かせない。
+ * 行き先が、動かすもの以外でふさがっていれば何もせず、理由を返す。納品所は動かせない。階はまたげない。
+ * もう地図にないもの（消したもの・ずらす前の古い控え）は動かさない。その場所にいまあるものを消してしまうので。
  * 成功したら、消した元の設備と、置いた新しい設備を返す（元に戻すときに使う）。
  */
 export function moveEnts(w: World, ents: Ent[], dx: number, dy: number): { ok: true; removed: Ent[]; added: Ent[] } | { ok: false; why: string } {
   const set = new Set<Ent>();
   for (const e0 of ents) {
+    if (w.ents.get(key(e0.x, e0.y)) !== e0) continue;
     const e = e0.kind === 'part' ? at(w, e0.x, e0.y) : e0;
     if (!e) continue;
     if (e.kind === 'hub') return { ok: false, why: '納品所は動かせない。' };
@@ -606,6 +608,8 @@ export function moveEnts(w: World, ents: Ent[], dx: number, dy: number): { ok: t
   }
   if (!set.size) return { ok: false, why: '動かすものがない。' };
   if (!dx && !dy) return { ok: true, removed: [], added: [] };
+  // 階をまたぐと、1 階にしか置けない設備や、昇降機の組の決まりを素通りしてしまう
+  if (Math.abs(dy) >= FLOOR_DY / 2 || [...set].some((e) => floorOf(e.y + dy) !== floorOf(e.y))) return { ok: false, why: '階をまたいでは動かせない。' };
   for (const e of set) for (const [fx, fy] of footprint(e.x + dx, e.y + dy, sizeOf(e))) {
     const o = at(w, fx, fy);
     if (o && !set.has(o)) return { ok: false, why: o.kind === 'hub' ? '行き先に納品所がある。' : `行き先に${MACHINE_NAME(o)}がある。` };

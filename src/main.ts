@@ -116,6 +116,10 @@ function boot(data: HotData) {
   /** 地図に稼働率の札を出すか */
   let overlay = store.meta().overlay === true;
   const app = $('app');
+  /** 「ずらす」の行き先待ちをやめる */
+  const disarm = () => { if (!moveArm) return; moveArm = null; app.classList.remove('arming'); $('act-move').setAttribute('aria-pressed', 'false'); };
+  /** 長押しでずらしている途中をやめる。指を離すまで、続きはなぞらない（なぞりのまま、ベルトを引いたりしない） */
+  const stopMove = () => { if (!moving) return; moving = null; input.cancel(); };
   const cv = $<HTMLCanvasElement>('cv');
   const ctx = cv.getContext('2d')!;
   const [hubCX, hubCY] = HUB_CENTER;
@@ -296,6 +300,8 @@ function boot(data: HotData) {
     }
     if (!e || e.kind === 'hub') return false;
     if (selected === e) selected = null;
+    // ずらしている途中に消したら、ずらすのもやめる（離したときに、消したものを置き直さないように）
+    stopMove();
     record({ t: 'del', ent: e });
     // 昇降機は 2 つで 1 組。元に戻すときに両方とも戻るよう、相方も記録する
     if (e.kind === 'lift') { const p = liftPartner(world, e); if (p) record({ t: 'del', ent: p }); }
@@ -315,6 +321,7 @@ function boot(data: HotData) {
    */
   const doMove = (es: Ent[], dx: number, dy: number, quiet = false, rect?: [number, number, number, number] | null): boolean => {
     group = null;
+    stopMove();
     if (b2.locked()) { if (!quiet) b2.lockNote(); return false; }
     const r = moveEnts(world, es, dx, dy);
     if (!r.ok) { if (!quiet) { toast(r.why, 2200); sfx.bad(); buzz(30); } return false; }
@@ -360,6 +367,7 @@ function boot(data: HotData) {
     if (b2.locked()) { b2.lockNote(); return; }
     const g = undo.pop();
     group = null;
+    stopMove();
     if (g) { selected = null; redo.push(applyOps(g)); toast(`ひとつ前に戻した（${describe(g)}）`, 1400); }
     paintUndo();
   };
@@ -367,6 +375,7 @@ function boot(data: HotData) {
     if (b2.locked()) { b2.lockNote(); return; }
     const g = redo.pop();
     group = null;
+    stopMove();
     if (g) { selected = null; undo.push(applyOps(g)); toast('やり直した', 1200); }
     paintUndo();
   };
@@ -1068,8 +1077,14 @@ function boot(data: HotData) {
     switch (low) {
       case 'Escape':
         if (b2.esc()) break;
-        if (moveArm) { moveArm = null; app.classList.remove('arming'); toast('ずらすのをやめた。', 1000); }
-        else if (moving) moving = null;
+        // なぞっている途中なら、それだけをやめる（指を離すまで、続きはなぞらない。道具も選んだものも、そのまま）
+        if (input.cancel() || moving || holding) {
+          const what = moving && !moving.area ? 'ずらす' : holding ? '置く' : '';
+          moving = null; holding = false; hover = null; b2.strokeEnd();
+          if (what) toast(`${what}のをやめた。`, 1000);
+          break;
+        }
+        if (moveArm) { disarm(); toast('ずらすのをやめた。', 1000); }
         else if (clone) { clone = null; pick('pan'); toast('コピーをやめた。', 1000); }
         else if (tool === 'area' && (blueprint || areaRect())) { blueprint = null; ghost = null; areaA = areaB = null; paintArea(); }
         else if (selected) selected = null;
@@ -1160,6 +1175,8 @@ function boot(data: HotData) {
   const buttons = new Map<Tool, HTMLButtonElement>();
   const pick = (id: Tool, keepClone = false) => {
     if (!b2.canPick(id)) return;
+    // 道具を選び直したら、「ずらす」の行き先待ちはやめる（次のタップは、新しい道具で使う）
+    disarm();
     if (id !== tool) prevTool = tool;
     tool = id;
     if (!keepClone) clone = null;
@@ -1231,7 +1248,8 @@ function boot(data: HotData) {
   const actOpen = $<HTMLButtonElement>('act-open'), actTurn = $<HTMLButtonElement>('act-turn'), actErase = $<HTMLButtonElement>('act-erase'), actCopy = $<HTMLButtonElement>('act-copy');
   const copyable = (e: Ent) => !!(e.recipe || e.test || ((e.kind === 'sampler' || e.kind === 'depot') && e.sub));
   actCopy.onclick = () => {
-    if (!selected || !copyable(selected)) return;
+    // ロック中は道具を選べないので、コピーも始めない（Ctrl + C からも来る）
+    if (!selected || !copyable(selected) || !b2.canPick(selected.kind)) return;
     const e = selected;
     clone = { kind: e.kind as Placeable, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, big: e.big, test: e.test, sub: e.sub };
     selected = null;
@@ -1239,7 +1257,13 @@ function boot(data: HotData) {
     sfx.ok();
   };
   actOpen.onclick = () => { if (selected) inspect(selected); };
-  $('act-move').onclick = () => { if (!selected || selected.kind === 'hub') return; moveArm = selected; app.classList.add('arming'); toast('動かす先をタップ（2×2 の装置は、そこが左上）。長押しして指を動かしても、ずらせる。', 4200); sfx.tap(); };
+  // もう一度押すと、やめる
+  $('act-move').onclick = () => {
+    if (moveArm) { disarm(); toast('ずらすのをやめた。', 1000); sfx.tap(); return; }
+    if (!selected || selected.kind === 'hub') return;
+    moveArm = selected; app.classList.add('arming'); $('act-move').setAttribute('aria-pressed', 'true');
+    toast('動かす先をタップ（2×2 の装置は、そこが左上）。やめるときは、もう一度 ⇲。長押しして指を動かしても、ずらせる。', 4200); sfx.tap();
+  };
   actTurn.onclick = () => { if (selected) sheetActions.rotate(selected); };
   actErase.onclick = () => { if (selected) sheetActions.erase(selected); };
   const actNote = $('act-note');
@@ -1407,7 +1431,7 @@ function boot(data: HotData) {
       if (b2.locked()) return false;
       // 「見る」のとき、置いたものを長押しすると、つかんでずらせる（移す量は、指の下の地面のマスで測る）
       const held = at(world, x, y);
-      if (tool === 'pan' && held && held.kind !== 'hub' && cam.z >= FAR_Z) { moving = { es: [held], gx: g ? g[0] : x, gy: g ? g[1] : y, dx: 0, dy: 0, area: false }; selected = held; sfx.tap(); buzz(15); return true; }
+      if (tool === 'pan' && held && held.kind !== 'hub' && cam.z >= FAR_Z) { disarm(); moving = { es: [held], gx: g ? g[0] : x, gy: g ? g[1] : y, dx: 0, dy: 0, area: false }; selected = held; sfx.tap(); buzz(15); return true; }
       if (!isBuild(tool) || tool === 'belt') return false;
       // 置けない所を長押ししたら、理由を知らせる（空いていても置けなければ、見本は赤く出る）
       if (at(world, x, y)) { b2.whyNot(tool, x, y); return false; }
@@ -1426,7 +1450,9 @@ function boot(data: HotData) {
       if (moving) {
         const m = moving;
         moving = null;
-        if (m.dx || m.dy) { if (m.area) shiftArea(m.dx, m.dy, false); else doMove(m.es, m.dx, m.dy); }
+        // つかんだあとで消したり、ずらしたりしたものは、もう動かさない
+        const es = m.es.filter((e) => at(world, e.x, e.y) === e);
+        if (m.dx || m.dy) { if (m.area) shiftArea(m.dx, m.dy, false); else if (es.length) doMove(es, m.dx, m.dy); }
         return;
       }
       if (!holding) return;
@@ -1443,9 +1469,12 @@ function boot(data: HotData) {
       // 「ずらす」を押したあとのタップ：その場所へ（2×2 の装置は、タップしたマスが左上になる）
       if (moveArm) {
         const e = moveArm;
-        moveArm = null; app.classList.remove('arming');
-        if (at(world, x, y) !== e) doMove([e], x - e.x, y - e.y);
-        return;
+        disarm();
+        // 選び直した・消した・もうずらした設備なら、ふつうのタップとして扱う（古い控えを置き直さない）
+        if (e === selected && at(world, e.x, e.y) === e) {
+          if (at(world, x, y) !== e) doMove([e], x - e.x, y - e.y);
+          return;
+        }
       }
       if (tool === 'route') { b2.routeTap(x, y); return; }
       if (tool === 'rail') {
@@ -1465,10 +1494,10 @@ function boot(data: HotData) {
       if (tool === 'pan') { if (selected) selected = null; else if (!floor) showZone(x, y); return; }
       placeAt(x, y);
     },
-    stroke(x, y, prev) {
+    stroke(x, y, prev, g) {
       if (moving) { moving.dx = x - moving.gx; moving.dy = y - moving.gy; return; }
-      // 範囲選択の中から引き始めたら、囲んだものをまとめてずらす
-      if (tool === 'area' && !prev && !blueprint && areaRect() && inRect(x, y)) { const es = inArea(); if (es.length) { moving = { es, gx: x, gy: y, dx: 0, dy: 0, area: true }; return; } }
+      // 範囲選択の中から引き始めたら、囲んだものをまとめてずらす（移す量は、長押しと同じく、指の下の地面のマスで測る）
+      if (tool === 'area' && !prev && !blueprint && areaRect() && inRect(x, y)) { const es = inArea(); if (es.length) { moving = { es, gx: g ? g[0] : x, gy: g ? g[1] : y, dx: 0, dy: 0, area: true }; return; } }
       selected = null;
       if (holding) { hover = [x, y]; return; }
       if (tool === 'rail') {
@@ -1514,7 +1543,7 @@ function boot(data: HotData) {
     begin: H.begin, end: H.end,
     mode: (x, y) => H.mode(x, F(y)),
     tap: (x, y) => H.tap(x, F(y)),
-    stroke: (x, y, prev) => H.stroke(x, F(y), prev && [prev[0], F(prev[1])]),
+    stroke: (x, y, prev, g) => H.stroke(x, F(y), prev && [prev[0], F(prev[1])], g && [g[0], F(g[1])]),
     hold: (x, y, g) => H.hold(x, F(y), [g[0], F(g[1])]),
     groundMode: () => !!moving,
     hover: (t) => H.hover(t && [t[0], F(t[1])]),
@@ -1535,6 +1564,7 @@ function boot(data: HotData) {
     if (f === floor) return;
     floor = f;
     selected = null; hover = null; areaA = areaB = null; ghost = null;
+    disarm();
     paintFloor(); paintArea();
   }
   floorBtn.onclick = () => { setFloor(1 - floor); sfx.tap(); toast(floor ? '2 階。1 階の設備は薄く見える。「昇降機」で上下をつなげ。' : '1 階。', 2400); };
@@ -1729,6 +1759,7 @@ function boot(data: HotData) {
   // ---- 課題：本編とは別の小さな工場を開く ----
   const resetView = () => {
     clearUndo(); selected = null; shownGoal = ''; clone = null; hover = null;
+    b2.unlock();
     setFloor(0); paintFloor();
     cam.x = hubCX; cam.y = hubCY; cam.z = nearZoom(); camTo = null;
     refreshTools(false);
@@ -1953,6 +1984,8 @@ function boot(data: HotData) {
       world = (json && deserialize(json)) || newWorld();
       slot = n;
       clearUndo(); selected = null; shownGoal = ''; speed = 1; paintSpeed(); clone = null;
+      // ロックは開き直すと外れている
+      b2.unlock();
       cam.x = hubCX; cam.y = hubCY; cam.z = nearZoom(); camTo = null;
       // 前に見ていた場所から始める
       const c0 = json ? store.meta().cams?.[String(n)] : undefined;
@@ -1975,7 +2008,7 @@ function boot(data: HotData) {
       else if (store.meta().news !== NEWS) showNews();
     },
   });
-  const toTitle = () => { rvCard.hidden = true; leaveCase(); save(); saveCam(); slot = 0; selected = null; moving = null; moveArm = null; app.classList.remove('arming'); actNote.hidden = true; $('paused').hidden = true; $('marks').hidden = true; app.classList.add('in-title'); title.show(); };
+  const toTitle = () => { rvCard.hidden = true; leaveCase(); save(); saveCam(); slot = 0; selected = null; moving = null; disarm(); actNote.hidden = true; $('paused').hidden = true; $('marks').hidden = true; app.classList.add('in-title'); title.show(); };
   /** 今日のまとめ：タイトルへ戻る前に、今日の時間・復習・続いた日数・次の復習を見せる */
   const showToday = () => {
     const now = Date.now(), [n, ok] = todayCount(world, now), st = streakOf(world, now), ex = daysToExam(world, now);
@@ -2070,6 +2103,8 @@ function boot(data: HotData) {
         if (Math.abs(camTo.z - cam.z) < 0.05 && Math.hypot(camTo.x - cam.x, camTo.y - cam.y) < 0.01) camTo = null;
       } else input.tick(dt);
       if (selected && at(world, selected.x, selected.y) !== selected) selected = null;
+      // 「ずらす」は、選んでいる設備にだけ効く（選び直したり、消したり、階や課題を移ったりしたら、やめる）
+      if (moveArm && moveArm !== selected) disarm();
       if (lastSeen !== world.seen) { lastSeen = world.seen; refreshTools(true); }
       if (lastRes !== world.research.length) { lastRes = world.research.length; refreshTools(true); paintOpts(); paintFloor(); }
       const d0 = PERF ? performance.now() : 0;
