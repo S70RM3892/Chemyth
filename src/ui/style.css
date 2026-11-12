@@ -1313,7 +1313,8 @@ button.cn-st { cursor: pointer; min-height: 30px; }
 
 /* ---- 窓（シート）：すりガラスの大きな板。見出しの前に、光る縦線 ---- */
 [data-skin="lab"] #modal { background: color-mix(in srgb, var(--paper) 50%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
-[data-skin="lab"] #sheet { background: var(--glass-solid); -webkit-backdrop-filter: blur(22px) saturate(1.4); backdrop-filter: blur(22px) saturate(1.4); border: 1px solid var(--edge); border-radius: 20px; box-shadow: var(--sheen), 0 24px 60px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(var(--glow), 0.08); }
+/* 窓の板そのものはぼかさない。うしろの #modal がもうぼかしていて、板は 9 割がた不透明なので、重ねても見た目は変わらず、送るたびの合成だけが重くなる */
+[data-skin="lab"] #sheet { background: var(--glass-solid); border: 1px solid var(--edge); border-radius: 20px; box-shadow: var(--sheen), 0 24px 60px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(var(--glow), 0.08); }
 [data-skin="lab"] #sheet header { border-bottom: 1px solid var(--edge-soft); box-shadow: 0 1px 0 rgba(var(--glow), 0.25); }
 [data-skin="lab"] #sheet :is(h1, h2) { font-weight: 700; letter-spacing: 0.03em; }
 [data-skin="lab"] #sheet h2::before { content: ""; display: inline-block; width: 5px; height: 0.95em; margin-right: 10px; vertical-align: -0.08em; border-radius: 3px; background: linear-gradient(180deg, var(--hi), rgb(var(--accent))); box-shadow: 0 0 10px rgba(var(--glow), 0.7); }
