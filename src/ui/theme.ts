@@ -1,11 +1,12 @@
-/** 見た目は「スキン × 明暗」の 4 通り。
+/** 見た目は「スキン × 明暗」の 8 通り。
  *  ノート：ライト＝方眼ノートにインク、ダーク＝黒板にチョーク。
  *  工業：ライト＝光の炉（白い鋼板、安全色、差し込む日光）、ダーク＝闇の炉（煤けた鉄、溶けた橙、火の粉と走査線）。
  *  魔術：ライト＝羊皮紙の実験録（セピアのインク、真鍮、青く光る液）、ダーク＝夜の書斎（藍の闇、真鍮、青い灯）。
+ *  研究所：ライト＝白の研究棟（白い陶板の床、銀とガラスの装置、青緑の立体映像）、ダーク＝深夜のラボ（青緑と赤紫の灯を映す黒い床）。
  *  画面部品（CSS）と地図（canvas）で同じ色を使う */
 export type ThemeName = 'light' | 'dark';
 export type ThemeChoice = 'auto' | ThemeName;
-export type Skin = 'note' | 'punk' | 'arcane';
+export type Skin = 'note' | 'punk' | 'arcane' | 'lab';
 
 export interface Palette {
   key: string;
@@ -36,6 +37,7 @@ export interface Palette {
 const HAND = '"Klee One", "Hiragino Maru Gothic ProN", "Yu Gothic", sans-serif';
 const HEAVY = '"Dela Gothic One", "Hiragino Sans", "Yu Gothic", sans-serif';
 const SERIF = '"Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif';
+const SANS = '"Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", sans-serif';
 /** 魔術スキンの真鍮の色（明るい面・縁） */
 export const BRASS = '#b8913f', BRASS_DARK = '#6b4f1f';
 
@@ -74,7 +76,21 @@ export const PALETTES: Record<string, Palette> = {
     plate: '#1d2127', shadow: 'rgba(0,0,0,0.65)', edge: 'rgba(0,0,0,0.85)', glow: '255,122,30', font: HEAVY,
     line: { solid: '#4d3c28', liquid: '#0f566a', gas: '#34384a', none: '#2a2f37' },
   },
+  // 白の研究棟：白い陶板の床、銀の縁とガラスの装置、青緑の立体映像
+  'lab-light': {
+    key: 'lab-light', skin: 'lab', name: 'light', paper: '#dfe6eb', grid: 'rgba(40,70,90,0.08)', gridBold: 'rgba(40,70,90,0.18)', ink: '#16222d', soft: '#596a77', red: '#e23d55', hi: '#11b7c9',
+    plate: '#ffffff', shadow: 'rgba(30,52,70,0.22)', edge: '#16222d', glow: '0,196,214', font: SANS,
+    line: { solid: '#dfe5ea', liquid: '#a6e3ef', gas: '#ddd8f3', none: '#e4e9ed' },
+  },
+  // 深夜のラボ：青緑と赤紫の灯を映す、黒く磨いた床
+  'lab-dark': {
+    key: 'lab-dark', skin: 'lab', name: 'dark', paper: '#0a1018', grid: 'rgba(80,220,240,0.05)', gridBold: 'rgba(80,220,240,0.12)', ink: '#e4f3f7', soft: '#8aa1ae', red: '#ff4f7b', hi: '#2ef0e0',
+    plate: '#131c27', shadow: 'rgba(0,0,0,0.6)', edge: 'rgba(3,7,12,0.92)', glow: '46,240,224', font: SANS,
+    line: { solid: '#283444', liquid: '#0d4b5e', gas: '#3a2d58', none: '#202a37' },
+  },
 };
+/** 研究所スキンの差し色（赤紫）。暗いテーマの灯と、立体映像の二色目に使う */
+export const LAB_MAGENTA = '255,79,216';
 
 const root = document.documentElement;
 const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -83,7 +99,7 @@ export function themeName(): ThemeName {
   const a = root.dataset.theme;
   return a === 'dark' || a === 'light' ? a : media.matches ? 'dark' : 'light';
 }
-export const skinName = (): Skin => (root.dataset.skin === 'punk' ? 'punk' : root.dataset.skin === 'arcane' ? 'arcane' : 'note');
+export const skinName = (): Skin => (root.dataset.skin === 'punk' ? 'punk' : root.dataset.skin === 'arcane' ? 'arcane' : root.dataset.skin === 'lab' ? 'lab' : 'note');
 export const palette = (): Palette => PALETTES[`${skinName()}-${themeName()}`];
 
 /** 明暗の選択を反映する。auto は端末（または表示している側）の設定に従う */
@@ -92,7 +108,7 @@ export function applyTheme(choice: ThemeChoice) {
   else root.dataset.theme = choice;
 }
 export function applySkin(skin: Skin) {
-  if (skin === 'punk' || skin === 'arcane') root.dataset.skin = skin;
+  if (skin === 'punk' || skin === 'arcane' || skin === 'lab') root.dataset.skin = skin;
   else delete root.dataset.skin;
 }
 

@@ -1196,3 +1196,185 @@ button.cn-st { cursor: pointer; min-height: 30px; }
 [data-skin="punk"] .rm-node.done .rm-name { fill: var(--panel-ink); }
 [data-skin="punk"] .rm-node.done .rm-note { fill: var(--hi); }
 [data-skin="arcane"] :is(.ach.got, #ach-pop) { border-color: var(--brass-dark); box-shadow: inset 0 0 0 1px var(--brass); }
+
+/* =====================================================================
+   研究所スキン。近未来の化学研究所。
+   ライト＝白の研究棟（白い陶板とガラス、銀の縁、青緑の立体映像）
+   ダーク＝深夜のラボ（黒く磨いた床に、青緑と赤紫の灯）
+   部品はすりガラスの板：うしろをぼかし、細く光る縁と、やわらかい影。角は丸く、線は細く。
+   ぼかしは大きな板だけにかける（小さなボタンまでぼかすと、毎コマの合成が重くなる）
+   ===================================================================== */
+:root[data-skin="lab"] {
+  --paper: #dfe6eb; --card: #ffffff; --card-2: #eef3f6; --ink: #16222d; --soft: #596a77; --rule: rgba(22, 60, 80, 0.16);
+  --red: #e23d55; --hi: #11b7c9; --hi-soft: #d8f4f7; --ok: #1f9d6b; --shadow: rgba(30, 52, 70, 0.16); --on-ink: #ffffff;
+  --glow: 17, 183, 201; --accent: 98, 92, 255; --hi-ink: #0a8292;
+  --glass: rgba(255, 255, 255, 0.76); --glass-solid: rgba(255, 255, 255, 0.92); --edge: rgba(17, 183, 201, 0.5); --edge-soft: rgba(22, 60, 80, 0.14);
+  --sheen: inset 0 1px 0 rgba(255, 255, 255, 0.9); --lift: 0 10px 30px rgba(30, 52, 70, 0.14), 0 2px 6px rgba(30, 52, 70, 0.08);
+  --font-hand: "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", sans-serif;
+  --font-tech: "Chakra Petch", "IBM Plex Mono", ui-monospace, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-skin="lab"]:not([data-theme="light"]) {
+    --paper: #0a1018; --card: #111a25; --card-2: #172230; --ink: #e4f3f7; --soft: #8aa1ae; --rule: rgba(46, 240, 224, 0.16);
+    --red: #ff4f7b; --hi: #2ef0e0; --hi-soft: #0e363d; --ok: #5fe3a1; --shadow: rgba(0, 0, 0, 0.6); --on-ink: #03121a;
+    --glow: 46, 240, 224; --accent: 255, 79, 216; --hi-ink: #2ef0e0;
+    --glass: rgba(11, 19, 29, 0.74); --glass-solid: rgba(12, 20, 30, 0.93); --edge: rgba(46, 240, 224, 0.42); --edge-soft: rgba(120, 200, 230, 0.14);
+    --sheen: inset 0 1px 0 rgba(160, 230, 255, 0.08); --lift: 0 12px 34px rgba(0, 0, 0, 0.55);
+    color-scheme: dark;
+  }
+}
+:root[data-skin="lab"][data-theme="dark"] {
+  --paper: #0a1018; --card: #111a25; --card-2: #172230; --ink: #e4f3f7; --soft: #8aa1ae; --rule: rgba(46, 240, 224, 0.16);
+  --red: #ff4f7b; --hi: #2ef0e0; --hi-soft: #0e363d; --ok: #5fe3a1; --shadow: rgba(0, 0, 0, 0.6); --on-ink: #03121a;
+  --glow: 46, 240, 224; --accent: 255, 79, 216; --hi-ink: #2ef0e0;
+  --glass: rgba(11, 19, 29, 0.74); --glass-solid: rgba(12, 20, 30, 0.93); --edge: rgba(46, 240, 224, 0.42); --edge-soft: rgba(120, 200, 230, 0.14);
+  --sheen: inset 0 1px 0 rgba(160, 230, 255, 0.08); --lift: 0 12px 34px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+@keyframes lab-rise { from { opacity: 0; transform: translate(-50%, 8px); } }
+@keyframes lab-scan { from { background-position: 0 -80px; } to { background-position: 0 calc(100% + 80px); } }
+[data-skin="lab"] body { letter-spacing: 0.01em; }
+/* 表紙の見出し：文具の文言をかくし、研究所の文言と、明暗の名前を出す */
+[data-skin="lab"] .note-only { display: none; }
+[data-skin="lab"] #cover .kicker::before { content: "化学研究所 ／ 受験化学"; }
+[data-skin="lab"] #aspect { display: block; font-family: var(--font-hand); font-weight: 700; font-size: 13px; letter-spacing: 0.3em; color: rgb(var(--accent)); }
+[data-skin="lab"] #aspect span { display: none !important; }
+[data-skin="lab"] #aspect::before { content: "白の研究棟"; }
+:root[data-skin="lab"][data-theme="dark"] #aspect::before { content: "深夜のラボ"; }
+@media (prefers-color-scheme: dark) { :root[data-skin="lab"]:not([data-theme="light"]) #aspect::before { content: "深夜のラボ"; } }
+
+/* ---- ボタン：すりガラスの札。押せるものは細く光る縁 ---- */
+[data-skin="lab"] :is(.ghost, .chip, .key, .stepper, .seg) { background: var(--glass-solid); border: 1px solid var(--edge-soft); border-radius: 10px; box-shadow: var(--sheen), 0 2px 8px var(--shadow); }
+[data-skin="lab"] #topbtns button { background: var(--glass-solid); border: 1px solid var(--edge-soft); border-radius: 12px; box-shadow: var(--sheen), 0 4px 14px var(--shadow); font-weight: 700; }
+[data-skin="lab"] :is(.ghost, #topbtns button):hover { border-color: var(--edge); }
+[data-skin="lab"] .primary { background: linear-gradient(180deg, color-mix(in srgb, var(--hi) 80%, #fff), var(--hi)); color: var(--on-ink); border: 1px solid color-mix(in srgb, var(--hi) 70%, #fff); border-radius: 12px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 6px 18px rgba(var(--glow), 0.38); text-shadow: 0 1px 0 rgba(0, 0, 0, 0.12); }
+[data-skin="lab"] .danger { background: linear-gradient(180deg, color-mix(in srgb, var(--red) 80%, #fff), var(--red)); border: 1px solid var(--red); border-radius: 12px; box-shadow: 0 6px 18px color-mix(in srgb, var(--red) 35%, transparent); }
+[data-skin="lab"] .ghost.warn { color: var(--red); border-color: color-mix(in srgb, var(--red) 55%, transparent); }
+[data-skin="lab"] .ghost.wrong { color: var(--red); border-color: var(--red); }
+[data-skin="lab"] :is(.chip.on, .ghost.picked, .ghost.on, #b-stats.hot, #b-speed.hot, #topbtns button.hot) { background: color-mix(in srgb, var(--hi) 16%, var(--card)); border-color: var(--hi); box-shadow: inset 0 0 0 1px var(--hi), 0 0 14px rgba(var(--glow), 0.35); }
+[data-skin="lab"] #b-floor.hot { background: var(--hi); color: var(--on-ink); border-color: var(--hi); }
+[data-skin="lab"] #b-night { background: color-mix(in srgb, rgb(var(--accent)) 14%, var(--card)); border-color: rgba(var(--accent), 0.6); }
+[data-skin="lab"] #pts { font-family: var(--font-tech); font-weight: 700; color: var(--hi-ink); }
+[data-skin="lab"] #due:not(:empty) { border-radius: 999px; font-family: var(--font-tech); }
+[data-skin="lab"] .seg { overflow: hidden; }
+[data-skin="lab"] .seg button { border-right: 1px solid var(--edge-soft); }
+[data-skin="lab"] .seg button.on { background: var(--hi); color: var(--on-ink); box-shadow: 0 0 12px rgba(var(--glow), 0.45); }
+[data-skin="lab"] .stepper button { background: rgba(var(--glow), 0.08); }
+[data-skin="lab"] .stepper .val { font-family: var(--font-tech); font-weight: 700; color: var(--hi-ink); }
+[data-skin="lab"] .key { border-radius: 8px; }
+[data-skin="lab"] .key.n { background: var(--card-2); }
+[data-skin="lab"] .key.fn { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+[data-skin="lab"] .keypad { background: var(--card-2); border: 1px solid var(--edge-soft); border-radius: 12px; }
+[data-skin="lab"] .chip.line { box-shadow: inset 5px 0 0 var(--line), var(--sheen); }
+
+/* ---- 指令：すりガラスの板。上の縁に、青緑から赤紫へ光る線 ---- */
+[data-skin="lab"] #goal { transform: none; background: var(--glass); -webkit-backdrop-filter: blur(14px) saturate(1.5); backdrop-filter: blur(14px) saturate(1.5); border: 1px solid var(--edge); border-radius: 16px; box-shadow: var(--sheen), var(--lift); overflow: hidden; }
+[data-skin="lab"] #goal::before { content: ""; position: absolute; left: 14px; right: 14px; top: 0; height: 2px; border-radius: 2px; background: linear-gradient(90deg, transparent, var(--hi), rgb(var(--accent)), transparent); box-shadow: 0 0 10px rgba(var(--glow), 0.8); }
+[data-skin="lab"] #goal::after { content: "指令"; border: 1.5px solid var(--hi); color: var(--hi-ink); transform: none; opacity: 1; font-family: var(--font-hand); font-weight: 700; font-size: 13px; background: radial-gradient(circle, rgba(var(--glow), 0.18), transparent 70%); box-shadow: 0 0 12px rgba(var(--glow), 0.35), inset 0 0 8px rgba(var(--glow), 0.25); }
+[data-skin="lab"] .goal-top { color: var(--soft); letter-spacing: 0.04em; }
+[data-skin="lab"] #goal-count { font-family: var(--font-tech); font-weight: 700; color: var(--hi-ink); }
+[data-skin="lab"] #goal-name { font-weight: 700; letter-spacing: 0.02em; }
+[data-skin="lab"] #goal-rate { color: var(--hi-ink); font-family: var(--font-tech); }
+[data-skin="lab"] #goal-side { border-radius: 8px; border-color: var(--edge-soft); background: var(--glass-solid); }
+[data-skin="lab"] .track { height: 6px; border: 0; border-radius: 3px; background: rgba(var(--glow), 0.14); }
+[data-skin="lab"] #goal-bar { border-radius: 3px; background: linear-gradient(90deg, var(--hi), rgb(var(--accent))); box-shadow: 0 0 10px rgba(var(--glow), 0.7); }
+
+/* ---- 道具の棚：浮かぶガラスの台 ---- */
+[data-skin="lab"] #bar { background: var(--glass); -webkit-backdrop-filter: blur(14px) saturate(1.5); backdrop-filter: blur(14px) saturate(1.5); border: 1px solid var(--edge); border-radius: 16px; padding: 4px; box-shadow: var(--sheen), var(--lift); }
+[data-skin="lab"] .tool { border-radius: 11px; }
+[data-skin="lab"] .tool .g { border: 1px solid rgba(0, 0, 0, 0.18); border-radius: 9px; font-family: var(--font-hand); font-weight: 700; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), inset 0 -6px 10px rgba(0, 0, 0, 0.12); }
+[data-skin="lab"] .tool:not([style]) .g { background: var(--card-2); border-color: var(--edge-soft); }
+[data-skin="lab"] .tool.on { background: rgba(var(--glow), 0.14); border-color: var(--hi); box-shadow: 0 0 14px rgba(var(--glow), 0.4); }
+[data-skin="lab"] .tool.on .g { box-shadow: 0 0 0 2px var(--hi), 0 0 10px rgba(var(--glow), 0.8); }
+[data-skin="lab"] #tabs button { border-radius: 8px; border-color: var(--edge-soft); background: var(--card-2); }
+[data-skin="lab"] #tabs button.on { background: var(--hi); color: var(--on-ink); border-color: var(--hi); box-shadow: 0 0 10px rgba(var(--glow), 0.45); }
+[data-skin="lab"] #opts { border-left-color: var(--edge-soft); }
+[data-skin="lab"] #opts button { border-radius: 8px; border-color: var(--edge-soft); background: var(--card-2); }
+[data-skin="lab"] #opts button.on { background: color-mix(in srgb, var(--hi) 18%, var(--card)); border-color: var(--hi); box-shadow: 0 0 10px rgba(var(--glow), 0.4); }
+[data-skin="lab"] #tip { background: var(--glass); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border: 1px solid var(--edge-soft); border-radius: 999px; padding: 3px 16px; }
+[data-skin="lab"] #tip b { box-shadow: none; color: var(--hi-ink); }
+
+/* ---- 選んだものの操作・お知らせ・はんこ ---- */
+[data-skin="lab"] :is(#act, #area-act) { background: var(--glass); -webkit-backdrop-filter: blur(14px) saturate(1.4); backdrop-filter: blur(14px) saturate(1.4); border: 1px solid var(--edge); border-radius: 14px; box-shadow: var(--sheen), var(--lift); }
+[data-skin="lab"] #act button { border-right: 1px solid var(--edge-soft); }
+[data-skin="lab"] #act #act-open { background: var(--hi); color: var(--on-ink); }
+[data-skin="lab"] #area-act button { border: 1px solid var(--edge-soft); border-radius: 9px; background: var(--glass-solid); }
+[data-skin="lab"] :is(#act-note, #paused, #marks button, #rvcard, #minimap) { background: var(--glass-solid); border: 1px solid var(--edge-soft); border-radius: 10px; box-shadow: var(--sheen), 0 4px 14px var(--shadow); }
+[data-skin="lab"] #minimap { border-color: var(--edge); border-radius: 14px; }
+[data-skin="lab"] #marks button.set { background: var(--hi); color: var(--on-ink); border-color: var(--hi); }
+[data-skin="lab"] #rvcard { border-color: var(--edge); border-radius: 14px; }
+[data-skin="lab"] #toast { transform: translateX(-50%); animation-name: lab-rise; background: var(--glass); -webkit-backdrop-filter: blur(14px) saturate(1.4); backdrop-filter: blur(14px) saturate(1.4); color: var(--ink); border: 1px solid var(--hi); border-radius: 14px; font-family: var(--font-hand); font-weight: 700; box-shadow: var(--sheen), 0 0 18px rgba(var(--glow), 0.35), var(--lift); }
+[data-skin="lab"] #stamp { border: 3px solid var(--hi); color: var(--hi-ink); font-family: var(--font-hand); font-weight: 700; background: radial-gradient(circle, rgba(var(--glow), 0.16), transparent 70%); text-shadow: 0 0 14px rgba(var(--glow), 0.9); box-shadow: 0 0 30px rgba(var(--glow), 0.5), inset 0 0 26px rgba(var(--glow), 0.3); }
+[data-skin="lab"] #stamp::before { border: 1.5px dashed rgba(var(--accent), 0.75); }
+/* 閉店：研究棟の防火扉。暗いガラスの縞に、青緑の線 */
+[data-skin="lab"] #closing .shutter { background: repeating-linear-gradient(180deg, #0f1924 0 26px, #0a121b 26px 29px, rgba(46, 240, 224, 0.35) 29px 30px); box-shadow: inset 0 -12px 0 #05090e; }
+[data-skin="lab"] #closing .closing-plate { background: var(--glass-solid); border: 1px solid var(--edge); border-radius: 16px; box-shadow: 0 0 24px rgba(var(--glow), 0.25), var(--lift); }
+
+/* ---- 窓（シート）：すりガラスの大きな板。見出しの前に、光る縦線 ---- */
+[data-skin="lab"] #modal { background: color-mix(in srgb, var(--paper) 50%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+[data-skin="lab"] #sheet { background: var(--glass-solid); -webkit-backdrop-filter: blur(22px) saturate(1.4); backdrop-filter: blur(22px) saturate(1.4); border: 1px solid var(--edge); border-radius: 20px; box-shadow: var(--sheen), 0 24px 60px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(var(--glow), 0.08); }
+[data-skin="lab"] #sheet header { border-bottom: 1px solid var(--edge-soft); box-shadow: 0 1px 0 rgba(var(--glow), 0.25); }
+[data-skin="lab"] #sheet :is(h1, h2) { font-weight: 700; letter-spacing: 0.03em; }
+[data-skin="lab"] #sheet h2::before { content: ""; display: inline-block; width: 5px; height: 0.95em; margin-right: 10px; vertical-align: -0.08em; border-radius: 3px; background: linear-gradient(180deg, var(--hi), rgb(var(--accent))); box-shadow: 0 0 10px rgba(var(--glow), 0.7); }
+[data-skin="lab"] #sheet h3 { font-weight: 700; box-shadow: none; color: var(--hi-ink); letter-spacing: 0.06em; }
+[data-skin="lab"] .eq { background: rgba(var(--glow), 0.07); border: 1px solid var(--edge-soft); border-left: 3px solid var(--hi); border-radius: 10px; }
+[data-skin="lab"] .qtext { background: rgba(var(--glow), 0.06); border-left: 3px solid var(--hi); border-radius: 10px; }
+[data-skin="lab"] .drill-intro { border-left-color: var(--hi); border-radius: 10px; }
+[data-skin="lab"] .slot { border-color: var(--edge); }
+[data-skin="lab"] .slot.on { border-color: var(--hi); box-shadow: inset 0 -8px 0 rgba(var(--glow), 0.14); }
+[data-skin="lab"] .status { border: 1px dashed var(--edge); border-radius: 10px; }
+[data-skin="lab"] .answer { border: 1px dashed var(--red); border-radius: 12px; }
+[data-skin="lab"] .about dt { color: var(--hi-ink); font-family: var(--font-ui); font-weight: 700; letter-spacing: 0.04em; }
+[data-skin="lab"] .diagram .core { border-radius: 10px; border-color: rgba(0, 0, 0, 0.2); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4); }
+[data-skin="lab"] .diagram .port { border-radius: 8px; }
+[data-skin="lab"] .diagram .port.out { border-color: var(--hi); }
+[data-skin="lab"] .pill { border-radius: 999px; border-color: var(--edge); }
+[data-skin="lab"] .pill.ok { background: var(--hi); color: var(--on-ink); border-color: var(--hi); }
+[data-skin="lab"] .blank { border-radius: 8px; border-color: var(--edge); }
+[data-skin="lab"] .blank i { border-radius: 6px; border-color: var(--hi); color: var(--hi-ink); }
+[data-skin="lab"] .blank.on { background: rgba(var(--glow), 0.12); border-color: var(--hi); }
+[data-skin="lab"] .pips i { border-radius: 3px; border-color: var(--edge); }
+[data-skin="lab"] .pips i.on { background: var(--hi); box-shadow: 0 0 8px rgba(var(--glow), 0.7); }
+[data-skin="lab"] .points { font-family: var(--font-tech); font-weight: 700; color: var(--hi-ink); font-size: 22px; }
+[data-skin="lab"] .steps li::before { border-color: var(--hi); color: var(--hi-ink); font-family: var(--font-tech); font-weight: 700; box-shadow: 0 0 8px rgba(var(--glow), 0.35); }
+[data-skin="lab"] :is(.tile, .rs-card, .scene, .mrow, .photo, .fed-el.on, .acrow) { border-radius: 14px; border-color: var(--edge-soft); }
+[data-skin="lab"] :is(.tile, .rs-card, .mrow) { background: var(--card); box-shadow: var(--sheen), 0 3px 10px var(--shadow); }
+[data-skin="lab"] .tile-v { font-family: var(--font-tech); font-weight: 700; color: var(--hi-ink); }
+[data-skin="lab"] .rs-card.done { background: color-mix(in srgb, var(--hi) 10%, var(--card)); border-color: var(--hi); box-shadow: 0 0 12px rgba(var(--glow), 0.3); }
+[data-skin="lab"] .scene { background: var(--card-2); }
+[data-skin="lab"] .scene-chip { border-radius: 999px; border-color: var(--edge); }
+[data-skin="lab"] .photo { transform: none; }
+[data-skin="lab"] .photo:nth-child(even) { transform: none; }
+[data-skin="lab"] :is(.bar i, .meter i) { background: linear-gradient(180deg, var(--hi), color-mix(in srgb, var(--hi) 60%, #000)); }
+[data-skin="lab"] .bar.on i { background: rgb(var(--accent)); }
+[data-skin="lab"] .meter { border-radius: 3px; overflow: hidden; }
+[data-skin="lab"] .syl-bar { border-radius: 3px; overflow: hidden; }
+[data-skin="lab"] .syl-bar i { background: linear-gradient(90deg, var(--hi), rgb(var(--accent))); }
+[data-skin="lab"] .rank tr.me td { background: rgba(var(--glow), 0.16); }
+[data-skin="lab"] .namebox { border: 1px solid var(--edge); border-radius: 10px; }
+[data-skin="lab"] .draw-grid { border-color: var(--edge); border-radius: 10px; overflow: hidden; }
+
+/* ---- タイトル：ガラスの表紙と、研究室の札。ゆっくり下る走査の光 ---- */
+[data-skin="lab"] #title { background:
+  radial-gradient(circle at 18% 12%, rgba(var(--glow), 0.16), transparent 42%),
+  radial-gradient(circle at 86% 88%, rgba(var(--accent), 0.12), transparent 46%),
+  linear-gradient(var(--rule) 1px, transparent 1px) 0 0 / 100% 48px,
+  linear-gradient(90deg, var(--rule) 1px, transparent 1px) 0 0 / 48px 100%,
+  var(--paper); isolation: isolate; }
+[data-skin="lab"] #title::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: linear-gradient(180deg, transparent, rgba(var(--glow), 0.12) 50%, transparent) no-repeat 0 0 / 100% 80px; animation: lab-scan 9s linear infinite; }
+[data-skin="lab"] #cover { background: var(--glass); -webkit-backdrop-filter: blur(16px) saturate(1.5); backdrop-filter: blur(16px) saturate(1.5); border: 1px solid var(--edge); border-radius: 22px; padding: 28px 28px 26px 40px; box-shadow: var(--sheen), var(--lift); }
+[data-skin="lab"] #cover::before { left: 14px; top: 22px; bottom: 22px; width: 5px; border-radius: 3px; background: linear-gradient(180deg, var(--hi), rgb(var(--accent))); box-shadow: 0 0 14px rgba(var(--glow), 0.8); }
+[data-skin="lab"] #title h1 { font-weight: 700; letter-spacing: 0.04em; }
+[data-skin="lab"] #title h1 span { box-shadow: none; background: linear-gradient(90deg, var(--ink) 30%, var(--hi) 75%, rgb(var(--accent))); -webkit-background-clip: text; background-clip: text; color: transparent; }
+[data-skin="lab"] #title .lead { font-weight: 700; color: var(--soft); }
+[data-skin="lab"] .kicker { letter-spacing: 0.3em; color: var(--hi-ink); }
+[data-skin="lab"] .label-box { border: 1px solid var(--edge-soft); border-radius: 12px; overflow: hidden; background: rgba(var(--glow), 0.04); }
+[data-skin="lab"] .label-box span { border-color: var(--edge-soft); }
+[data-skin="lab"] .label-box span:nth-child(odd) { color: var(--hi-ink); font-weight: 700; }
+[data-skin="lab"] .slotcard { background: var(--glass); -webkit-backdrop-filter: blur(12px) saturate(1.4); backdrop-filter: blur(12px) saturate(1.4); border: 1px solid var(--edge-soft); border-left: 4px solid var(--hi); border-radius: 16px; box-shadow: var(--sheen), var(--lift); }
+[data-skin="lab"] .slotcard.empty { border-style: solid; border-left-color: var(--edge); box-shadow: var(--sheen); }
+[data-skin="lab"] .slotcard b { font-weight: 700; letter-spacing: 0.04em; }
+[data-skin="lab"] #title-panel { background: var(--glass-solid); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border: 1px solid var(--edge); border-radius: 16px; box-shadow: var(--lift); }
+[data-skin="lab"] #title-panel textarea { border-color: var(--edge-soft); border-radius: 10px; }
+[data-skin="lab"] .shelf { border-bottom: 2px solid var(--edge); }

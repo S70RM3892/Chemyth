@@ -8,7 +8,8 @@
  *  - 水面：海や入り江で、絵がさざ波でゆれ、きらめきが走る
  *  - 仕上げ：浮き彫りの陰影、周辺の減光、粒子、走査線、色のにじみ、色調
  *  - 最高画質：高さの層から落とす影と、くぼみの陰り（太陽の向きは実際の時刻で変わる）、光の筋（明るい所から放射状にのびる光）、
- *    レンズの光の筋、雲の影、水面の映り込み・照り返し・波打ち際の泡、色調の仕上げ。立体表示では、遠くのかすみと、上下のぼかし
+ *    レンズの光の筋、雲の影、水面の映り込み・照り返し・波打ち際の泡、色調の仕上げ。立体表示では、遠くのかすみと、上下のぼかし。
+ *    研究所の床は磨いてあるので、装置と灯が床に映る（reflect）
  */
 export interface PostParams {
   time: number;
@@ -50,6 +51,8 @@ export interface PostParams {
   sat: number; contrast: number; shadowTint: [number, number, number]; hiTint: [number, number, number];
   /** 立体表示：遠くのかすみ（色）と、上下のぼかし */
   fog: number; fogColor: [number, number, number]; tilt: number;
+  /** 磨いた床の映り込みの強さ（最高画質の平らな表示で、高さの層があるときだけ。0 なら計算しない） */
+  reflect: number;
   /** カメラ：中心のマス（x, y）と、1 マスの画素数（画面の画素） */
   cam: [number, number, number];
 }
@@ -71,7 +74,7 @@ export interface Scene3 {
   ink: [number, number, number]; shadow: number;
   /** 画面に直接描いた光（花火など）。なければ null */
   glowScreen: TexImageSource | null;
-  /** 最高画質：箱の足もとの陰りの強さ、箱の材質の強さ（0 なら前の見た目）、スキン（0 文具・1 工業・2 魔術）、暗いテーマか */
+  /** 最高画質：箱の足もとの陰りの強さ、箱の材質の強さ（0 なら前の見た目）、スキン（0 文具・1 工業・2 魔術・3 研究所）、暗いテーマか */
   ao: number; rich: number; skin: number; dark: boolean;
 }
 export interface Post {
@@ -185,13 +188,24 @@ void main() {
       side *= 1.0 - seam * 0.4 * uRich;
       side += rivet * (uDark > 0.5 ? 0.06 : 0.16) * uRich;
       side *= 1.0 - (1.0 - smoothstep(0.0, 0.25, face.y)) * 0.25 * uRich;
-    } else {
+    } else if (uSkin < 2.5) {
       // 魔術：木目と、上の縁の真鍮の帯
       float gr = sin(face.x * w * 26.0 + sin(face.y * hgt * 5.0 + face.x * 3.0) * 2.4 + hash(vec2(floor(face.y * hgt * 7.0), 1.0)) * 6.0);
       side *= 0.93 + 0.07 * gr * uRich;
       float band = smoothstep(0.8, 0.83, face.y) * (1.0 - smoothstep(0.93, 0.96, face.y));
       vec3 brass = vec3(0.78, 0.6, 0.27) * (uDark > 0.5 ? 0.75 : 1.0) * (0.75 + 0.35 * face.y);
       side = mix(side, brass * sh * 1.25, band * 0.85 * uRich);
+    } else {
+      // 研究所：つやのあるパネル（昼は白、夜は黒）。マスごとの細い継ぎ目、上の縁に沿って光る帯、斜めに走る照り、足もとの黒い帯
+      float dk = uDark > 0.5 ? 1.0 : 0.0;
+      side = mix(side, mix(vec3(0.9, 0.93, 0.95), vec3(0.13, 0.17, 0.22), dk) * sh * (0.8 + 0.25 * face.y), 0.55 * uRich);
+      float seam = smoothstep(0.972, 0.992, fract(face.x * w));
+      side *= 1.0 - seam * 0.3 * uRich;
+      float spec = exp(-pow((face.x - 0.25 - face.y * 0.35) * 5.0, 2.0)) * (0.35 + 0.65 * face.y);
+      side += vec3(0.85, 0.95, 1.0) * spec * mix(0.16, 0.1, dk) * uRich;
+      float led = smoothstep(0.84, 0.86, face.y) * (1.0 - smoothstep(0.895, 0.915, face.y));
+      side = mix(side, mix(vec3(0.05, 0.72, 0.82), vec3(0.2, 1.0, 0.92), dk), led * 0.92 * uRich);
+      side *= 1.0 - (1.0 - smoothstep(0.0, 0.1, face.y)) * 0.45 * uRich;
     }
     // 光の当たる西の面の、上ほど強い照り
     if (nor.x < -0.5) side += vec3(1.0) * pow(face.y, 3.0) * 0.08 * uRich;
@@ -301,8 +315,9 @@ void main() { o = vec4(texture(uTex, uv).rgb, 1.0); }`;
 
 const FS_FINAL = `#version 300 es
 precision highp float;
-uniform sampler2D uScene, uB1, uB2, uB3, uMask, uShade, uGod, uStreak, uSoft, uStreak2;
+uniform sampler2D uScene, uB1, uB2, uB3, uMask, uShade, uGod, uStreak, uSoft, uStreak2, uHgt;
 uniform vec2 uRes;
+uniform float uRefl, uReach;
 uniform float uTime, uAmbient, uSpill, uBloom, uVig, uGrain, uScan, uAb, uRelief, uGlint;
 uniform vec3 uTint;
 uniform float uShadow, uAO, uBevel, uGodK, uStreakK, uStreak2K, uCloud, uWaterRefl, uSat, uContrast, uFog, uTilt;
@@ -356,6 +371,39 @@ void main() {
     light *= 1.0 - smoothstep(0.5, 0.78, n) * uCloud * (1.0 - keep);
   }
   vec3 col = clamp(s * light * (1.0 + rel), 0.0, 1.0);
+  // 磨いた床の映り込み（研究所）：床の点から奥（画面の上）へ高さの層をたどり、背の高い物の足もとを見つけたら、
+  // 足もとを境に折り返した所の絵を、ぼかして薄く重ねる。背の高い物ほど長く映り、足もとから離れるほど薄れる。
+  // 灯（発光のぼかし）は、奥から縦に集めて、床に落ちる光の筋にする。水と、装置・ベルトの上には映さない
+  if (uRefl > 0.0) {
+    float h0 = texture(uHgt, uv).r;
+    float fl = smoothstep(0.05, 0.08, h0) * (1.0 - smoothstep(0.14, 0.2, h0)) * (1.0 - keep);
+    if (fl > 0.0) {
+      float fres = 0.6 + 0.4 * uv.y;
+      float d = 0.0, hh = 0.0;
+      for (int i = 1; i <= 9; i++) {
+        float f = float(i) * uReach * 0.17;
+        float hq = texture(uHgt, uv + vec2(0.0, f)).r;
+        if (hq > 0.2) { d = f; hh = hq; break; }
+      }
+      // 装置の手前の側面（足もとから上へ 0.15 マスほど）は、床ではないので映さない
+      float a = d - uReach * 0.15;
+      if (d > 0.0 && a > 0.0) {
+        float k = 1.0 - smoothstep(0.0, (hh - 0.1) * uReach * 1.5, a);
+        vec2 src = uv + vec2(0.0, 2.0 * a);
+        // 足もとから離れるほど、ぼやける（縦に長くぼかすと、つやのある床らしくなる）
+        vec2 bl = px * (1.5 + 8.0 * a / max(uReach, 1e-4));
+        vec3 rc = (texture(uScene, src).rgb * 2.0 + texture(uScene, src + vec2(bl.x, bl.y * 2.5)).rgb + texture(uScene, src - vec2(bl.x, bl.y * 2.5)).rgb
+          + texture(uScene, src + vec2(bl.x * 0.5, -bl.y * 5.0)).rgb + texture(uScene, src + vec2(-bl.x * 0.5, bl.y * 5.0)).rgb) / 6.0;
+        col = mix(col, rc * light, clamp(k * fres * uRefl * fl, 0.0, 0.85));
+      }
+      vec3 lr = vec3(0.0);
+      for (int i = 1; i <= 4; i++) {
+        float f = float(i) * uReach * 0.3;
+        lr += (texture(uB1, uv + vec2(0.0, f)).rgb + texture(uB2, uv + vec2(0.0, f * 1.5)).rgb) * (1.0 - float(i) * 0.2);
+      }
+      col = 1.0 - (1.0 - col) * (1.0 - clamp(lr * 0.32 * fres * uRefl * fl, 0.0, 1.0));
+    }
+  }
   // 発光のにじみ：足し算ではなく「スクリーン」で重ねる（明るい所が白く飛ばず、装置の中の色が残る）
   vec3 halo = clamp((b1 * 0.5 + b2 * 0.45 + b3 * 0.35) * uBloom, 0.0, 1.0) * (1.0 - keep * 0.92);
   if (uGodK > 0.0) halo += texture(uGod, uv).rgb * uGodK;
@@ -544,6 +592,10 @@ export function createPost(canvas: HTMLCanvasElement): Post | null {
     bind(7, useStreak ? stA!.tex : a3.tex, fin.loc('uStreak'));
     bind(8, useTilt ? sfA!.tex : a3.tex, fin.loc('uSoft'));
     bind(9, useStreak && p.streakDir !== 0 ? stB!.tex : a3.tex, fin.loc('uStreak2'));
+    // 床の映り込み：高さの層を、そのまま使う（1 マスが画面の縦の何割かも渡す）
+    const useRefl = height && hW > 0 && p.reflect > 0;
+    bind(10, useRefl ? tHeight : a3.tex, fin.loc('uHgt'));
+    gl.uniform1f(fin.loc('uRefl'), useRefl ? p.reflect : 0); gl.uniform1f(fin.loc('uReach'), useRefl ? p.tile / Math.max(1, hH) : 0);
     gl.uniform2f(fin.loc('uRes'), W, H);
     gl.uniform1f(fin.loc('uTime'), p.time % 1000);
     gl.uniform1f(fin.loc('uAmbient'), p.ambient); gl.uniform1f(fin.loc('uSpill'), p.spill); gl.uniform1f(fin.loc('uBloom'), p.bloom);
@@ -651,7 +703,7 @@ export function createPost(canvas: HTMLCanvasElement): Post | null {
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
       upload(tScene, scene); upload(tGlow, glow); upload(tMask, mask);
-      const useH = !!height && p.shadow + p.ao + p.bevel > 0;
+      const useH = !!height && (p.shadow + p.ao + p.bevel > 0 || p.reflect > 0);
       if (useH) { upload(tHeight, height!); const hs = height as HTMLCanvasElement; hW = hs.width; hH = hs.height; }
       composite(tScene, tGlow, tMask, p, null, useH);
     },
@@ -738,7 +790,7 @@ export function createPost(canvas: HTMLCanvasElement): Post | null {
 }
 
 /** 見た目ごとの、最高画質の上乗せ（影・光の筋・レンズの筋・雲・水面・色調）。太陽の向き・カメラ・かすみは、毎コマ main が決める */
-type Look = Pick<PostParams, 'shadow' | 'ao' | 'bevel' | 'sunColor' | 'god' | 'streak' | 'streakDir' | 'streakTint' | 'cloud' | 'waterRefl' | 'sky' | 'sat' | 'contrast' | 'shadowTint' | 'hiTint'>;
+type Look = Pick<PostParams, 'shadow' | 'ao' | 'bevel' | 'sunColor' | 'god' | 'streak' | 'streakDir' | 'streakTint' | 'cloud' | 'waterRefl' | 'sky' | 'sat' | 'contrast' | 'shadowTint' | 'hiTint'> & Partial<Pick<PostParams, 'reflect'>>;
 const FRAME: Pick<PostParams, 'sun' | 'sunLen' | 'tile' | 'godPos' | 'fog' | 'fogColor' | 'tilt' | 'cam'> = { sun: [-0.75, -0.66], sunLen: 0.9, tile: 14, godPos: [0.5, 0.5], fog: 0, fogColor: [1, 1, 1], tilt: 0, cam: [0, 0, 40] };
 const LOOKS: Record<string, Look> = {
   // 方眼ノート：紙の白は白のまま。影と雲の影で、紙の上に置いた模型に見せる
@@ -753,9 +805,13 @@ const LOOKS: Record<string, Look> = {
   'arcane-light': { shadow: 0.4, ao: 0.38, bevel: 0.5, sunColor: [1.05, 1.0, 0.9], god: 0.18, streak: 0.22, streakDir: 1, streakTint: [0.55, 0.85, 1.0], cloud: 0.12, waterRefl: 0.36, sky: [0.5, 0.74, 0.9], sat: 1.04, contrast: 0.08, shadowTint: [0.98, 0.96, 0.94], hiTint: [1.02, 1.0, 0.96] },
   // 夜の書斎：藍の闇に金の灯。青い光の筋と、星形のきらめき
   'arcane-dark': { shadow: 0.2, ao: 0.44, bevel: 0.45, sunColor: [0.88, 0.95, 1.12], god: 0.66, streak: 0.55, streakDir: 1, streakTint: [0.5, 0.82, 1.0], cloud: 0, waterRefl: 0.22, sky: [0.2, 0.25, 0.45], sat: 1.1, contrast: 0.18, shadowTint: [0.92, 0.94, 1.1], hiTint: [1.06, 1.0, 0.9] },
+  // 白の研究棟：天井いっぱいの照明なので、影もくぼみの陰りも薄め（装置の殻に、回り込んだ光のやわらかい影を描いてある）。白は青みの白に。床に装置が映る
+  'lab-light': { shadow: 0.18, ao: 0.24, bevel: 0.32, sunColor: [1.0, 1.01, 1.03], god: 0.1, streak: 0.1, streakDir: 0, streakTint: [0.6, 0.95, 1.0], cloud: 0, waterRefl: 0.32, sky: [0.78, 0.92, 0.96], sat: 1.04, contrast: 0.08, shadowTint: [0.93, 0.98, 1.05], hiTint: [0.99, 1.0, 1.02], reflect: 0.3 },
+  // 深夜のラボ：暗がりは青緑、明るい所は赤紫に寄せる。灯から光の筋と横に長いレンズの筋、黒い床に灯と装置が映る
+  'lab-dark': { shadow: 0.2, ao: 0.5, bevel: 0.42, sunColor: [0.9, 1.0, 1.08], god: 0.42, streak: 0.4, streakDir: 0, streakTint: [0.45, 0.95, 1.0], cloud: 0, waterRefl: 0.26, sky: [0.08, 0.28, 0.36], sat: 1.12, contrast: 0.18, shadowTint: [0.9, 1.0, 1.1], hiTint: [1.05, 0.97, 1.05], reflect: 0.55 },
 };
 /** 「高」の画質では、最高画質の上乗せを使わない（色調だけは同じにしない：前の見た目のまま） */
-export const PLAIN_LOOK: Look = { shadow: 0, ao: 0, bevel: 0, sunColor: [1, 1, 1], god: 0, streak: 0, streakDir: 0, streakTint: [1, 1, 1], cloud: 0, waterRefl: 0, sky: [1, 1, 1], sat: 1, contrast: 0, shadowTint: [1, 1, 1], hiTint: [1, 1, 1] };
+export const PLAIN_LOOK: Look = { shadow: 0, ao: 0, bevel: 0, sunColor: [1, 1, 1], god: 0, streak: 0, streakDir: 0, streakTint: [1, 1, 1], cloud: 0, waterRefl: 0, sky: [1, 1, 1], sat: 1, contrast: 0, shadowTint: [1, 1, 1], hiTint: [1, 1, 1], reflect: 0 };
 
 /** スキンと明暗ごとの設定。明るいテーマは控えめに、暗いテーマは光と影をはっきりつける */
 const BASE: Record<string, Pick<PostParams, 'ambient' | 'spill' | 'bloom' | 'bright' | 'threshold' | 'vignette' | 'grain' | 'scan' | 'aberration' | 'relief' | 'glint' | 'tint'>> = {
@@ -765,5 +821,8 @@ const BASE: Record<string, Pick<PostParams, 'ambient' | 'spill' | 'bloom' | 'bri
   'punk-dark': { ambient: 0.86, spill: 1.1, bloom: 0.8, bright: 0.3, threshold: 0.78, vignette: 0.3, grain: 0.03, scan: 0.03, aberration: 0.001, relief: 0.38, glint: 0.5, tint: [1.03, 0.99, 0.95] },
   'arcane-light': { ambient: 0.95, spill: 0.4, bloom: 0.7, bright: 0, threshold: 1, vignette: 0.26, grain: 0.018, scan: 0, aberration: 0, relief: 0.28, glint: 0.4, tint: [1.02, 1.0, 0.96] },
   'arcane-dark': { ambient: 0.7, spill: 1.1, bloom: 0.85, bright: 0.2, threshold: 0.82, vignette: 0.4, grain: 0.02, scan: 0, aberration: 0.0005, relief: 0.33, glint: 0.6, tint: [0.98, 1.0, 1.05] },
+  // 研究所：澄んだ強めの発光、粒子はごく少なく、色のにじみはほぼなし。夜は灯がよく広がり、明るい所も光る
+  'lab-light': { ambient: 1.0, spill: 0.28, bloom: 0.62, bright: 0, threshold: 1, vignette: 0.12, grain: 0.006, scan: 0, aberration: 0, relief: 0.22, glint: 0.4, tint: [0.985, 1.0, 1.02] },
+  'lab-dark': { ambient: 0.78, spill: 1.15, bloom: 0.95, bright: 0.22, threshold: 0.8, vignette: 0.3, grain: 0.012, scan: 0, aberration: 0.0003, relief: 0.3, glint: 0.42, tint: [0.97, 1.0, 1.04] },
 };
-export const POST_PRESETS: Record<string, Omit<PostParams, 'time'>> = Object.fromEntries(Object.keys(BASE).map((k) => [k, { ...BASE[k], ...LOOKS[k], ...FRAME }]));
+export const POST_PRESETS: Record<string, Omit<PostParams, 'time'>> = Object.fromEntries(Object.keys(BASE).map((k) => [k, { reflect: 0, ...BASE[k], ...LOOKS[k], ...FRAME }]));

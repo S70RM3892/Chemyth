@@ -52,19 +52,19 @@ export const fmtDate = (t: number) => { if (!t) return ''; const d = new Date(t)
 
 export interface TitleApi { start(slot: number, json: string | null): void }
 
-/** セーブ枠の呼び名。文具スキンではノート、工業スキンでは生産ライン */
-export const slotName = (n: number) => (skinName() === 'punk' ? `第 ${n} ライン` : skinName() === 'arcane' ? `実験録 第 ${n} 巻` : `ノート ${n} 冊目`);
+/** セーブ枠の呼び名。文具スキンではノート、工業スキンでは生産ライン、研究所スキンでは研究室 */
+export const slotName = (n: number) => (skinName() === 'punk' ? `第 ${n} ライン` : skinName() === 'arcane' ? `実験録 第 ${n} 巻` : skinName() === 'lab' ? `第 ${n} 研究室` : `ノート ${n} 冊目`);
 
-/** 明暗の切り替えボタン。呼び名はスキンごとに違う（ノート／黒板、光／闇） */
+/** 明暗の切り替えボタン。呼び名はスキンごとに違う（ノート／黒板、光／闇、白の研究棟／深夜のラボ） */
 export function themeButtons(after: () => void): HTMLElement[] {
-  const cur = store.meta().theme ?? 'auto', punk = skinName() === 'punk', arcane = skinName() === 'arcane';
-  return ([['auto', '自動'], ['light', punk ? '光' : arcane ? '羊皮紙' : 'ノート'], ['dark', punk ? '闇' : arcane ? '夜' : '黒板']] as [ThemeChoice, string][]).map(([id, name]) =>
+  const cur = store.meta().theme ?? 'auto', punk = skinName() === 'punk', arcane = skinName() === 'arcane', lab = skinName() === 'lab';
+  return ([['auto', '自動'], ['light', punk ? '光' : arcane ? '羊皮紙' : lab ? '白の研究棟' : 'ノート'], ['dark', punk ? '闇' : arcane ? '夜' : lab ? '深夜のラボ' : '黒板']] as [ThemeChoice, string][]).map(([id, name]) =>
     h('button', { type: 'button', id: `theme-${id}`, class: cur === id ? 'on' : '', onclick: () => { store.setMeta({ theme: id }); applyTheme(id); sfx.tap(); after(); } }, name));
 }
 /** スキンの切り替えボタン */
 export function skinButtons(after: () => void): HTMLElement[] {
   const cur = skinName();
-  return ([['note', '文具'], ['punk', '工業'], ['arcane', '魔術']] as [Skin, string][]).map(([id, name]) =>
+  return ([['note', '文具'], ['punk', '工業'], ['arcane', '魔術'], ['lab', '研究所']] as [Skin, string][]).map(([id, name]) =>
     h('button', { type: 'button', id: `skin-${id}`, class: cur === id ? 'on' : '', onclick: () => { store.setMeta({ skin: id }); applySkin(id); sfx.tap(); after(); } }, name));
 }
 
@@ -134,7 +134,7 @@ export function initTitle(api: TitleApi) {
       const n = i + 1, json = store.read(n), sum = summarize(json);
       if (!sum) {
         return h('div', { class: 'slotcard empty' },
-          h('div', { class: 'stack tight' }, h('b', {}, slotName(n)), h('span', { class: 'muted' }, json ? '古い版のデータ（読めない）' : skinName() === 'punk' ? '未稼働' : 'まだ何も書いていない')),
+          h('div', { class: 'stack tight' }, h('b', {}, slotName(n)), h('span', { class: 'muted' }, json ? '古い版のデータ（読めない）' : skinName() === 'punk' ? '未稼働' : skinName() === 'lab' ? 'まだ何も記録していない' : 'まだ何も書いていない')),
           h('div', { class: 'row' },
             h('button', { class: 'primary', type: 'button', id: `slot-${n}-new`, onclick: () => { sfx.ok(); api.start(n, null); } }, 'はじめる'),
             h('button', { class: 'ghost', type: 'button', id: `slot-${n}-import`, onclick: () => importInto(n) }, '読み込む')),
