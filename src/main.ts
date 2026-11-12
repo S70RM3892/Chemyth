@@ -19,7 +19,7 @@ import { appearance, equationOf } from './content/looks';
 import { isSep, sepSlots } from './content/sep';
 import { showMock } from './ui/mock';
 import { drawFireworks, fireworksActive, launchFireworks } from './ui/fireworks';
-import { POST_PRESETS, createPost, type Post } from './ui/gl';
+import { PLAIN_LOOK, POST_PRESETS, createPost, type Post } from './ui/gl';
 import { TOP_H, camera3, heightOf, pickTile, planeSize } from './ui/three';
 import { palette } from './ui/theme';
 import { FLAMES } from './content/looks';
@@ -138,10 +138,14 @@ function boot(data: HotData) {
   // ---- WebGL の合成段：地図の絵（#cv）を素材にして、光・発光・ゆらぎをかけた結果を #gl に出す ----
   const glCv = $<HTMLCanvasElement>('gl');
   let post: Post | null = null, gfxHigh = store.meta().gfx !== 'plain';
+  /** 高画質の段：2 最高（影・光の筋・レンズの筋・雲・水面・色調・立体の材質）、1 高（前の高画質）。保存は 'high'＝最高、'mid'＝高 */
+  let gfxTier: 1 | 2 = store.meta().gfx === 'mid' ? 1 : 2;
   /** 光の層と効果の層。画面の 1/3 の細かさで足りる（どうせぼかす） */
   const FX_SCALE = 1 / 3;
   const glowCv = document.createElement('canvas'), maskCv = document.createElement('canvas');
   const glowCtx = glowCv.getContext('2d')!, maskCtx = maskCv.getContext('2d')!;
+  /** 高さの層（最高画質の、平らな表示）：地面 0.1、水 0、ベルト・装置・納品所ほど高い。影とくぼみの陰りを作る */
+  const heightCv = document.createElement('canvas'), heightCtx = heightCv.getContext('2d')!;
   const fxOn = () => !!post && gfxHigh && !post.lost();
   // ---- 立体表示：地面の絵と、装置の天面の絵を別々に描き、WebGL で箱と影をつけて、傾いたカメラで見る ----
   let three = store.meta().view3d === 'on';
@@ -175,7 +179,7 @@ function boot(data: HotData) {
       for (const c of [glowCv, maskCv]) { c.width = Math.max(8, Math.round(gw * FX_SCALE)); c.height = Math.max(8, Math.round(gh * FX_SCALE)); }
       glowSCv.width = Math.max(8, Math.round(cw * FX_SCALE)); glowSCv.height = Math.max(8, Math.round(ch * FX_SCALE));
     } else {
-      for (const c of [glowCv, maskCv]) { c.width = Math.max(8, Math.round(cw * FX_SCALE)); c.height = Math.max(8, Math.round(ch * FX_SCALE)); }
+      for (const c of [glowCv, maskCv, heightCv]) { c.width = Math.max(8, Math.round(cw * FX_SCALE)); c.height = Math.max(8, Math.round(ch * FX_SCALE)); }
     }
     fxK = FX_SCALE;
     post?.resize(cv.width, cv.height);
@@ -664,10 +668,15 @@ function boot(data: HotData) {
         h('div', { class: 'row' }, h('span', { class: 'muted' }, '見た目'), h('span', { class: 'seg' }, ...skinButtons(showMenu)), h('span', { class: 'seg' }, ...themeButtons(showMenu))),
         item('m-sleep', (() => { const c = sleepCfg(); return c.on ? `睡眠と試験日（就寝 ${hhmm(c.bed)}・起床 ${hhmm(c.wake)}、その間は工場を閉める）` : '睡眠と試験日（閉店：なし）'; })(), () => showSleepSettings()),
         item('m-sound', soundOn() ? '音：あり' : '音：なし', () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); showMenu(); }),
-        item('m-gfx', fxOn() ? '画質：高（光・発光・ゆらぎ）' : post || store.meta().gfx !== 'plain' ? '画質：標準（軽い）' : '画質：標準（この端末では高画質を使えない）', () => {
-          gfxHigh = !fxOn(); slowFrames = 0; applyGfx(); resize();
-          store.setMeta({ gfx: gfxHigh ? 'high' : 'plain' }); sfx.tap(); showMenu();
-          if (!gfxHigh && store.meta().gfx === 'high') toast('この端末では高画質を使えない。', 2600);
+        item('m-gfx', fxOn() ? (gfxTier === 2 ? '画質：最高（影・光の筋・水面・色調。押すと「高」）' : '画質：高（光・発光・ゆらぎ。押すと「標準」）') : post || store.meta().gfx !== 'plain' ? '画質：標準（軽い。押すと「最高」）' : '画質：標準（この端末では高画質を使えない）', () => {
+          // 最高 → 高 → 標準 → 最高
+          slowFrames = 0;
+          if (fxOn() && gfxTier === 2) gfxTier = 1;
+          else if (fxOn()) gfxHigh = false;
+          else { gfxHigh = true; gfxTier = 2; }
+          applyGfx(); resize();
+          store.setMeta({ gfx: !gfxHigh ? 'plain' : gfxTier === 2 ? 'high' : 'mid' }); sfx.tap(); showMenu();
+          if (gfxHigh && !fxOn()) toast('この端末では高画質を使えない。', 2600);
         }),
         item('m-mini', miniOn ? '全体の小地図：あり（右下。押すとその場所へ移る）' : '全体の小地図：なし', () => { miniOn = !miniOn; store.setMeta({ minimap: miniOn }); paintMini(); sfx.tap(); showMenu(); }),
         item('m-3d', threeOn() ? '立体表示：オン（傾いた視点・箱・影）' : '立体表示：オフ（真上からの平らな表示）', () => {
@@ -709,9 +718,33 @@ function boot(data: HotData) {
     paintFold();
   };
   /** 夕暮れ：光のない所を沈め、光をよく広げる */
-  const duskPost = (p: (typeof POST_PRESETS)[string], time: number) => {
-    const k = palette().name === 'light' ? dusk : dusk * 0.5;
-    return { ...p, time, ambient: p.ambient * (1 - 0.3 * k), spill: p.spill * (1 + 0.9 * k), bloom: p.bloom * (1 + 0.25 * k), vignette: Math.min(0.6, p.vignette + 0.15 * k) };
+  /**
+   * 太陽の向き（実際の時刻）：朝は右上（東）から、昼は左上、夕方は左（西）から差す。昼は影が短く、朝夕は長い。
+   * 暗いテーマは、左上の灯りから（夜なので、影は控えめ）
+   */
+  const sunNow = (light: boolean): { sun: [number, number]; len: number } => {
+    if (!light) return { sun: [-0.72, -0.69], len: 0.75 };
+    const d = new Date(), f = Math.min(1, Math.max(0, (d.getHours() + d.getMinutes() / 60 - 6) / 12));
+    const a = ((-60 - 120 * f) * Math.PI) / 180;
+    return { sun: [Math.cos(a), Math.sin(a)], len: 0.55 + 0.9 * Math.pow(Math.abs(f - 0.5) * 2, 1.6) };
+  };
+  /** 毎コマの合成の設定：見た目ごとの設定に、夕暮れ・太陽・カメラ・画質の段・立体表示を重ねる */
+  const duskPost = (p: (typeof POST_PRESETS)[string], time: number, d3 = false) => {
+    const pal = palette(), light = pal.name === 'light', k = light ? dusk : dusk * 0.5;
+    const ultra = gfxTier === 2, s0 = sunNow(light), dpr = cv.width / Math.max(1, cw);
+    const hr = hubRect(world.hubSize), hx = hr.x + hr.s / 2, hy = hr.y + hr.s / 2;
+    const base = ultra ? p : { ...p, ...PLAIN_LOOK };
+    const paper = parseInt(pal.paper.slice(1), 16), pc: [number, number, number] = [((paper >> 16) & 255) / 255, ((paper >> 8) & 255) / 255, (paper & 255) / 255];
+    return {
+      ...base, time, ambient: p.ambient * (1 - 0.3 * k), spill: p.spill * (1 + 0.9 * k), bloom: p.bloom * (1 + 0.25 * k), vignette: Math.min(0.6, p.vignette + 0.15 * k),
+      // 平らな表示の影は、夕暮れとともに薄れる（夜は灯りだけ）。立体表示では、箱が影を落とすので使わない
+      shadow: d3 ? 0 : base.shadow * (1 - 0.8 * k), ao: d3 ? 0 : base.ao, bevel: d3 ? 0 : base.bevel,
+      sun: s0.sun, sunLen: s0.len, tile: cam.z * fxK,
+      godPos: [(hx - cam.x) / (cw / cam.z) + 0.5, 0.5 - (hy - cam.y - floor * 0) / (ch / cam.z)] as [number, number],
+      cloud: d3 ? 0 : base.cloud * (1 - k),
+      fog: d3 && ultra ? (light ? 0.34 : 0.42) : 0, fogColor: light ? pc : ([pc[0] * 1.4 + 0.03, pc[1] * 1.4 + 0.04, pc[2] * 1.4 + 0.07] as [number, number, number]), tilt: d3 && ultra && !pf.calm ? 0.8 : 0,
+      cam: [cam.x, cam.y, cam.z * dpr] as [number, number, number],
+    };
   };
   // ---- 睡眠：今夜の 10 問、今朝の 10 問、就寝から起床までの閉店、実際の時刻の夕暮れ ----
   const sleepCfg = (): SleepCfg => ({ ...SLEEP_DEFAULT, ...(store.meta().sleep ?? {}) });
@@ -1934,7 +1967,10 @@ function boot(data: HotData) {
       if (fx) {
         // 光の層は黒地に加算、効果の層は黒地（何もない所は効果なし）
         for (const c2 of [glowCtx, maskCtx]) { c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'source-over'; c2.globalAlpha = 1; c2.fillStyle = '#000'; c2.fillRect(0, 0, glowCv.width, glowCv.height); c2.setTransform(fxK, 0, 0, fxK, 0, 0); c2.globalCompositeOperation = 'lighter'; }
+        // 高さの層は、地面の高さ（0.1）で塗ってから、高いものを「明るいほうを残す」で重ねる
+        if (gfxTier === 2 && !(three && gw > 0)) { heightCtx.setTransform(1, 0, 0, 1, 0, 0); heightCtx.globalCompositeOperation = 'source-over'; heightCtx.globalAlpha = 1; heightCtx.fillStyle = 'rgb(26,26,26)'; heightCtx.fillRect(0, 0, heightCv.width, heightCv.height); heightCtx.setTransform(fxK, 0, 0, fxK, 0, 0); heightCtx.globalCompositeOperation = 'lighten'; }
       }
+      const useH = fx && gfxTier === 2 && !(three && gw > 0);
       if (t3) {
         // 立体表示：見えている範囲を囲む長方形を、地面の層と天面の層に描く。#cv は透明にして、画面にじかに描くものだけを載せる
         const c3 = camera3(cam, cw, ch), cam2 = { x: (c3.x0 + c3.x1) / 2, y: (c3.y0 + c3.y1) / 2, z: cam.z };
@@ -1952,11 +1988,12 @@ function boot(data: HotData) {
           ground: gndCv, top: topCv, rect: [cam2.x - gw / 2 / cam.z, cam2.y - gh / 2 / cam.z, cam2.x + gw / 2 / cam.z, cam2.y + gh / 2 / cam.z],
           vp: new Float32Array(c3.vp), boxes: boxBuf, count: boxes.length / 8, slabs: slabs.length / 8, topH: TOP_H,
           ink: [((ink >> 16) & 255) / 255, ((ink >> 8) & 255) / 255, (ink & 255) / 255], shadow: pal.name === 'light' ? 0.3 : 0.5, glowScreen: fw ? glowSCv : null,
-        }, glowCv, maskCv, duskPost(POST_PRESETS[pal.key], now / 1000));
+          ao: gfxTier === 2 ? (pal.name === 'light' ? 0.32 : 0.45) : 0, rich: gfxTier === 2 ? 1 : 0, skin: pal.skin === 'punk' ? 1 : pal.skin === 'arcane' ? 2 : 0, dark: pal.name === 'dark',
+        }, glowCv, maskCv, duskPost(POST_PRESETS[pal.key], now / 1000, true));
       } else {
-        draw(ctx, cw, ch, world, cam, now / 1000, dt, { ...view, fx: fx ? { glow: glowCtx, mask: maskCtx } : null });
+        draw(ctx, cw, ch, world, cam, now / 1000, dt, { ...view, fx: fx ? { glow: glowCtx, mask: maskCtx, height: useH ? heightCtx : null } : null });
         drawFireworks(ctx, cw, ch, dt, fx ? glowCtx : null);
-        if (fx) post!.render(cv, glowCv, maskCv, duskPost(POST_PRESETS[palette().key], now / 1000));
+        if (fx) post!.render(cv, glowCv, maskCv, duskPost(POST_PRESETS[palette().key], now / 1000), useH ? heightCv : null);
       }
       if (fx) {
         // 遅い端末では、自動で軽い表示に戻す（3 秒ほど、1 コマ 45 ms を超え続けたら）。立体表示 → 平らな高画質 → 標準、の順
@@ -1964,6 +2001,7 @@ function boot(data: HotData) {
         if (slowFrames > 70 && !KEEP_GFX) {
           slowFrames = 0;
           if (t3) { three = false; applyGfx(); resize(); store.setMeta({ view3d: 'off' }); toast('動きが重いので、立体表示を切った。メニューの「立体表示」で戻せる。', 5000); }
+          else if (gfxTier === 2) { gfxTier = 1; store.setMeta({ gfx: 'mid' }); toast('動きが重いので、画質を「高」にした（影と光の筋を切った）。メニューの「画質」で戻せる。', 5000); }
           else { gfxHigh = false; applyGfx(); store.setMeta({ gfx: 'plain' }); toast('動きが重いので、画質を標準に切り替えた。メニューの「画質」で戻せる。', 5000); }
         }
       }
@@ -1998,10 +2036,16 @@ function boot(data: HotData) {
   window.addEventListener('unhandledrejection', onCrash);
   window.addEventListener('pagehide', () => { save(); saveCam(); });
   // 更新のお知らせ：新しい版で、はじめて工場を開いたときに 1 度だけ
-  const NEWS = '2026-11-move';
+  const NEWS = '2026-11-gfx';
   const showNews = () => {
     store.setMeta({ news: NEWS });
     showSheet(h('header', {}, h('h2', {}, '更新のお知らせ'), closeBtn()),
+      h('p', {}, h('b', {}, 'グラフィックを、すべてのスキンで強化した。'), 'メニューの「画質」に「最高」を足した（重い端末では、自動で「高」→「標準」に下げる）。'),
+      h('ul', {},
+        h('li', {}, '設備が地面に影を落とし、足もとが陰る。影の向きと長さは、実際の時刻の太陽で変わる（朝は右上から、夕方は左から、昼は短い）。'),
+        h('li', {}, '暗いテーマでは、納品所や灯りから光の筋がのび、工業はレンズの横の筋、魔術は星形のきらめきが出る。水面に空が映り、日が照り返し、岸に泡が寄せる。'),
+        h('li', {}, '地面の細部：紙の繊維としみ、黒板の消し跡と消し残した式、羊皮紙の錬金術の印、夜の書斎の石の床と光る魔法陣、工場の床の排水格子・危険表示・赤く光る割れ目。'),
+        h('li', {}, '立体表示：箱の足もとの陰り、面取りした天面の縁、スキンごとの側面（厚紙・鋼板と鋲・木目と真鍮）、遠くのかすみ、ミニチュアのような上下のぼかし。')),
       h('p', {}, h('b', {}, '置いたものを、ずらせるようになった。')),
       h('ul', {},
         h('li', {}, '「見る」で、置いたものを長押し → そのまま指を動かすと、ずらせる（離すと置く。ふさがっていれば赤い見本と理由が出る）。'),

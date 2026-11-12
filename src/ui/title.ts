@@ -15,7 +15,7 @@ const META = 'chemyth-v2-meta';
 type Cam = { x: number; y: number; z: number };
 /** 端末ごとの設定。セーブ枠とは別に置く */
 export interface Meta {
-  sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string; overlay?: boolean; music?: boolean; gfx?: 'high' | 'plain'; view3d?: 'on' | 'off'; goalFold?: boolean; minimap?: boolean;
+  sound?: boolean; theme?: ThemeChoice; skin?: Skin; name?: string; device?: string; overlay?: boolean; music?: boolean; gfx?: 'high' | 'mid' | 'plain'; view3d?: 'on' | 'off'; goalFold?: boolean; minimap?: boolean;
   sleep?: { on: boolean; bed: number; wake: number }; ext?: { day: string; until: number }; warned?: string;
   /** 好み（prefs.ts） */
   prefs?: Record<string, unknown>;

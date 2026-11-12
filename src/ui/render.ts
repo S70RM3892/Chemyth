@@ -20,7 +20,7 @@ import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/s
 
 export interface Camera { x: number; y: number; z: number }
 /** WebGL の合成段に渡す層。glow：光っている所（黒地に加算で描く）、mask：効果をかける所（赤＝熱のゆらぎ、青＝水面）。どちらも画面と同じ座標で描ける */
-export interface FxLayers { glow: CanvasRenderingContext2D; mask: CanvasRenderingContext2D }
+export interface FxLayers { glow: CanvasRenderingContext2D; mask: CanvasRenderingContext2D; /** 高さの層（最高画質）：地面 0.1・水 0・ベルト・装置・納品所ほど高い（明るい） */ height?: CanvasRenderingContext2D | null }
 /** 立体表示のときに渡すもの。top：2×2 の装置と納品所、その上を通るもの（線路・札）を描く層（地面と同じ座標、透明地）。
  *  screen：画面にじかに描く層（縁の道しるべ）。boxes：箱の一覧を、ここへ書き足す（1 個につき x, y, 大きさ, 高さ, r, g, b, 層） */
 export interface Three { top: CanvasRenderingContext2D; screen: CanvasRenderingContext2D; sw: number; sh: number; project(x: number, y: number, h?: number): [number, number]; boxes: number[]; /** 1 階から見た 2 階の設備（宙に浮く板として描く） */ slabs: number[] }
@@ -149,7 +149,122 @@ function buildChunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
       }
     }
   }
+  groundDetail(g, P, cx, cy);
   return cv;
+}
+
+/** 区画ごとに決まった乱数（同じ区画は、いつも同じ絵になる） */
+function rngOf(cx: number, cy: number, salt = 0) {
+  let a = (Math.imul(cx, 73856093) ^ Math.imul(cy, 19349663) ^ Math.imul(salt + 1, 83492791)) >>> 0;
+  return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+/** 黒板と方眼ノートに、うっすら残る化学の式（消した跡・鉛筆の跡） */
+const GHOSTS = ['H₂O', 'NaCl', 'CO₂', 'NH₃', 'H₂SO₄', 'CH₄', '2H₂ + O₂ → 2H₂O', 'pH = 7', 'PV = nRT', 'C₆H₁₂O₆', 'Fe₂O₃', 'Cu²⁺', 'ΔH < 0', 'mol/L', 'N₂ + 3H₂ ⇄ 2NH₃', 'Kw = 1.0×10⁻¹⁴', 'CaCO₃', 'Ag⁺ + Cl⁻ → AgCl', 'e⁻', 'HNO₃'];
+/**
+ * 地面の細部（区画の絵にためるので、毎コマの重さは増えない）。
+ * 方眼ノート：紙の繊維とむら、鉛筆の消し跡、まれにコーヒーの輪じみと、うすい式。
+ * 黒板：消し跡の渦、チョークの粉、消し残した式。
+ * 羊皮紙：繊維、しみ（褐色の斑点）、インクの飛び、うすい錬金術の印。
+ * 夜の書斎：石の床（石ごとに色が違う）、ひび、苔、青く光る魔法陣（高画質では本当に光る）。
+ */
+function groundDetail(g: CanvasRenderingContext2D, P: Palette, cx: number, cy: number) {
+  const r = rngOf(cx, cy), light = P.name === 'light', arc = P.skin === 'arcane';
+  const blob = (x: number, y: number, rad: number, rgb: string, a: number) => { const gr = g.createRadialGradient(x, y, 0, x, y, rad); gr.addColorStop(0, `rgba(${rgb},${a})`); gr.addColorStop(1, `rgba(${rgb},0)`); g.fillStyle = gr; g.fillRect(x - rad, y - rad, rad * 2, rad * 2); };
+  const fibers = (n: number, rgb: string, a: number) => {
+    g.lineWidth = 0.8; g.lineCap = 'round';
+    for (let i = 0; i < n; i++) {
+      const x = r() * SIZE, y = r() * SIZE, ang = r() * Math.PI, len = 4 + r() * 12;
+      g.strokeStyle = `rgba(${rgb},${a * (0.5 + r())})`;
+      g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(x + Math.cos(ang + 0.5) * len * 0.5, y + Math.sin(ang + 0.5) * len * 0.5, x + Math.cos(ang) * len, y + Math.sin(ang) * len); g.stroke();
+    }
+  };
+  const ghost = (rgb: string, a: number, font: string) => {
+    // 区画の端で切れないよう、文字の幅を測って、区画の中に収まる所に置く（少し傾けるので、余白を多めに）
+    const txt = GHOSTS[Math.floor(r() * GHOSTS.length)], size = 15 + Math.floor(r() * 9), rot = (r() - 0.5) * 0.25;
+    g.font = `600 ${size}px ${font}`;
+    const wd = g.measureText(txt).width, room = SIZE - wd - 40;
+    if (room < 20) return;
+    const x = 20 + r() * room, y = 30 + r() * (SIZE - 60);
+    g.save(); g.translate(x, y); g.rotate(rot);
+    g.fillStyle = `rgba(${rgb},${a})`; g.textBaseline = 'middle';
+    g.fillText(txt, 0, 0);
+    g.restore();
+  };
+  if (!arc && light) {
+    // 紙のむら（暖かい色と冷たい色の、大きくうすい斑）と繊維
+    for (let i = 0; i < 4; i++) blob(r() * SIZE, r() * SIZE, 80 + r() * 140, r() < 0.5 ? '190,170,120' : '120,150,190', 0.035);
+    fibers(70, '60,70,90', 0.06);
+    if (r() < 0.22) { const x = r() * SIZE, y = r() * SIZE; g.save(); g.translate(x, y); g.rotate(r() * Math.PI); g.scale(2.6, 0.7); blob(0, 0, 26, '70,80,100', 0.07); g.restore(); }
+    if (r() < 0.08) {
+      // コーヒーの輪じみ（ふちが濃い、途切れた輪）
+      const x = 60 + r() * (SIZE - 120), y = 60 + r() * (SIZE - 120), rad = 26 + r() * 16, a0 = r() * 6.28;
+      g.strokeStyle = 'rgba(150,105,55,0.13)'; g.lineWidth = 2.6; g.beginPath(); g.arc(x, y, rad, a0, a0 + 5.3); g.stroke();
+      g.strokeStyle = 'rgba(150,105,55,0.06)'; g.lineWidth = 7; g.beginPath(); g.arc(x, y, rad - 3, a0 + 0.4, a0 + 4.4); g.stroke();
+    }
+    if (r() < 0.3) ghost('70,80,100', 0.07, FONT_HAND);
+  } else if (!arc) {
+    // 黒板：消し跡の渦、チョークの粉、消し残した式
+    g.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const x = r() * SIZE, y = r() * SIZE, rad = 60 + r() * 120, a0 = r() * 6.28;
+      g.strokeStyle = 'rgba(235,240,230,0.025)'; g.lineWidth = 34 + r() * 30;
+      g.beginPath(); g.arc(x, y, rad, a0, a0 + 1.4 + r() * 1.6); g.stroke();
+    }
+    g.fillStyle = 'rgba(235,240,230,0.07)';
+    for (let i = 0; i < 150; i++) g.fillRect(r() * SIZE, r() * SIZE, 1 + r(), 1 + r());
+    if (r() < 0.4) ghost('235,240,230', 0.075, FONT_HAND);
+    if (r() < 0.15) ghost('243,216,107', 0.06, FONT_HAND);
+  } else if (light) {
+    // 羊皮紙：繊維、褐色のしみ、インクの飛び、うすい錬金術の印
+    fibers(80, '110,78,36', 0.07);
+    for (let i = 0; i < 5; i++) blob(r() * SIZE, r() * SIZE, 50 + r() * 120, '150,110,50', 0.05);
+    for (let k = 0; k < 2; k++) {
+      const x = r() * SIZE, y = r() * SIZE;
+      for (let i = 0; i < 9; i++) { const rr2 = 1 + r() * 3.5; g.fillStyle = `rgba(120,80,30,${0.08 + r() * 0.12})`; g.beginPath(); g.arc(x + (r() - 0.5) * 40, y + (r() - 0.5) * 40, rr2, 0, Math.PI * 2); g.fill(); }
+    }
+    if (r() < 0.18) {
+      const x = r() * SIZE, y = r() * SIZE; g.fillStyle = 'rgba(59,42,26,0.22)';
+      g.beginPath(); g.arc(x, y, 4 + r() * 4, 0, Math.PI * 2); g.fill();
+      for (let i = 0; i < 7; i++) { const a = r() * 6.28, d = 8 + r() * 22; g.beginPath(); g.arc(x + Math.cos(a) * d, y + Math.sin(a) * d, 0.8 + r() * 2, 0, Math.PI * 2); g.fill(); }
+    }
+    if (r() < 0.28) sigil(g, 60 + r() * (SIZE - 120), 60 + r() * (SIZE - 120), 34 + r() * 26, r, 'rgba(110,78,36,0.11)', 1.2);
+  } else {
+    // 夜の書斎：石の床。3 マスごとの石に、ずらした継ぎ目と色の違い、ひび、苔、まれに光る魔法陣
+    const ST = TS * 3;
+    for (let j = -1; j <= CH / 3 + 1; j++) for (let i = -1; i <= CH / 3 + 1; i++) {
+      const sx0 = i * ST + (mod(cy * 6 + j, 2) ? ST / 2 : 0), sy0 = j * ST, h0 = hash(cx * 7 + i, cy * 11 + j);
+      g.fillStyle = `rgba(${h0 < 0.5 ? '120,140,200' : '200,170,120'},${0.02 + h0 * 0.04})`;
+      g.fillRect(sx0 + 2, sy0 + 2, ST - 4, ST - 4);
+      g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = 2.5; g.strokeRect(sx0 + 1, sy0 + 1, ST - 2, ST - 2);
+      g.strokeStyle = 'rgba(160,180,255,0.05)'; g.lineWidth = 1; g.strokeRect(sx0 + 3, sy0 + 3, ST - 6, ST - 6);
+    }
+    g.strokeStyle = 'rgba(0,0,0,0.45)'; g.lineWidth = 1;
+    for (let k = 0; k < 4; k++) { let x = r() * SIZE, y = r() * SIZE; g.beginPath(); g.moveTo(x, y); for (let i = 0; i < 5; i++) { x += (r() - 0.5) * 26; y += (r() - 0.5) * 26; g.lineTo(x, y); } g.stroke(); }
+    for (let k = 0; k < 3; k++) blob(r() * SIZE, r() * SIZE, 18 + r() * 26, '70,120,80', 0.08);
+    if (r() < 0.2) {
+      const x = 70 + r() * (SIZE - 140), y = 70 + r() * (SIZE - 140), rad = 38 + r() * 22;
+      blob(x, y, rad * 1.6, '92,202,255', 0.07);
+      sigil(g, x, y, rad, r, 'rgba(120,215,255,0.55)', 1.6);
+    }
+  }
+}
+/** 錬金術の印：二重の円、目盛り、四元素の三角（火・水・空気・土）を一つ */
+function sigil(g: CanvasRenderingContext2D, x: number, y: number, rad: number, r: () => number, color: string, lw2: number) {
+  g.save(); g.translate(x, y); g.rotate(r() * Math.PI);
+  g.strokeStyle = color; g.lineWidth = lw2;
+  g.beginPath(); g.arc(0, 0, rad, 0, Math.PI * 2); g.stroke();
+  g.beginPath(); g.arc(0, 0, rad * 0.82, 0, Math.PI * 2); g.stroke();
+  g.beginPath();
+  for (let i = 0; i < 24; i++) { const a = (i / 24) * Math.PI * 2, k = i % 3 ? 0.88 : 0.94; g.moveTo(Math.cos(a) * rad * 0.82, Math.sin(a) * rad * 0.82); g.lineTo(Math.cos(a) * rad * k, Math.sin(a) * rad * k); }
+  g.stroke();
+  const kind = Math.floor(r() * 4), up = kind % 2 === 0, tr = rad * 0.55;
+  g.beginPath();
+  for (let i = 0; i < 3; i++) { const a = (up ? -Math.PI / 2 : Math.PI / 2) + (i * Math.PI * 2) / 3; g.lineTo(Math.cos(a) * tr, Math.sin(a) * tr); }
+  g.closePath(); g.stroke();
+  // 空気と土は、三角に横線が入る
+  if (kind >= 2) { const yy = (up ? 1 : -1) * tr * 0.1; g.beginPath(); g.moveTo(-tr * 0.62, yy); g.lineTo(tr * 0.62, yy); g.stroke(); }
+  g.beginPath(); g.arc(0, 0, rad * 0.12, 0, Math.PI * 2); g.stroke();
+  g.restore();
 }
 
 /** 工業スキンの床：縞鋼板、鋼板の継ぎ目と鋲、油じみ。資源地は角ばった採掘区画で、縁は危険表示 */
@@ -255,7 +370,59 @@ function buildChunkPunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
       g.beginPath(); g.arc(i * TS + dx - 0.7, j * TS + dy - 0.7, 1, 0, Math.PI * 2); g.fill();
     }
   }
+  punkDetail(g, P, cx, cy);
   return cv;
+}
+/** 工業の床の細部：排水の格子、危険表示の塗装、焦げ跡、闇では赤く光る割れ目、光では水たまり */
+function punkDetail(g: CanvasRenderingContext2D, P: Palette, cx: number, cy: number) {
+  const r = rngOf(cx, cy, 7), light = P.name === 'light';
+  const free = (x: number, y: number) => !zoneAt(cx * CH + Math.floor(x / TS), cy * CH + Math.floor(y / TS));
+  if (r() < 0.35) {
+    // 排水の格子
+    const x = Math.floor(r() * (CH - 2)) * TS + 4, y = Math.floor(r() * (CH - 2)) * TS + 4, wd = TS * 2 - 8, ht = TS - 8;
+    if (free(x, y) && free(x + wd, y + ht)) {
+      g.fillStyle = light ? 'rgba(20,24,29,0.55)' : 'rgba(0,0,0,0.85)'; g.fillRect(x, y, wd, ht);
+      g.strokeStyle = light ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.08)'; g.lineWidth = 1; g.strokeRect(x + 0.5, y + 0.5, wd - 1, ht - 1);
+      g.fillStyle = light ? '#8d969e' : '#2a2f36';
+      for (let i = 4; i < wd - 2; i += 6) g.fillRect(x + i, y + 2, 2, ht - 4);
+    }
+  }
+  if (r() < 0.2) {
+    // 危険表示の塗装（黄と黒の斜め縞の帯）
+    const x = Math.floor(r() * (CH - 4)) * TS, y = Math.floor(r() * (CH - 1)) * TS + 6, wd = TS * 4, ht = 10;
+    if (free(x, y) && free(x + wd, y)) {
+      g.save(); g.beginPath(); g.rect(x, y, wd, ht); g.clip();
+      g.fillStyle = light ? 'rgba(255,196,0,0.55)' : 'rgba(255,138,31,0.28)'; g.fillRect(x, y, wd, ht);
+      g.fillStyle = light ? 'rgba(20,24,29,0.6)' : 'rgba(0,0,0,0.7)';
+      for (let i = -ht; i < wd; i += 12) { g.beginPath(); g.moveTo(x + i, y + ht); g.lineTo(x + i + 6, y + ht); g.lineTo(x + i + 6 + ht, y); g.lineTo(x + i + ht, y); g.closePath(); g.fill(); }
+      g.restore();
+    }
+  }
+  if (!light) {
+    // 焦げ跡と、赤く光る割れ目（高画質では、光の層に拾われて本当に光る）
+    for (let k = 0; k < 2; k++) {
+      const x = r() * SIZE, y = r() * SIZE, rad = 22 + r() * 40;
+      const gr = g.createRadialGradient(x, y, 0, x, y, rad); gr.addColorStop(0, 'rgba(0,0,0,0.55)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = gr; g.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+    }
+    if (r() < 0.3) {
+      let x = r() * SIZE, y = r() * SIZE;
+      g.lineCap = 'round'; g.lineJoin = 'round';
+      const pts: [number, number][] = [[x, y]];
+      for (let i = 0; i < 6; i++) { x += (r() - 0.3) * 22; y += (r() - 0.5) * 22; pts.push([x, y]); }
+      for (const [wd, col] of [[5, 'rgba(255,90,20,0.18)'], [1.6, 'rgba(255,170,60,0.85)']] as [number, string][]) {
+        g.strokeStyle = col; g.lineWidth = wd; g.beginPath(); pts.forEach(([px, py], i) => (i ? g.lineTo(px, py) : g.moveTo(px, py))); g.stroke();
+      }
+    }
+  } else if (r() < 0.3) {
+    // 水たまり：空を映す、うすい青灰と、縁の照り
+    const x = r() * SIZE, y = r() * SIZE, rw = 20 + r() * 34, rh = 8 + r() * 12;
+    if (free(x, y)) {
+      g.save(); g.translate(x, y); g.rotate(r() * Math.PI);
+      g.fillStyle = 'rgba(120,150,175,0.28)'; g.beginPath(); g.ellipse(0, 0, rw, rh, 0, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = 'rgba(255,255,255,0.7)'; g.lineWidth = 1.2; g.beginPath(); g.ellipse(0, 0, rw, rh, 0, Math.PI * 1.1, Math.PI * 1.6); g.stroke();
+      g.restore();
+    }
+  }
 }
 
 /** 地面の 1 区画の絵。lod：0 はそのまま、1 は半分、2 は 4 分の 1 の大きさに縮めたもの。
@@ -397,6 +564,36 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   };
   const glow = (x: number, y: number, r: number, rgb: string, a: number) => shine(G, x, y, r, rgb, a);
   const heat = (x: number, y: number, r: number, a: number) => shine(M, x, y, r, '255,0,0', a);
+  const HT = view.fx?.height ?? null;
+  if (HT && z >= 7) {
+    // 高さの層：水は地面より低く（先に塗る）、そのあと設備を「明るいほうを残す」で重ねる。影とくぼみの陰りになる
+    HT.globalCompositeOperation = 'source-over';
+    if (!off) {
+      HT.fillStyle = 'rgb(0,0,0)';
+      for (let y = y0; y <= y1; y++) {
+        let run = -1;
+        for (let x = x0; x <= x1 + 1; x++) {
+          const wet = x <= x1 && waterAt(x, y);
+          if (wet && run < 0) run = x;
+          else if (!wet && run >= 0) { HT.fillRect(sx(run), gy(y), (x - run) * z, z + 0.5); run = -1; }
+        }
+      }
+    }
+    HT.globalCompositeOperation = 'lighten';
+    const fl = view.floor || 0;
+    const put = (v: number, x: number, y: number, ww: number, hh: number) => { const b = Math.round(v * 255); HT.fillStyle = `rgb(${b},${b},${b})`; HT.fillRect(sx(x), sy(y), ww * z, hh * z); };
+    for (const e of w.ents.values()) {
+      if (e.kind === 'part' || !inView(e) || floorOf(e.y) !== fl) continue;
+      const k = e.kind;
+      if (k === 'hub') continue;
+      if (k === 'belt') { if (e.dir % 2 === 0) put(0.24, e.x, e.y + 0.22, 1, 0.56); else put(0.24, e.x + 0.22, e.y, 0.56, 1); continue; }
+      if (k === 'bridge') { put(0.36, e.x + 0.12, e.y + 0.12, 0.76, 0.76); continue; }
+      const sz = sizeOf(e), pad = sz === 2 ? 0.1 : 0.13;
+      put(sz === 2 ? 0.62 : k === 'tunnel' ? 0.3 : 0.44, e.x + pad, e.y + pad, sz - pad * 2, sz - pad * 2);
+    }
+    if (!off) { const hr = hubRect(w.hubSize); put(0.95, hr.x + 0.06, hr.y + 0.06, hr.s - 0.12, hr.s - 0.12); }
+    HT.globalCompositeOperation = 'source-over';
+  }
   if (M && !off && z >= 9) {
     // 水面：海と入り江のマスを青で塗る（合成段で、さざ波ときらめきになる）
     M.fillStyle = 'rgb(0,0,255)';
@@ -971,6 +1168,27 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
     ctx.setLineDash([]);
   }
   const hr = hubRect(w.hubSize);
+  if (!off && arcane && z >= 10) {
+    // 魔術：納品所の下で、魔法陣がゆっくり回る
+    const hcx = sx(hr.x + hr.s / 2), hcy = sy(hr.y + hr.s / 2), R = (hr.s / 2 + 0.75) * z;
+    ctx.save(); ctx.translate(hcx, hcy);
+    ctx.strokeStyle = light ? 'rgba(110,78,36,0.45)' : `rgba(${P.glow},0.45)`; ctx.lineWidth = Math.max(1, z * 0.03);
+    for (const [rad, dir] of [[R, 1], [R * 0.86, -1]] as [number, number][]) {
+      ctx.save(); ctx.rotate(t * 0.12 * dir);
+      ctx.beginPath(); ctx.arc(0, 0, rad, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath();
+      for (let i = 0; i < 36; i++) { const a = (i / 36) * Math.PI * 2, k = i % 3 ? 0.96 : 0.92; ctx.moveTo(Math.cos(a) * rad, Math.sin(a) * rad); ctx.lineTo(Math.cos(a) * rad * k, Math.sin(a) * rad * k); }
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.save(); ctx.rotate(-t * 0.05);
+    ctx.beginPath();
+    for (let i = 0; i <= 6; i++) { const a = (i * 2 * Math.PI * 2) / 6 + Math.PI / 2; ctx.lineTo(Math.cos(a) * R * 0.86, Math.sin(a) * R * 0.86); }
+    ctx.globalAlpha = 0.5; ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.restore();
+    ctx.restore();
+    if (G) { G.strokeStyle = `rgba(${P.glow},${light ? 0.25 : 0.4})`; G.lineWidth = z * 0.14; G.beginPath(); G.arc(hcx, hcy, R, 0, Math.PI * 2); G.stroke(); }
+  }
   if (!off) {
     if (three) { use(T!); const c = rgb01(light ? '#8a8d93' : '#2a2023'); three.boxes.push(hr.x + 0.04, hr.y + 0.04, hr.s - 0.08, TOP_H, c[0], c[1], c[2], 1); }
     hub(ctx, P, sx(hr.x), sy(hr.y), z, hr.s, w, t);
@@ -978,6 +1196,14 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
   }
   // 納品所の口は、赤く脈打つ光。熱で上の空気がゆらぐ
   if (G && !off) { const hx2 = sx(hr.x + hr.s / 2), hy2 = sy(hr.y + hr.s / 2); glow(hx2, hy2, hr.s * z * 0.95, '255,70,40', 0.4 + 0.1 * Math.sin(t * 2.3)); heat(hx2, hy2 - hr.s * z * 0.5, hr.s * z * 0.6, 0.5); }
+  // 高画質の飾り：納品所のまわりを、光の弧が 2 重に回る（光の層だけに描くので、標準の画質は変わらない）
+  if (G && !off && z >= 10) {
+    const hx2 = sx(hr.x + hr.s / 2), hy2 = sy(hr.y + hr.s / 2), R1 = (hr.s / 2 + 0.45) * z, R2 = (hr.s / 2 + 0.7) * z;
+    G.lineCap = 'round'; G.lineWidth = Math.max(1.5, z * 0.08);
+    for (let k = 0; k < 3; k++) { const a = t * 0.7 + k * 2.094; G.strokeStyle = `rgba(${P.glow},${light ? 0.3 : 0.55})`; G.beginPath(); G.arc(hx2, hy2, R1, a, a + 0.85); G.stroke(); }
+    G.lineWidth = Math.max(1, z * 0.05);
+    for (let k = 0; k < 4; k++) { const a = -t * 0.45 + k * 1.571; G.strokeStyle = `rgba(255,110,70,${light ? 0.2 : 0.38})`; G.beginPath(); G.arc(hx2, hy2, R2, a, a + 0.45); G.stroke(); }
+  }
   // 納品所のまわりの灯り：章を 1 つ終えるごとに 1 つともる
   if (!off && z >= 12) {
     const done = chaptersDone(w.progress), n = done.length, hcx = sx(hr.x + hr.s / 2), hcy = sy(hr.y + hr.s / 2), ring = (hr.s / 2 + 1.05) * z, lr = Math.max(2.2, z * 0.09);
@@ -1312,6 +1538,8 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
 
   use(base);
   if (punk) ambient(ctx, P, cw, ch, t, dt, sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), z);
+  if (!punk && !arcane) ambientNote(ctx, G, P, cw, ch, t, dt);
+  if (arcane) ambientArcane(ctx, G, P, cw, ch, t, dt);
   if (arcane) {
     // 魔術：ゆっくり漂う青い光の粒と、四隅の暗がり
     if (!light) ctx.globalCompositeOperation = 'lighter';
@@ -1326,6 +1554,94 @@ export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: W
       const g = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.45, cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
       g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, light ? 'rgba(70,45,15,0.2)' : 'rgba(0,0,0,0.5)');
       ctx.fillStyle = g; ctx.fillRect(0, 0, cw, ch);
+    }
+  }
+}
+
+/**
+ * 文具スキンの空気。方眼ノート：窓から差す日だまりがゆっくり動き、その中で埃が光る。
+ * 黒板：チョークの粉が、ゆっくり舞い落ちる。左上から、机の灯りがあたる
+ */
+function ambientNote(ctx: CanvasRenderingContext2D, G: CanvasRenderingContext2D | null, P: Palette, cw: number, ch: number, t: number, dt: number) {
+  const light = P.name === 'light', big = Math.max(cw, ch);
+  if (light) {
+    // 日だまり：窓枠の形の、やわらかな光の台形（地図を「やわらかい光」で明るくする）
+    ctx.save();
+    ctx.globalCompositeOperation = 'soft-light';
+    ctx.translate(cw * (0.3 + 0.08 * Math.sin(t * 0.021)), ch * 0.4);
+    ctx.rotate(-0.5);
+    const gw2 = big * 0.24, gh2 = big * 0.9;
+    for (let k = 0; k < 2; k++) {
+      const ox = (k - 0.5) * gw2 * 1.15;
+      const gr = ctx.createLinearGradient(ox - gw2 / 2, 0, ox + gw2 / 2, 0);
+      gr.addColorStop(0, 'rgba(255,240,200,0)'); gr.addColorStop(0.2, 'rgba(255,240,200,0.55)'); gr.addColorStop(0.8, 'rgba(255,240,200,0.55)'); gr.addColorStop(1, 'rgba(255,240,200,0)');
+      ctx.fillStyle = gr; ctx.fillRect(ox - gw2 / 2, -gh2 / 2, gw2, gh2);
+    }
+    ctx.restore();
+    if (calm) return;
+    // 光の中の埃
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    for (const m of motes) {
+      m.y = mod(m.y - m.v * dt * 0.15, 1);
+      const x = mod(m.x + Math.sin(t * 0.25 + m.ph) * 0.02, 1) * cw, y = m.y * ch;
+      ctx.globalAlpha = 0.18 + 0.35 * (0.5 + 0.5 * Math.sin(t * 1.1 + m.ph * 2));
+      ctx.fillRect(x, y, m.s * 0.8, m.s * 0.8);
+    }
+    ctx.globalAlpha = 1;
+  } else {
+    // 机の灯り：左上から、あたたかい光
+    const lx = cw * 0.18, ly = ch * 0.12;
+    const gr = ctx.createRadialGradient(lx, ly, 0, lx, ly, big * 0.9);
+    gr.addColorStop(0, 'rgba(255,226,170,0.12)'); gr.addColorStop(0.5, 'rgba(255,226,170,0.04)'); gr.addColorStop(1, 'rgba(255,226,170,0)');
+    ctx.fillStyle = gr; ctx.fillRect(0, 0, cw, ch);
+    if (calm) return;
+    // チョークの粉
+    for (const m of motes) {
+      m.y = mod(m.y + m.v * dt * 0.25, 1);
+      const x = mod(m.x + Math.sin(t * 0.4 + m.ph) * 0.015, 1) * cw, y = m.y * ch;
+      ctx.fillStyle = `rgba(236,238,226,${0.12 + 0.2 * (0.5 + 0.5 * Math.sin(t * 0.9 + m.ph))})`;
+      ctx.beginPath(); ctx.arc(x, y, m.s * 0.7, 0, Math.PI * 2); ctx.fill();
+      if (G && m.s > 2) { G.fillStyle = 'rgba(236,238,226,0.12)'; G.fillRect(x - 2, y - 2, 4, 4); }
+    }
+  }
+}
+/**
+ * 魔術スキンの空気。羊皮紙：ろうそくの灯がゆらぎ、金の粉が立ちのぼる。
+ * 夜の書斎：星形にまたたく光の粒（高画質では光として描く）と、月明かり
+ */
+function ambientArcane(ctx: CanvasRenderingContext2D, G: CanvasRenderingContext2D | null, P: Palette, cw: number, ch: number, t: number, dt: number) {
+  const light = P.name === 'light', big = Math.max(cw, ch);
+  if (light) {
+    const fl = 0.85 + 0.1 * Math.sin(t * 7.3) + 0.05 * Math.sin(t * 13.1);
+    const gr = ctx.createRadialGradient(cw * 0.82, ch * 0.18, 0, cw * 0.82, ch * 0.18, big * 0.8);
+    gr.addColorStop(0, `rgba(255,200,120,${0.13 * fl})`); gr.addColorStop(1, 'rgba(255,200,120,0)');
+    ctx.globalCompositeOperation = 'soft-light'; ctx.fillStyle = gr; ctx.fillRect(0, 0, cw, ch); ctx.globalCompositeOperation = 'source-over';
+    if (calm) return;
+    for (const m of motes) {
+      m.y = mod(m.y - m.v * dt * 0.35, 1);
+      const x = mod(m.x + Math.sin(t * 0.6 + m.ph) * 0.02, 1) * cw, y = m.y * ch, a = 0.25 + 0.45 * (0.5 + 0.5 * Math.sin(t * 2.2 + m.ph * 3));
+      ctx.fillStyle = `rgba(200,150,60,${a})`; ctx.beginPath(); ctx.arc(x, y, m.s * 0.55, 0, Math.PI * 2); ctx.fill();
+      if (G) { G.fillStyle = `rgba(255,190,90,${a * 0.5})`; G.fillRect(x - 3, y - 3, 6, 6); }
+    }
+  } else {
+    // 月明かり：右上から、青白い帯
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.translate(cw * 0.75, 0); ctx.rotate(0.55);
+    const bw = big * 0.16;
+    const gr = ctx.createLinearGradient(-bw, 0, bw, 0);
+    gr.addColorStop(0, 'rgba(120,170,255,0)'); gr.addColorStop(0.5, 'rgba(120,170,255,0.07)'); gr.addColorStop(1, 'rgba(120,170,255,0)');
+    ctx.fillStyle = gr; ctx.fillRect(-bw, 0, bw * 2, big * 1.6);
+    ctx.restore();
+    if (calm) return;
+    // 星形にまたたく光の粒
+    for (let i = 0; i < 14; i++) {
+      const x = mod(hash(i, 71) * cw + t * 3 * (i % 2 ? 1 : -1), cw), y = mod(hash(i, 73) * ch - t * 2.5, ch);
+      const tw = Math.max(0, Math.sin(t * (1.3 + hash(i, 79)) + i * 2.1)), len = 3 + 7 * tw;
+      if (tw < 0.05) continue;
+      ctx.strokeStyle = `rgba(170,225,255,${0.55 * tw})`; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x - len, y); ctx.lineTo(x + len, y); ctx.moveTo(x, y - len); ctx.lineTo(x, y + len); ctx.stroke();
+      if (G) { G.fillStyle = `rgba(150,215,255,${0.6 * tw})`; G.fillRect(x - 2, y - 2, 4, 4); }
     }
   }
 }
