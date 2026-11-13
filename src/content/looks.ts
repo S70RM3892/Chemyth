@@ -473,7 +473,8 @@ export interface ReactionLook {
   /** 装置の札に出す、触媒や条件の短い名前。「なし」や長いものは空 */
   tag: string;
   /** 色のつく物質についての一言（「NO₂：赤褐色の気体」など）。見た目の決まっている物質だけ */
-  notes: { id: string; text: string; made: boolean }[];
+  notes: { id: string; text: string; made: boolean; form?: 'sol' | 'vap' }[];
+  // form：その場面での見え方が、物質の主な見た目と違うとき（sol 水溶液に溶けた色、vap 蒸気の色）。模試の色の問いは、その場面の色を問う
   /** 燃える反応の炎（BURN の 5 つだけ） */
   burn?: Burn;
   /** 融解した媒質の中の反応なら 1（融解塩・融解した氷晶石・アルカリ融解）。温度は T に持つ */
@@ -551,7 +552,8 @@ export function reactionLook(r: Recipe): ReactionLook {
         const text = allGas && vapour(x.id) ? `${l.vap!.word}の気体${own}`
           : dissolved(x.id) ? `水溶液中では${SOL_ION[x.id] ? ` ${SOL_ION[x.id]} の` : ''}${l.sol!.word}${own}`
           : x.made && wet && st(x.id) === 'solid' && !l.aq ? (l.metal ? `${l.word}の固体が析出する` : `${l.word}の沈殿`) : dry && l.aq ? '' : appearance(x.id);
-        return { ...x, text };
+        const form = allGas && vapour(x.id) ? ('vap' as const) : dissolved(x.id) ? ('sol' as const) : undefined;
+        return form ? { ...x, text, form } : { ...x, text };
       }).filter((x) => x.text),
     process: processOf(r.id),
     gasIn: wet ? ins.filter((s) => st(s) === 'gas' && LOOKS[s]) : [],

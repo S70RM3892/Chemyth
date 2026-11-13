@@ -88,8 +88,11 @@ export function questionsFor(r: Recipe, tag: string, count: number, rnd: () => n
   // 色
   const noted = reactionLook(r).notes.filter((n) => LOOKS[n.id] && /色/.test(LOOKS[n.id].word));
   if (noted.length) {
-    const n = pick(noted), word = LOOKS[n.id].word, pool = [...new Set(Object.values(LOOKS).map((l) => l.word))].filter((x) => x !== word && !x.includes('（'));
-    qs.push({ kind: 'choice', recipe: r.id, topic: '色', text: `反応${tag}に出てくる ${label(n.id)} の${LOOKS[n.id].aq ? '水溶液の' : ''}色を選べ。`, answer: word, choices: shuffle([word, ...shuffle(pool).slice(0, 3)]), how: `${label(n.id)}：${n.text}。` });
+    // 溶けて色を見せる物質（I₂ は水溶液中で I₃⁻ の褐色）と、熱した気体の中の蒸気（I₂ は紫色）は、その場面の色を問う（固体の色を答えにしない）
+    const n = pick(noted), l = LOOKS[n.id], form = n.form ? l[n.form] : undefined, word = form ? form.word : l.word;
+    const pool = [...new Set(Object.values(LOOKS).map((x) => x.word))].filter((x) => x !== word && !x.includes('（'));
+    const where = n.form === 'sol' ? 'が水溶液中で示す' : n.form === 'vap' ? 'の気体の' : l.aq ? 'の水溶液の' : 'の';
+    qs.push({ kind: 'choice', recipe: r.id, topic: '色', text: `反応${tag}に出てくる ${label(n.id)} ${where}色を選べ。`, answer: word, choices: shuffle([word, ...shuffle(pool).slice(0, 3)]), how: `${label(n.id)}：${n.text}。` });
   }
   // 平衡
   if (r.shift) qs.push({ kind: 'choice', recipe: r.id, topic: '化学平衡', text: `反応${tag}は可逆反応である。平衡を生成物側へ動かすのに有利な条件を選べ。`, answer: r.shift, choices: shuffle([...SHIFTS]), how: `${r.note}` });

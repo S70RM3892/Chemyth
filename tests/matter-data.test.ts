@@ -345,14 +345,14 @@ describe('色の言葉（§10.13）', () => {
     // 主な言い方（word）は、括弧の補足を除けば表にある言葉そのもの
     for (const [id, l] of Object.entries(LOOKS)) expect(COLOUR_WORDS, id).toContain(l.word.includes('（') && !COLOUR_WORDS.includes(l.word) ? l.word.split('（')[0] : l.word);
   });
-  it('模試の色の問いは、これまでどおり作れる（答えは見た目の主な言い方、選択肢は 4 つの別々の言葉）', () => {
+  it('模試の色の問いは、これまでどおり作れる（答えは見た目の言い方：主な言い方か、その場面の形の言い方。選択肢は 4 つの別々の言葉）', () => {
     let seed = 7;
     const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
     let n = 0;
     for (const r of RECIPES) for (const q of questionsFor(r, '①', 2, rnd)) {
       if (q.topic !== '色' || q.kind !== 'choice') continue;
       n++;
-      expect(Object.values(LOOKS).map((l) => l.word), r.id).toContain(q.answer);
+      expect(Object.values(LOOKS).flatMap((l) => [l.word, l.sol?.word, l.vap?.word]), r.id).toContain(q.answer);
       expect(new Set(q.choices).size, r.id).toBe(4);
       for (const c of q.choices!) expect(c.includes('（') && c !== q.answer, r.id).toBe(false);
     }
@@ -374,7 +374,7 @@ describe('反応の見た目の新しい項目（§6.C C2）', () => {
       expect([l.dry, l.gasPhase], id).toEqual([false, false]);
       expect(l.solids, id).not.toContain(LOOKS.I2.hex);
       expect(l.after, id).toBe(LOOKS.I2.sol!.hex);
-      expect(l.notes.find((n) => n.id === 'I2'), id).toEqual({ id: 'I2', made: true, text: inWater });
+      expect(l.notes.find((n) => n.id === 'I2'), id).toEqual({ id: 'I2', made: true, text: inWater, form: 'sol' });
     }
     // ヨウ素滴定：褐色から無色へ（I₂ を固体の粒として入れない）
     const io = reactionLookById('iodometry')!;
