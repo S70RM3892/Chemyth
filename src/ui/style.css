@@ -1382,7 +1382,7 @@ button.cn-st { cursor: pointer; min-height: 30px; }
 /* ===== fix:sheets ===== */
 /* 選んだものの帯：画面より広くなるときは折り返す（画面の端へ寄せる位置は、測った幅から main.ts で決める） */
 #act { flex-wrap: wrap; justify-content: center; max-width: calc(100% - 16px); }
-/* 電話の幅では、ボタンの横幅を少し詰めて、反応を組んだ装置の 7 つのボタンも 1 段に収める */
-@media (max-width: 440px) { #act button { min-width: 44px; padding: 0 10px; } html.big-btn #act button { min-width: 48px; } }
+/* 電話の幅では、ボタンの横幅を少し詰めて、反応を組んだ装置の 7 つのボタンも 1 段に収める（大きいボタンは 56px のまま。収まらなければ折り返す） */
+@media (max-width: 440px) { #act button { min-width: 44px; padding: 0 10px; } }
 /* 窓を開いたときは窓そのものへフォーカスを移す。窓には枠を出さない（中のボタンには出る） */
 #sheet:focus { outline: none; }

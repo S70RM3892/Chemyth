@@ -1053,12 +1053,6 @@ function boot(data: HotData) {
     if (goalEl.classList.contains('folded')) { sfx.tap(); setFold(false); return; }
     if (sandbox) showCaseBrief(); else showChapters(panel());
   };
-  // キーボードで札に移ったときも、Enter で押せる（Space は、ほかのボタンの上と同じく一時停止のまま）
-  goalEl.addEventListener('keydown', (ev) => {
-    if (ev.key !== 'Enter' || ev.target !== goalEl || ev.isComposing || ev.repeat) return;
-    ev.preventDefault(); ev.stopPropagation();
-    goalEl.click();
-  });
   const speedBtn = $('b-speed');
   const paintSpeed = () => { speedBtn.textContent = speed === 0 ? '⏸ 停止中' : `▶ ×${speed}`; speedBtn.classList.toggle('hot', speed !== 1); $('paused').hidden = speed !== 0 || !slot; };
   speedBtn.onclick = () => { speed = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length]; paintSpeed(); sfx.tap(); };
@@ -1079,6 +1073,8 @@ function boot(data: HotData) {
     const k = ev.key, low = k.length === 1 ? k.toLowerCase() : k;
     if (!modal.hidden) { if (k === 'Escape') { ev.preventDefault(); closeModal(); } return; }
     if (!closingEl.hidden) return;
+    // キーボードで指令の札に移ったときも、Enter で押せる（復習の札の Enter が先。Space は、ほかのボタンの上と同じく一時停止のまま）
+    if (k === 'Enter' && ev.target === goalEl && !ev.repeat) { ev.preventDefault(); goalEl.click(); return; }
     if (ev.ctrlKey || ev.metaKey) {
       // Ctrl（⌘）+ Z で元に戻す、Ctrl + Shift + Z か Ctrl + Y でやり直す。Ctrl + S で保存、Ctrl + C でコピー
       if (low === 'z' && !ev.shiftKey) { ev.preventDefault(); doUndo(); }
