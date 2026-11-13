@@ -1,11 +1,12 @@
 /**
- * 光と色調の計算（SPEC2 D2・L3・L3a・L7）。
+ * 光と色調の計算（SPEC2 D2・D4・L3・L3a・L7・L8）。
  * - 合成段（final.glsl）の LIGHT・COMPOSE・TONE を、JS でそのままなぞる見本。検査はこれで、シェーダーと同じ式を確かめる
  * - CPU で決める値：昼の光のならし（紙は正午に 標準 と同じ値）、夜の場 N、露出、熱のゆらぎと水面の格子のずれと位相
  * 作業の空間はガンマ 2：画面の値 s を s*s にして光をかけ、最後に sqrt で戻す（pow・exp・log を使わない）。
  * 8 ビットのどの値も、2 乗して平方根で戻すと元の値にもどる（fp32 で確かめてある）。
  * 物質（keep = 1）は、合成段を通っても元の絵の値のまま。夜の場 N は、標準の画質では乗算、高い画質では同じ N を光として使うので、
  * 開けた紙はどの画質でも同じ色になる。
+ * このファイルは何も読みこまない（sky.ts と light.ts がここを読む）。
  */
 
 /** 色（作業の空間なら 2 乗した値、画面の値なら 0〜1） */
@@ -69,6 +70,23 @@ export interface ToneU {
   vig: number;           // uVig：明るい見た目 ≤ 0.12、暗い見た目 ≤ 0.20（D4）
   dither: number;        // uDither：暗い見た目だけ、≤ 1.5/255
 }
+/**
+ * 色調の決まり（D4・L3・L8）：周辺減光の上限、ディザー（暗い見た目だけ、毎コマ変わる粒子の代わりの動かない PCG）、肩の始まり、
+ * 夜の露出のはば
+ */
+export const TONE_CAPS = {
+  light: { vig: 0.12, dither: 0, toneStart: 0.94 },
+  dark: { vig: 0.20, dither: 1.5 / 255, toneStart: 0.80 },
+  exposure: [1, 1.25] as const,
+} as const;
+/** 色調の値を決まりの中におさめる（周辺減光・ディザー・露出。ほかはそのまま） */
+export function capTone(u: Readonly<ToneU>, dark: boolean): ToneU {
+  const c = dark ? TONE_CAPS.dark : TONE_CAPS.light;
+  return {
+    ...u, vig: clamp(u.vig, 0, c.vig), dither: clamp(u.dither, 0, c.dither),
+    exposure: clamp(u.exposure, TONE_CAPS.exposure[0], TONE_CAPS.exposure[1]),
+  };
+}
 
 /**
  * TONE をなぞる（final.glsl の最後）。col は作業の空間の色、sRaw は物質の元の絵（画面の値）、keep は keepOf の値、
@@ -97,7 +115,7 @@ export interface LightU {
   dirCol: Readonly<RGB>;    // uDirCol：影を落とす光
   fillCol: Readonly<RGB>;   // uFillCol：回りの光
   floor: Readonly<RGB>;     // uFloor：光の床 night·floor²/露出（昼は 0）
-  pool: readonly [number, number, number];   // uPool：池の中心（画面の左上を 0 とした割合）と届く距離（CSS px）。距離 0 なら池の項を省く
+  pool: readonly [number, number, number];   // uPool：池の中心（画面の左上を 0 とした割合）と届く距離（画面の大きさと同じ単位）。距離 0 なら池の項を省く
   lampDisp: Readonly<RGB>;  // uLampDisp：池の中心の色（画面の値。白から night で混ぜたもの）
   floorDisp: Readonly<RGB>; // uFloorDisp：池の外の色（同じ）
   shadow: number; ao: number; bevel: number;   // uShadow, uAO, uBevel（tShade がないときは 0）
@@ -109,8 +127,8 @@ export interface BloomTaps { b1: Readonly<RGB>; b2: Readonly<RGB>; b3: Readonly<
 
 /**
  * LIGHT と COMPOSE と HALO をなぞる。s は場面の色（画面の値）、sh は tShade（r 影、g くぼみ、b 面の傾き 0.5 が平ら。最高でないときは null）、
- * p は画素の位置（CSS px、左上が 0）、size は画面の大きさ（CSS px）。返すのは作業の空間の色（TONE の前）。
- * シェーダーは uv と装置の画素で池の距離を測るが、割合は同じなので、ここでは CSS px で測る（uv の y は下が 0 なので、中心の y は 1 − y になる）
+ * p は画素の位置（左上が 0）、size は画面の大きさ（p・size・池の届く距離は同じ単位）。返すのは作業の空間の色（TONE の前）。
+ * シェーダーは uv と装置の画素で池の距離を測るが、割合は同じ（uv の y は下が 0 なので、シェーダーに渡す中心の y は 1 − y になる）
  */
 export function lightMirror(u: LightU, s: Readonly<RGB>, sh: Readonly<RGB> | null, keep: number, p: readonly [number, number], size: readonly [number, number], b?: BloomTaps): RGB {
   const sl = toG2(s);
@@ -148,30 +166,45 @@ export function openNorm(dir: Readonly<RGB>, fill: Readonly<RGB>): [RGB, RGB] {
 export type LightLook = 'note-light' | 'arcane-light' | 'punk-light' | 'lab-light';
 /**
  * 夜の場：灯りの色（中心）から床の色（中心から届く距離の先）へ、画面の値で直線に。どちらも目が部屋の灯りに慣れた色（白に寄せた色）。
- * 床で、紙と文字のコントラストが 7:1 を下まわらない。一様な見た目（工場の投光器・研究所の天井灯）は lamp = floor。
+ * 床で、紙と文字のコントラストが 7:1 を下まわらない（ノート 7.84・魔術 7.37・工場 7.48・研究所 9.54）。
+ * 一様な見た目（工場の投光器・研究所の天井灯）は lamp = floor。
  * keyShare：夜の開けた地面の光のうち、影を落とす分（初期値。関門で合わせる）。exposure：夜の露出（初期値、1.0〜1.25）
  */
 export interface NightSpec { lamp: string; floor: string; x: number; y: number; keyShare: number; exposure: number }
 export const NIGHT: Readonly<Record<LightLook, Readonly<NightSpec>>> = {
-  'note-light': { lamp: '#ffeedd', floor: '#b4bccc', x: 0.15, y: 0.10, keyShare: 0.6, exposure: 1.15 },    // 机の電気スタンド 2700 K
-  'arcane-light': { lamp: '#fff6ea', floor: '#c8ccd6', x: 0.10, y: 0.20, keyShare: 0.6, exposure: 1.25 },  // ろうそく 1850 K
-  'punk-light': { lamp: '#c8ccd6', floor: '#c8ccd6', x: 0.5, y: 0.5, keyShare: 0.4, exposure: 1.1 },      // 天井の投光器 4000 K
-  'lab-light': { lamp: '#d2d8e2', floor: '#d2d8e2', x: 0.5, y: 0.5, keyShare: 0.3, exposure: 1.0 },       // 天井の灯り 5000 K
+  'note-light': { lamp: '#ffeedd', floor: '#b4bccc', x: 0.15, y: 0.10, keyShare: 0.6, exposure: 1.15 },    // 机の電気スタンド 2700 K を白に寄せた色
+  'arcane-light': { lamp: '#fff6ea', floor: '#c8ccd6', x: 0.10, y: 0.20, keyShare: 0.6, exposure: 1.25 },  // ろうそく 1850 K を白に寄せた色
+  'punk-light': { lamp: '#c8ccd6', floor: '#c8ccd6', x: 0.5, y: 0.5, keyShare: 0.4, exposure: 1.1 },      // 天井の投光器 4000 K、どこも同じ
+  'lab-light': { lamp: '#d2d8e2', floor: '#d2d8e2', x: 0.5, y: 0.5, keyShare: 0.3, exposure: 1.0 },       // 天井の灯り 5000 K、どこも同じ
 };
 /** 夜の場が池の形を持たず、画面のどこでも同じか */
 export const uniformField = (f: Readonly<Pick<NightSpec, 'lamp' | 'floor'>>) => f.lamp === f.floor;
-/** 夜の場の届く距離（CSS px）：中心からいちばん遠い画面の角までの 0.7 倍 */
+/** 夜の場の届く距離（cw・ch と同じ単位）：中心からいちばん遠い画面の角までの 0.7 倍 */
 export function reachOf(x: number, y: number, cw: number, ch: number): number {
   const px = x * cw, py = y * ch;
   return 0.7 * Math.max(Math.hypot(px, py), Math.hypot(cw - px, py), Math.hypot(px, ch - py), Math.hypot(cw - px, ch - py));
 }
-/** 夜の場 N_eff の色（画面の値）：画素 (px, py)（CSS px）で N = mix(lamp, floor, 距離/届く距離) を求め、白から night で混ぜる */
-export function fieldAt(f: Readonly<Pick<NightSpec, 'lamp' | 'floor' | 'x' | 'y'>>, night: number, px: number, py: number, cw: number, ch: number): RGB {
-  const reach = reachOf(f.x, f.y, cw, ch);
-  const t = uniformField(f) || reach <= 0 ? 1 : Math.min(1, Math.hypot(px - f.x * cw, py - f.y * ch) / reach);
-  return mix3(WHITE, mix3(hexDisp(f.lamp), hexDisp(f.floor), t), night);
+/**
+ * 夜の場 N_eff の両端の色（画面の値）：白から night で、灯りの色と床の色へ。
+ * あいだの色は両端を直線に混ぜたものと同じなので、標準 の夜の絵は、この 2 色の放射状のグラデーション 1 つで描ける
+ */
+export function fieldEnds(f: Readonly<Pick<NightSpec, 'lamp' | 'floor'>>, night: number): { lamp: RGB; floor: RGB } {
+  return { lamp: mix3(WHITE, hexDisp(f.lamp), night), floor: mix3(WHITE, hexDisp(f.floor), night) };
 }
-/** 露出：昼は 1、夜に向かって見た目の夜の露出へ */
+/** 夜の場 N_eff の色（画面の値）：画素 (px, py) で N = mix(lamp, floor, 距離/届く距離) を求め、白から night で混ぜる（px・py・cw・ch は同じ単位） */
+export function fieldAt(f: Readonly<Pick<NightSpec, 'lamp' | 'floor' | 'x' | 'y'>>, night: number, px: number, py: number, cw: number, ch: number): RGB {
+  const reach = reachOf(f.x, f.y, cw, ch), e = fieldEnds(f, night);
+  const t = uniformField(f) || reach <= 0 ? 1 : Math.min(1, Math.hypot(px - f.x * cw, py - f.y * ch) / reach);
+  return mix3(e.lamp, e.floor, t);
+}
+/** LightState.field の形：灯りと床の色（16 進）、中心（画面の割合、左上が 0）、届く距離（cw・ch と同じ単位） */
+export interface Field { lamp: string; floor: string; x: number; y: number; reach: number }
+/** 見た目の夜の場。明るい見た目は昼でも返す（使うかは night で決める）。暗い見た目は null */
+export function fieldOf(look: string, cw: number, ch: number): Field | null {
+  const f = (NIGHT as Readonly<Record<string, Readonly<NightSpec> | undefined>>)[look];
+  return f ? { lamp: f.lamp, floor: f.floor, x: f.x, y: f.y, reach: reachOf(f.x, f.y, cw, ch) } : null;
+}
+/** 露出：昼は 1、夜に向かって見た目の夜の露出へ（暗い見た目は 1） */
 export const exposureOf = (f: Readonly<Pick<NightSpec, 'exposure'>> | null, night: number) => (f ? mix(1, f.exposure, night) : 1);
 
 /** 明るい見た目の、昼から夜への LIGHT の値（色調以外） */
@@ -182,25 +215,26 @@ export interface NightU {
 }
 /**
  * 昼の光（openNorm でならした dayDir・dayFill）から夜の場へ（L3・L7 の CPU 側）。
- * - 夜に向かって、影を落とす光と回りの光を、色のない割合 keyShare/露出 と (1 − keyShare)/露出 へ混ぜる。色はすべて夜の場が受け持つ
- *   （光が N より強い色みを持たない）
- * - 池のある見た目（ノート・魔術）：池の中心と届く距離（CSS px）、灯りと床の色を白から night で混ぜたものを渡す。night ≤ 0.01 では池の項を省く
+ * - 影を落とす光と回りの光を、night で色のない割合 keyShare と 1 − keyShare へ混ぜ、露出で割る（夜は keyShare/露出 と
+ *   (1 − keyShare)/露出）。色はすべて夜の場が受け持つ（光が N より強い色みを持たない）。露出をかけたあとの開けた地面の光は、
+ *   昼の光（明るさ 1）と色のない 1 を混ぜたものなので、夕方のあいだも明るさは 1 のまま
+ * - 池のある見た目（ノート・魔術）：池の中心と届く距離（cw・ch と同じ単位）、両端の色 fieldEnds を渡す。night ≤ 0.01 では池の項を省く
  * - 一様な見た目（工場・研究所）：池の項を省き、2 つの光に mix(1, N, night)² をかける
- * - 光の床 night·floor²/露出：影の中でも、床の色より暗くならない
- * 夜（night = 1）の開けた紙は、TONE で露出をかけたあと paper·N になり、標準 の乗算と同じ色になる。
+ * - 光の床 night·floor²/露出：影の中でも、床の色の明るさより暗くならない
+ * 開けた紙は、TONE で露出をかけたあと paper·N_eff（昼の色みの分を除いて）になり、標準 の乗算と同じ色になる。
  */
 export function nightLight(f: Readonly<NightSpec>, night: number, dayDir: Readonly<RGB>, dayFill: Readonly<RGB>, cw: number, ch: number): NightU {
-  const exposure = exposureOf(f, night), ks = f.keyShare / exposure, fs = (1 - f.keyShare) / exposure;
-  let dirCol: RGB = [mix(dayDir[0], ks, night), mix(dayDir[1], ks, night), mix(dayDir[2], ks, night)];
-  let fillCol: RGB = [mix(dayFill[0], fs, night), mix(dayFill[1], fs, night), mix(dayFill[2], fs, night)];
-  const lamp = hexDisp(f.lamp), floorD = hexDisp(f.floor);
-  const floor: RGB = [night * floorD[0] * floorD[0] / exposure, night * floorD[1] * floorD[1] / exposure, night * floorD[2] * floorD[2] / exposure];
+  const exposure = exposureOf(f, night), e = 1 / exposure;
+  let dirCol: RGB = [mix(dayDir[0], f.keyShare, night) * e, mix(dayDir[1], f.keyShare, night) * e, mix(dayDir[2], f.keyShare, night) * e];
+  let fillCol: RGB = [mix(dayFill[0], 1 - f.keyShare, night) * e, mix(dayFill[1], 1 - f.keyShare, night) * e, mix(dayFill[2], 1 - f.keyShare, night) * e];
+  const ends = fieldEnds(f, night), fd = hexDisp(f.floor);
+  const floor: RGB = [night * fd[0] * fd[0] * e, night * fd[1] * fd[1] * e, night * fd[2] * fd[2] * e];
   if (uniformField(f) || night <= 0.01) {
-    const n2 = uniformField(f) ? toG2(mix3(WHITE, floorD, night)) : [1, 1, 1] as RGB;
+    const n2: RGB = uniformField(f) ? toG2(ends.floor) : [1, 1, 1];
     dirCol = mul3(dirCol, n2); fillCol = mul3(fillCol, n2);
     return { dirCol, fillCol, floor, pool: [f.x, f.y, 0], lampDisp: [1, 1, 1], floorDisp: [1, 1, 1], exposure };
   }
-  return { dirCol, fillCol, floor, pool: [f.x, f.y, reachOf(f.x, f.y, cw, ch)], lampDisp: mix3(WHITE, lamp, night), floorDisp: mix3(WHITE, floorD, night), exposure };
+  return { dirCol, fillCol, floor, pool: [f.x, f.y, reachOf(f.x, f.y, cw, ch)], lampDisp: ends.lamp, floorDisp: ends.floor, exposure };
 }
 
 // ---- 熱のゆらぎと水面：整数の格子と、CPU で決めるずれと位相（L3a） ----
@@ -215,7 +249,10 @@ export function pcg2d(x: number, y: number): [number, number] {
   vx = (vx ^ (vx >>> 16)) >>> 0; vy = (vy ^ (vy >>> 16)) >>> 0;
   return [vx, vy];
 }
-/** かけ算と xorshift を 1 回ずつのハッシュ（pcg2d が ALU の見積もりに入らないときの代わり。整数の演算 8 つ） */
+/**
+ * かけ算と xorshift を 1 回ずつのハッシュ（1 つの角に整数の演算 8 つ）：
+ * h = x·0x8da6b343 ^ y·0xd8163841; h ^= h >> 16; h *= 0x7feb352d; h ^= h >> 15
+ */
 export function mxHash(x: number, y: number): number {
   let h = (Math.imul(x, 0x8da6b343) ^ Math.imul(y, 0xd8163841)) >>> 0;
   h = (h ^ (h >>> 16)) >>> 0;
@@ -224,13 +261,19 @@ export function mxHash(x: number, y: number): number {
 }
 /** 32 ビットの整数を [0, 1) に（上の 24 ビットだけ使うので、fp32 でも 1 にならない。GLSL も float(h >> 8u) * (1.0 / 16777216.0)） */
 export const u01 = (h: number) => (h >>> 8) / 16777216;
-const pcgCell = (x: number, y: number) => u01(pcg2d(x >>> 0, y >>> 0)[0]);
+/**
+ * 格子の点の値（0〜1）。ノイズの決まり（L3a）：ALU の見積もりで、今の sin のハッシュの noise() を超えないこと。
+ * pcg2d は 1 つの角に整数の演算がおよそ 18 で、4 つの角では今の noise() を超えるので、ふだんは cellMx を使う
+ */
+export const cellMx = (x: number, y: number) => u01(mxHash(x >>> 0, y >>> 0));
+/** pcg2d の .x を使う格子の点の値（ALU の見積もりが許すときだけ） */
+export const cellPcg = (x: number, y: number) => u01(pcg2d(x >>> 0, y >>> 0)[0]);
 
 /**
- * 整数の格子の値ノイズ：floor(p) に整数のずれ o を足した点のハッシュを、今の noise() と同じなめらかさで補う。
- * 格子の番号は GLSL の ivec2 と同じく 32 ビットで回る
+ * 整数の格子の値ノイズ：floor(p) に整数のずれ o を足した点のハッシュを、今の noise() と同じなめらかさ（3t² − 2t³）で補う。
+ * 格子の番号は GLSL の ivec2 と同じく 32 ビットで回る（GLSL ES 3.00 の整数は桁あふれで回る）
  */
-export function noiseI(px: number, py: number, ox = 0, oy = 0, cell: (x: number, y: number) => number = pcgCell): number {
+export function noiseI(px: number, py: number, ox = 0, oy = 0, cell: (x: number, y: number) => number = cellMx): number {
   const ix = Math.floor(px), iy = Math.floor(py);
   let fx = px - ix, fy = py - iy;
   fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
@@ -241,15 +284,66 @@ export function noiseI(px: number, py: number, ox = 0, oy = 0, cell: (x: number,
 /** 地図の原点：カメラの位置を 256 マスの倍数にそろえる（シェーダーの中の数が、大きな工場でも小さいままになる） */
 export const snapOrigin = (x: number) => Math.round(x / 256) * 256;
 /**
- * 格子のずれ（CPU、fp64）：A = f·origin + v·t を、整数 o と端数 r に分ける。f は 1 マス（または 1 画素）あたりの格子の数、v は 1 秒の流れ。
- * シェーダーは noise(f·(wp − origin) + r, o)（画面に貼りつく模様は origin = 0）。f·wp + v·t の格子と端数がそのまま保たれる
+ * 格子のずれ（CPU、fp64）：A = f·origin + v·t + c を、整数 o と端数 r に分ける。f は 1 マス（または 1 画素）あたりの格子の数、
+ * v は 1 秒の流れ（格子の数）、c は決まったずらし。シェーダーは noise(f·(wp − origin) + r, o)（画面に貼りつく模様は origin = 0）。
+ * f·wp + v·t + c の格子と端数がそのまま保たれる
  */
-export function latticeSplit(f: number, origin: number, v: number, t: number): { o: number; r: number } {
-  const a = f * origin + v * t, o = Math.floor(a);
+export function latticeSplit(f: number, origin: number, v: number, t: number, c = 0): { o: number; r: number } {
+  const a = f * origin + v * t + c, o = Math.floor(a);
   return { o, r: a - o };
 }
 /** 位相（CPU、fp64）：(f·origin + v·t) を 2π で回したもの。シェーダーは sin(f·(wp − origin) + φ)。時間がたっても跳ばない */
 export function phaseOf(f: number, origin: number, v: number, t: number): number {
   const TAU = 2 * Math.PI, a = (f * origin + v * t) % TAU;
   return a < 0 ? a + TAU : a;
+}
+
+/**
+ * 合成段のノイズ 7 つ（今の FS_FINAL の熱のゆらぎ 2・水面 n1・n2・泡・光の粒 2 の定数）。
+ * world：地図に貼りつく（f は 1 マスあたり。水面は wq = wp·1.6 の分をかけてある）か、画面に貼りつく（f は装置の 1 画素あたり）。
+ * v：1 秒の流れ（格子の数、x と y）。c：決まったずらし
+ */
+export interface NoiseCall { id: string; world: boolean; f: number; v: readonly [number, number]; c?: readonly [number, number] }
+export const NOISE_CALLS: readonly Readonly<NoiseCall>[] = [
+  { id: 'haze1', world: false, f: 0.045, v: [0, -2.2] },
+  { id: 'haze2', world: false, f: 0.07, v: [0, -3.1], c: [3.1, 0] },
+  { id: 'water1', world: true, f: 1.6 * 1.3, v: [0.35, 0.12] },
+  { id: 'water2', world: true, f: 1.6 * 2.1, v: [-0.27, 0.21] },
+  { id: 'foam', world: true, f: 1.6 * 3.0, v: [0.8, 0] },
+  { id: 'glint1', world: false, f: 0.085, v: [0.5, 0.22] },
+  { id: 'glint2', world: false, f: 0.13, v: [-0.33, 0.18] },
+];
+/**
+ * 合成段の sin の位相 5 つ（さざ波 2・底の光の網 2・泡 1）。axis：位置のどちらの成分にかかるか。f：1 マス（または 1 画素）あたりの角度、
+ * v：1 秒あたりの角度
+ */
+export interface PhaseTerm { id: string; world: boolean; f: number; axis: 0 | 1; v: number }
+export const PHASE_TERMS: readonly Readonly<PhaseTerm>[] = [
+  { id: 'ripple1', world: false, f: 0.06, axis: 0, v: 1.4 },
+  { id: 'ripple2', world: false, f: 0.08, axis: 1, v: -1.1 },
+  { id: 'caustic1', world: true, f: 1.6 * 2.6, axis: 0, v: 0.6 },
+  { id: 'caustic2', world: true, f: 1.6 * 2.3, axis: 1, v: -0.5 },
+  { id: 'foam', world: true, f: 1.6, axis: 0, v: 1.7 },
+];
+/**
+ * L3a の格子の uniform：原点（256 マスにそろえたカメラ）、カメラ − 原点（fp64 で引いてから渡す）、
+ * ivec4 uNCell[4] と vec4 uNFrac[4] に入れる整数のずれと端数（ノイズ k は 2k・2k+1 番目。最後の 2 つは使わない）。
+ * 整数のずれは 32 ビットで回る（シェーダーの格子の番号と同じ）
+ */
+export function latticeUniforms(camX: number, camY: number, t: number): { origin: [number, number]; camRel: [number, number]; cell: Int32Array; frac: Float32Array } {
+  const origin: [number, number] = [snapOrigin(camX), snapOrigin(camY)];
+  const cell = new Int32Array(16), frac = new Float32Array(16);
+  NOISE_CALLS.forEach((k, i) => {
+    for (const a of [0, 1] as const) {
+      const s = latticeSplit(k.f, k.world ? origin[a] : 0, k.v[a], t, k.c ? k.c[a] : 0);
+      cell[2 * i + a] = s.o; frac[2 * i + a] = s.r;
+    }
+  });
+  return { origin, camRel: [camX - origin[0], camY - origin[1]], cell, frac };
+}
+/** L3a の位相の uniform（vec4 uPhase[2] に PHASE_TERMS の順。最後の 3 つは使わない）。origin は latticeUniforms と同じ原点 */
+export function phaseUniforms(origin: readonly [number, number], t: number): Float32Array {
+  const out = new Float32Array(8);
+  PHASE_TERMS.forEach((p, i) => { out[i] = phaseOf(p.f, p.world ? origin[p.axis] : 0, p.v, t); });
+  return out;
 }
