@@ -21,6 +21,7 @@ import { isSep, sepSlots } from './content/sep';
 import { showMock } from './ui/mock';
 import { drawFireworks, fireworksActive, launchFireworks } from './ui/fireworks';
 import { PLAIN_LOOK, POST_PRESETS, createPost, type Post } from './ui/gl';
+import { FRAMES, geomOf, type LookName } from './ui/gfx/sky';
 import { TOP_H, camera3, heightOf, pickTile, planeSize } from './ui/three';
 import { palette } from './ui/theme';
 import { FLAMES } from './content/looks';
@@ -873,28 +874,32 @@ function boot(data: HotData) {
     store.setMeta({ goalFold: foldPref });
     paintFold();
   };
-  /** 夕暮れ：光のない所を沈め、光をよく広げる */
   /**
-   * 太陽の向き（実際の時刻）：朝は右上（東）から、昼は左上、夕方は左（西）から差す。昼は影が短く、朝夕は長い。
-   * 暗いテーマは、左上の灯りから（夜なので、影は控えめ）
+   * 光の向き・影の長さ・濃さ（gfx/sky.ts の光の枠）。地図は北が上のまま、光はいつも画面の上半分から来る。
+   * 紙の見た目（ノート・魔術）は、机の紙を部屋の南向きの窓から実際の京都の太陽が照らす（朝は左上、昼は上、夕方は右上。夜は机の灯り）。
+   * 工場は北向きの天窓、研究所と暗い見た目は天井の灯りで、真上から。「夕暮れ」を切ると、明るい見た目はその日の 14 時の光。
+   * 太陽の位置の計算は軽いが、毎コマは要らないので 1 秒ごと
    */
-  const sunNow = (light: boolean): { sun: [number, number]; len: number } => {
-    if (!light) return { sun: [-0.72, -0.69], len: 0.75 };
-    const d = new Date(), f = Math.min(1, Math.max(0, (d.getHours() + d.getMinutes() / 60 - 6) / 12));
-    const a = ((-60 - 120 * f) * Math.PI) / 180;
-    return { sun: [Math.cos(a), Math.sin(a)], len: 0.55 + 0.9 * Math.pow(Math.abs(f - 0.5) * 2, 1.6) };
+  let sunMemo = { at: -1e9, key: '', dusk: false, sun: [0, -1] as [number, number], len: 0.6, vis: 1 };
+  const sunNow = (key: string) => {
+    const now = Date.now(), dk = !!prefs().dusk;
+    if (now - sunMemo.at > 1000 || key !== sunMemo.key || dk !== sunMemo.dusk) {
+      const g = geomOf((key in FRAMES ? key : 'note-light') as LookName, new Date(now), dk);
+      sunMemo = { at: now, key, dusk: dk, sun: g.dir, len: g.len, vis: g.vis };
+    }
+    return sunMemo;
   };
   /** 毎コマの合成の設定：見た目ごとの設定に、夕暮れ・太陽・カメラ・画質の段・立体表示を重ねる */
   const duskPost = (p: (typeof POST_PRESETS)[string], time: number, d3 = false) => {
     const pal = palette(), light = pal.name === 'light', k = light ? dusk : dusk * 0.5;
-    const ultra = gfxTier === 2, s0 = sunNow(light), dpr = cv.width / Math.max(1, cw);
+    const ultra = gfxTier === 2, s0 = sunNow(pal.key), dpr = cv.width / Math.max(1, cw);
     const hr = hubRect(world.hubSize), hx = hr.x + hr.s / 2, hy = hr.y + hr.s / 2;
     const base = ultra ? p : { ...p, ...PLAIN_LOOK };
     const paper = parseInt(pal.paper.slice(1), 16), pc: [number, number, number] = [((paper >> 16) & 255) / 255, ((paper >> 8) & 255) / 255, (paper & 255) / 255];
     return {
       ...base, time, ambient: p.ambient * (1 - 0.3 * k), spill: p.spill * (1 + 0.9 * k), bloom: p.bloom * (1 + 0.25 * k), vignette: Math.min(0.6, p.vignette + 0.15 * k),
       // 平らな表示の影は、夕暮れとともに薄れる（夜は灯りだけ）。立体表示では、箱が影を落とすので使わない
-      shadow: d3 ? 0 : base.shadow * (1 - 0.8 * k), ao: d3 ? 0 : base.ao, bevel: d3 ? 0 : base.bevel,
+      shadow: d3 ? 0 : base.shadow * s0.vis * (1 - 0.8 * k), ao: d3 ? 0 : base.ao, bevel: d3 ? 0 : base.bevel,
       sun: s0.sun, sunLen: s0.len, tile: cam.z * fxK,
       godPos: [(hx - cam.x) / (cw / cam.z) + 0.5, 0.5 - (hy - cam.y - floor * 0) / (ch / cam.z)] as [number, number],
       // 雲の影は地図に貼りついている。引くと細かいしみに見えるので、1 マス 10 ピクセルより引いたら薄めて消す

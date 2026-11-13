@@ -43,12 +43,12 @@ export const BRASS = '#b8913f', BRASS_DARK = '#6b4f1f';
 
 export const PALETTES: Record<string, Palette> = {
   'note-light': {
-    key: 'note-light', skin: 'note', name: 'light', paper: '#f3f5ef', grid: '#cfdfe3', gridBold: '#a9c6ce', ink: '#1c2a48', soft: '#63718a', red: '#d23f3a', hi: '#ffe14d',
+    key: 'note-light', skin: 'note', name: 'light', paper: '#f3f5ef', grid: '#cfdfe3', gridBold: '#a9c6ce', ink: '#1c2a48', soft: '#5d6b84', red: '#d23f3a', hi: '#ffe14d',
     plate: '#ffffff', shadow: 'rgba(28,42,72,0.2)', edge: '#1c2a48', glow: '255,225,77', font: HAND,
     line: { solid: '#ead9b8', liquid: '#c8e3f2', gas: '#e4e0f4', none: '#e3e6de' },
   },
   'note-dark': {
-    key: 'note-dark', skin: 'note', name: 'dark', paper: '#1f2d27', grid: 'rgba(232,238,224,0.07)', gridBold: 'rgba(232,238,224,0.14)', ink: '#eceee2', soft: '#a3b0a2', red: '#f2938c', hi: '#f3d86b',
+    key: 'note-dark', skin: 'note', name: 'dark', paper: '#1f2d27', grid: 'rgba(232,238,224,0.07)', gridBold: 'rgba(232,238,224,0.14)', ink: '#eceee2', soft: '#aab7a9', red: '#f2938c', hi: '#f3d86b',
     plate: '#2a3b32', shadow: 'rgba(0,0,0,0.35)', edge: 'rgba(8,14,11,0.75)', glow: '243,216,107', font: HAND,
     line: { solid: '#51493a', liquid: '#2a4d5e', gas: '#403f5c', none: '#35463d' },
   },
@@ -60,7 +60,7 @@ export const PALETTES: Record<string, Palette> = {
   },
   // 羊皮紙：錬金術師の実験録。セピアのインク、真鍮の金具、ガラス管の中を青い光が流れる
   'arcane-light': {
-    key: 'arcane-light', skin: 'arcane', name: 'light', paper: '#eadfc4', grid: 'rgba(110,78,36,0.09)', gridBold: 'rgba(110,78,36,0.2)', ink: '#3b2a1a', soft: '#7c6850', red: '#a3322b', hi: '#35aef2',
+    key: 'arcane-light', skin: 'arcane', name: 'light', paper: '#eadfc4', grid: 'rgba(110,78,36,0.09)', gridBold: 'rgba(110,78,36,0.2)', ink: '#3b2a1a', soft: '#725e45', red: '#a3322b', hi: '#35aef2',
     plate: '#f7f0dc', shadow: 'rgba(70,45,15,0.26)', edge: '#3b2a1a', glow: '53,174,242', font: SERIF,
     line: { solid: '#d8c69a', liquid: '#bfe6fb', gas: '#e2dcf2', none: '#dfd4b6' },
   },
@@ -78,7 +78,7 @@ export const PALETTES: Record<string, Palette> = {
   },
   // 白の研究棟：白い陶板の床、銀の縁とガラスの装置、青緑の立体映像
   'lab-light': {
-    key: 'lab-light', skin: 'lab', name: 'light', paper: '#dfe6eb', grid: 'rgba(40,70,90,0.08)', gridBold: 'rgba(40,70,90,0.18)', ink: '#16222d', soft: '#596a77', red: '#e23d55', hi: '#11b7c9',
+    key: 'lab-light', skin: 'lab', name: 'light', paper: '#dfe6eb', grid: 'rgba(40,70,90,0.08)', gridBold: 'rgba(40,70,90,0.18)', ink: '#16222d', soft: '#546471', red: '#e23d55', hi: '#11b7c9',
     plate: '#ffffff', shadow: 'rgba(30,52,70,0.22)', edge: '#16222d', glow: '0,196,214', font: SANS,
     line: { solid: '#dfe5ea', liquid: '#a6e3ef', gas: '#ddd8f3', none: '#e4e9ed' },
   },

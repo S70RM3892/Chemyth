@@ -10,6 +10,7 @@ import { drawElement, sprite } from './token';
 import { buildChunkLab, hubLab, labAmbient, labBelts, labFrame, labHubGlow, labSelect, labZoneLabel, machineLab } from './skinLab';
 import { districtsOf, type District } from '../engine/districts';
 import { equationOf, hexOf, reactionLookById } from '../content/looks';
+import { collectCaption, dHCaption } from '../content/captions';
 import { drawScene } from './scene';
 import { planScene } from '../content/sceneplan';
 import type { Recipe } from '../content/recipes';
@@ -1537,10 +1538,12 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   if (T) use(T);
   // ---- 反応式の札：選んだ装置の下に、その装置の反応式と条件を出す。うんと近づけば、見えている装置すべてに出す ----
   {
-    const plate = (e: Ent) => {
+    const plate = (e: Ent, more = false) => {
       const r = recipeById(e.recipe);
       if (!r || e.sealed) return;
       const sz = sizeOf(e), eq = equationOf(r), cond = r.accept[0] && r.accept[0] !== 'なし' ? r.accept[0] : '';
+      // 選んだ装置には、もう 1 行：状態つきの式と ΔH（熱化学の表にある反応）、捕集装置なら集め方のわけ。文と出典は captions.ts
+      const note = more ? (dHCaption(r.id) ?? collectCaption(r.id))?.text ?? '' : '';
       const fs = Math.max(11, Math.min(15, z * 0.3));
       ctx.font = `700 ${fs}px ${FONT_MONO}`;
       let w1 = ctx.measureText(eq).width;
@@ -1548,7 +1551,9 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       if (k < 1) { ctx.font = `700 ${fs * k}px ${FONT_MONO}`; w1 = max; }
       ctx.font = `600 ${fs * 0.8}px ${FONT_UI}`;
       const w2 = cond ? Math.min(max, ctx.measureText(cond).width) : 0;
-      const wd = Math.max(w1, w2) + 18, hh = fs * (cond ? 2.7 : 1.7);
+      ctx.font = `500 ${fs * 0.74}px ${FONT_UI}`;
+      const w3 = note ? Math.min(max, ctx.measureText(note).width) : 0;
+      const wd = Math.max(w1, w2, w3) + 18, hh = fs * (cond ? 2.7 : 1.7) + (note ? fs * 1.05 : 0);
       const px = Math.max(4, Math.min(cw - wd - 4, sx(e.x + sz / 2) - wd / 2)), py = sy(e.y + sz) + z * 0.16;
       ctx.fillStyle = punk ? '#0b0d10' : P.plate;
       rr(ctx, px, py, wd, hh, punk ? 0 : 5); ctx.fill();
@@ -1558,10 +1563,11 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       ctx.font = `700 ${fs * k}px ${FONT_MONO}`;
       ctx.fillText(eq, px + wd / 2, py + fs * 0.9);
       if (cond) { ctx.font = `600 ${fs * 0.8}px ${FONT_UI}`; ctx.fillStyle = punk ? P.hi : P.red; ctx.fillText(cond, px + wd / 2, py + fs * 2.0, max); }
+      if (note) { ctx.font = `500 ${fs * 0.74}px ${FONT_UI}`; ctx.fillStyle = punk ? '#c9ccc4' : P.soft; ctx.fillText(note, px + wd / 2, py + fs * (cond ? 3.05 : 2.0), max); }
       ctx.textBaseline = 'alphabetic';
     };
     if (z >= (view.allPlates ? 34 : 70)) { for (const e of w.ents.values()) if (e.recipe && e !== view.selected && inView(e) && floorOf(e.y) === (view.floor || 0)) plate(e); }
-    if (view.selected?.recipe && inView(view.selected)) plate(view.selected);
+    if (view.selected?.recipe && inView(view.selected)) plate(view.selected, true);
   }
 
   // ---- 選んだものは蛍光ペンで囲む ----
