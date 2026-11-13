@@ -37,17 +37,24 @@ interface Mode { far: boolean; cam: Camera; cw: number; ch: number; snap: HTMLCa
 const modes = new WeakMap<HTMLCanvasElement, Mode>();
 
 /**
+ * この絵を、いまの視点で描くなら、引いた視野になるか（farBegin と同じ決め方で、状態は変えない）。
+ * 指の操作や合成段の高さの層は、FAR_Z ではなく、これで決める（7.5〜8.5 のずらし幅の中では、前の視野のまま描いているので）
+ */
+export function isFar(cv: HTMLCanvasElement, cam: Camera): boolean {
+  const m = modes.get(cv);
+  return m ? (m.far ? cam.z < FAR_LEAVE : cam.z < FAR_ENTER) : cam.z < FAR_Z;
+}
+
+/**
  * この絵を、引いた視野で描くか。切り替わった瞬間は、前のコマの絵（まだ canvas に残っている）を写しておく。
  * farEnd が、それを新しい視点に合わせて縮め、少しのあいだ重ねて消していく（ぱっと替わって見えないように）
  */
 export function farBegin(ctx: CanvasRenderingContext2D, cam: Camera, t: number, cw: number, ch: number): boolean {
-  const cv = ctx.canvas, m = modes.get(cv);
+  const cv = ctx.canvas, m = modes.get(cv), far = isFar(cv, cam);
   if (!m) {
-    const far = cam.z < FAR_Z;
     modes.set(cv, { far, cam: { ...cam }, cw, ch, snap: null, from: { ...cam }, t0: -1 });
     return far;
   }
-  const far = m.far ? cam.z < FAR_LEAVE : cam.z < FAR_ENTER;
   if (far !== m.far) {
     m.far = far;
     if (cv.width > 0 && cv.height > 0 && m.cw === cw && m.ch === ch) {

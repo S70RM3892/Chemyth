@@ -298,6 +298,8 @@ export function initBuild2(c: B2Ctx) {
 
   // ---- 自動ベルト「道」：始まりと終わりをタップすると、最短の道筋にベルトを敷く ----
   let routeA: [number, number] | null = null, preview: RouteStep[] | null = null, prevKey = '';
+  /** マウスがいまのマスに乗った時刻（見本は、少しとどまってから探す） */
+  let hoverKey = '', hoverAt = 0;
   const routeTap = (x: number, y: number) => {
     const w = c.world();
     if (!routeA) {
@@ -378,9 +380,11 @@ export function initBuild2(c: B2Ctx) {
       }
       // ---- 自動ベルト：始まりの印と、マウスの下までの道の見本 ----
       if (routeA && c.tool() === 'route') {
-        const hv = c.hover(), key = hv ? hv.join(',') : '';
-        // 見本は、近い所（120 マスまで）だけ探す（遠いと、マウスを動かすたびに重くなる）
-        if (key !== prevKey) { prevKey = key; const near = hv && Math.abs(hv[0] - routeA[0]) + Math.abs(hv[1] - routeA[1]) <= 120 && (hv[0] !== routeA[0] || hv[1] !== routeA[1]); const r = near ? findRoute(w, routeA, hv) : null; preview = r?.ok ? r.steps : null; }
+        const hv = c.hover(), key = hv ? hv.join(',') : '', now = performance.now();
+        // 見本は、近い所（120 マスまで）だけ探す（遠いと、マウスを動かすたびに重くなる）。
+        // マウスが同じマスに 90 ms とどまってから探す（動かしている間に 1 マスごとに探すと、そのたびに絵が止まる）。それまでは前の見本のまま
+        if (key !== hoverKey) { hoverKey = key; hoverAt = now; }
+        if (key !== prevKey && now - hoverAt >= 90) { prevKey = key; const near = hv && Math.abs(hv[0] - routeA[0]) + Math.abs(hv[1] - routeA[1]) <= 120 && (hv[0] !== routeA[0] || hv[1] !== routeA[1]); const r = near ? findRoute(w, routeA, hv) : null; preview = r?.ok ? r.steps : null; }
         for (const s of preview ?? []) {
           if (floorOf(s.y) !== fl) continue;
           const px = sx(s.x), py = sy(s.y);
