@@ -6,7 +6,7 @@ import { recipeById } from './recipes';
  * どの値にも出典の鍵（SPEC2 §11.2）を付ける。出典のない値は持たない（鉛の焙焼の温度など）。
  */
 
-/** 工程の種類。装置の絵の形を選ぶのに使う */
+/** 工程の種類。装置の絵の形を選ぶのに使う（S12） */
 export type ProcessKind = 'vessel' | 'cell' | 'furnace' | 'kiln' | 'pressure' | 'column';
 const FURNACE = new Set(['blast-furnace', 'copper-matte', 'copper-converter', 'zinc-roast', 'lead-roast']);
 /** 反応の工程の種類：電解槽と電池は cell、高炉・製錬・焙焼は furnace、石灰窯は kiln、高温・高圧の反応は pressure、蒸留・分留の塔は column、ほかは vessel */
@@ -16,7 +16,7 @@ export function processOf(recipeId: string): ProcessKind {
   if (r.machine === 'electrolyzer' || r.machine === 'battery') return 'cell';
   if (FURNACE.has(r.id)) return 'furnace';
   if (r.id === 'lime-kiln') return 'kiln';
-  if (r.accept[0] === '高温・高圧') return 'pressure';
+  if (r.accept.includes('高温・高圧')) return 'pressure';
   if (r.machine === 'separator' && r.accept.some((a) => a === '蒸留' || a === '分留')) return 'column';
   return 'vessel';
 }
@@ -53,9 +53,9 @@ export interface Species { n: number; f: string; st: StateMark }
 const sp = (n: number, f: string, st: StateMark): Species => ({ n, f, st });
 
 /**
- * 298 K の標準生成エンタルピー ΔfH（kJ/mol）。鍵は「化学式(状態)」。単体の基準の形は 0。
- * OS：OpenStax Chemistry 2e 付録 G。CaCO₃ は OS の値（−1220.0）ではなく ET の −1207.6 を使う（SPEC2 §10.9）。
- * NaHCO₃ と Na₂CO₃ は OS の表にないので、ET と en.wikipedia の値を使う。
+ * 298 K の標準生成エンタルピー ΔfH（kJ/mol）。鍵は「化学式(状態)」。単体の基準の形（黒鉛・斜方硫黄・黄リンなど）は 0。
+ * OS：OpenStax Chemistry 2e 付録 G（2026-11-13 に値を照合）。CaCO₃ は OS の値（−1220.0）ではなく ET の −1207.6 を使う（SPEC2 §10.9）。
+ * Na₂CO₃ と NaHCO₃ は OS の表にない：Na₂CO₃ は ET、NaHCO₃ は ET にもないので en.wikipedia「Sodium_bicarbonate」の −950.8（鍵 WNaHCO3）。
  */
 export const DHF: Record<string, { v: number; src: string }> = {
   'N2(気)': { v: 0, src: 'OS' }, 'H2(気)': { v: 0, src: 'OS' }, 'O2(気)': { v: 0, src: 'OS' }, 'Cl2(気)': { v: 0, src: 'OS' },
@@ -111,6 +111,8 @@ export function dHFromFormation(r: DhRow): number {
   }, 0);
   return sum(r.rhs) - sum(r.lhs);
 }
+/** ΔH の出典の鍵：式の物質の ΔfH の出典をまとめたもの（OS のほか、CaCO₃ は ET、NaHCO₃ は WNaHCO3） */
+export const dHSources = (r: DhRow): string[] => [...new Set([...r.lhs, ...r.rhs].map((s) => DHF[key(s)]?.src).filter((x): x is string => !!x))];
 /** 式の 1 つの物質：「3H₂(気)」「C(黒鉛)」 */
 export const speciesText = (s: Species) => `${s.n === 1 ? '' : s.n}${pretty(s.f)}(${s.st})`;
 /** 状態つきの式：「N₂(気) + 3H₂(気) → 2NH₃(気)」 */

@@ -23,7 +23,7 @@ export interface Look { hex: string; word: string; aq?: boolean; metal?: boolean
   turbid?: string;
   /** 水と混ざらない液体：水の上に浮くか、下に沈むか */
   layer?: 'top' | 'bottom';
-  /** 湿った空気の中で白い霧になるときの色 */
+  /** 湿った空気の中で白い霧になるときの色（いまは SO₃ だけで、SO₃ は無色の気体なので LOOKS ではなく PLUMES に持つ） */
   fume?: string;
   /** 空気中で自ら光る（化学発光）ときの色（第 2 ラウンドで描く） */
   glowAir?: string;
@@ -35,13 +35,20 @@ export interface Look { hex: string; word: string; aq?: boolean; metal?: boolean
   cue?: 'symbol' | 'reagent' | 'label' }
 export interface Form { hex: string; word: string }
 export type Store = 'kerosene' | 'water' | 'poly' | 'brown';
+export type Cue = NonNullable<Look['cue']>;
 
 const L = (hex: string, word: string, extra: Partial<Look> = {}): Look => ({ hex, word, ...extra });
 const F = (hex: string, word: string): Form => ({ hex, word });
 
+/*
+ * cue（色のほかの手がかり）は、同じ場面に並ぶ色どうしが、一般の色覚または 1 型・2 型の色覚の模擬で
+ * CIEDE2000 の色差 10 未満になる物質に付ける（SPEC2 §10.10。tests/matter-data.test.ts が場面ごとに確かめる）。
+ * label は、反応の札・沈殿槽の札・気体の説明が物質名を書くこと。
+ */
 export const LOOKS: Record<string, Look> = {
   // ---- 有色の気体（気体はふつう無色。色がつくのはこの 4 つ）----
-  Cl2: L('#b9cf4a', '黄緑色', { sol: F('#e3eba0', '淡黄緑色') }),
+  // 塩素水（淡黄緑色）は Fe²⁺（淡緑色）と 1 型の色覚で色差 9.5
+  Cl2: L('#b9cf4a', '黄緑色', { sol: F('#e3eba0', '淡黄緑色'), cue: 'label' }),
   // NO₂ と Br₂ の蒸気は同じ赤褐色（色差 5.0）：札の物質名で見分ける
   NO2: L('#a4532c', '赤褐色', { cue: 'label' }),
   O3: L('#a9cfe8', '淡青色'),
@@ -55,7 +62,7 @@ export const LOOKS: Record<string, Look> = {
   // ---- 単体 ----
   // SO₂ + H₂S で水の中に生じる硫黄は、細かい粒で白く濁る
   S: L('#e6cf3a', '黄色', { turbid: '#efe9c4' }),
-  // I₂ を KI 水溶液に溶かすと I₃⁻ の褐色（水の中で生じた I₂ もこの色）。I₃⁻ と Fe(OH)₃ は色差 6.8：札で見分ける
+  // I₂ を KI 水溶液に溶かすと I₃⁻ の褐色（水の中で生じた I₂ もこの色）。濃い I₃⁻ と Fe(OH)₃ は色差 6.8：札で見分ける
   I2: L('#3a2440', '黒紫色', { vap: F('#9b4fd0', '紫色'), sol: F('#c08a3a', '褐色'), cue: 'label' }),
   P4: L('#ece3a8', '淡黄色', { glowAir: '#bfe8ff' }),
   C: L('#2a2a2c', '黒色'),
@@ -76,6 +83,7 @@ export const LOOKS: Record<string, Look> = {
   PbO: L('#e2c33a', '黄色'),
   PbO2: L('#5a3a26', '褐色'),
   PbS: L('#222226', '黒色', { ppt: true }),
+  // SPEC2 §10.5 は #222226。前からの #26262a（色差 1.3、どちらも黒色）のまま
   FeS: L('#26262a', '黒色', { ppt: true }),
   ZnS: L('#f3f3ef', '白色', { ppt: true }),
   ZnO: L('#f3f3ef', '白色'),
@@ -92,11 +100,12 @@ export const LOOKS: Record<string, Look> = {
   PbCl2: L('#f4f4f1', '白色', { ppt: true }),
   Ag2S: L('#222226', '黒色', { ppt: true }),
   CuS: L('#222226', '黒色', { ppt: true }),
-  // Fe(OH)₃ は Cu₂O（8.6）・I₃⁻（6.8）・Ag₂CrO₄（6.5）と色が近い：札の物質名で見分ける
+  // Fe(OH)₃ は Cu₂O（8.6）・濃い I₃⁻（6.8）・Ag₂CrO₄（6.5）・Ag₂O（1 型 6.9）と色が近い：札の物質名で見分ける
   'Fe(OH)3': L('#9a4a26', '赤褐色', { ppt: true, cue: 'label' }),
   'Al(OH)3': L('#f2f2ee', '白色', { ppt: true }),
   'Pb(OH)2': L('#f2f2ee', '白色', { ppt: true }),
-  Ag2O: L('#6a4a32', '褐色', { ppt: true }),
+  // Ag₂O（褐色）は Ag₂CrO₄（1 型 3.0）・Fe(OH)₃（1 型 6.9）と近い
+  Ag2O: L('#6a4a32', '褐色', { ppt: true, cue: 'label' }),
   'Cu(OH)2': L('#a9cfe2', '青白色', { ppt: true }),
   PbCrO4: L('#e8c62a', '黄色', { ppt: true }),
   Ag2CrO4: L('#8f3a26', '赤褐色', { ppt: true, cue: 'label' }),
@@ -105,8 +114,8 @@ export const LOOKS: Record<string, Look> = {
   CuSO4: L('#3b82d6', '青色', { aq: true, anhyd: F('#eceae4', '白色') }),
   CuCl2: L('#3aa0c8', '青色', { aq: true, sol: F('#3aa0c8', '青色（濃いと青緑色）'), anhyd: F('#a0702a', '褐色がかった黄色') }),
   'Cu(NO3)2': L('#3b82d6', '青色', { aq: true }),
-  FeSO4: L('#b9d8b0', '淡緑色', { aq: true }),
-  FeCl2: L('#b9d8b0', '淡緑色', { aq: true }),
+  FeSO4: L('#b9d8b0', '淡緑色', { aq: true, cue: 'label' }),
+  FeCl2: L('#b9d8b0', '淡緑色', { aq: true, cue: 'label' }),
   FeCl3: L('#b98a2c', '黄褐色', { aq: true }),
   KMnO4: L('#8e2a7e', '赤紫色', { aq: true }),
   MnSO4: L('#f0dfe3', 'ほぼ無色（淡桃色）', { aq: true }),
@@ -149,19 +158,26 @@ export const PPT_IN: Record<string, { id: string; hex: string; word: string; src
 export const TURBID_WORD: Record<string, string> = { S: '白濁（淡黄白色）' };
 
 /**
- * 炎色反応の色。章を終えたときの花火は、納品所が飲み込んだ元素のこの色で上がる。
- * どの炎にも元素記号を添えて描く（sym：色のほかの手がかり。Na と Ba は 1 型の色覚で色差 1.4）。
- * Li と Sr は元素の一覧（ELEMENTS）にないので納品所は飲み込まず、flamesFed の結果は変わらない
+ * 炎色反応の色（SPEC2 §10.1）。どの炎にも元素記号を添えて描く（sym：色のほかの手がかり。Na と Ba は 1 型の色覚で色差 1.4）。
+ * FLAME_TESTS は教科書の 7 元素すべて、FLAMES はそのうちゲームの元素の一覧（ELEMENTS）にある 5 つ。
+ * 章を終えたときの花火は、納品所が飲み込んだ元素の FLAMES の色で上がる（Li と Sr は納品所が飲み込まないので FLAMES に入れない）
  */
 export interface Flame { sym: string; hex: string; word: string; nm?: string; src: string[] }
-export const FLAMES: Record<string, Flame> = {
+export const FLAME_TESTS: Record<string, Flame> = {
+  Li: { sym: 'Li', hex: '#e8283c', word: '赤色', nm: '670.8', src: ['C1', 'N2'] },
   Na: { sym: 'Na', hex: '#ffd43a', word: '黄色', nm: '589.0 / 589.6', src: ['C1', 'N2'] },
+  // 直接見ると淡い紫、コバルトガラスを通すと赤紫
   K: { sym: 'K', hex: '#c98bff', word: '赤紫色', nm: '766.5 / 769.9、404.4', src: ['C1', 'N2', 'JF'] },
   Ca: { sym: 'Ca', hex: '#ff7b3a', word: '橙赤色', src: ['C1'] },
-  Ba: { sym: 'Ba', hex: '#b9e24a', word: '黄緑色', src: ['C1'] },
-  Cu: { sym: 'Cu', hex: '#3ad9b4', word: '青緑色', src: ['C1', 'BE'] },
-  Li: { sym: 'Li', hex: '#e8283c', word: '赤色', nm: '670.8', src: ['C1', 'N2'] },
+  // Li より暗く、青みの少ない深い赤（Li と色差 14.8）
   Sr: { sym: 'Sr', hex: '#a8001e', word: '紅色（深赤色）', src: ['C1', 'FT'] },
+  Ba: { sym: 'Ba', hex: '#b9e24a', word: '黄緑色', src: ['C1'] },
+  // バイルシュタイン試験の炎も同じ色（Cl・Br・I を含むと見える。F では見えない）
+  Cu: { sym: 'Cu', hex: '#3ad9b4', word: '青緑色', src: ['C1', 'BE'] },
+};
+/** main.ts は { sym, ...FLAMES[sym] } と広げるので、型では sym を省けるようにしておく（値はどの行にもある） */
+export const FLAMES: Record<string, Omit<Flame, 'sym'> & { sym?: string }> = {
+  Na: FLAME_TESTS.Na, K: FLAME_TESTS.K, Ca: FLAME_TESTS.Ca, Ba: FLAME_TESTS.Ba, Cu: FLAME_TESTS.Cu,
 };
 /** 空気を調節したガスバーナーの青い炎（絵の色）。赤っぽい炎は不完全燃焼 [CT] */
 export const BURNER = { inner: '#4a7bff', outer: '#9fb6ff', word: '青い炎', src: ['CT'] } as const;
@@ -176,14 +192,17 @@ export interface Burn { fuel: 'S' | 'CO' | 'C' | 'P4'; flame: string; word: stri
   caption?: string;
   src: string[] }
 export const BURN: Record<string, Burn> = {
+  // 容器の中で燃える硫黄の上に描く（融けた硫黄の池は描かない：融点よりずっと高い硫黄は黒ずむ）
   'sulfur-burn': { fuel: 'S', flame: '#4a6bff', word: '青い炎', caption: 'burn:S', src: ['C30'] },
   'co-burn': { fuel: 'CO', flame: '#3d6cff', word: '青い炎', caption: 'burn:CO', src: ['C31'] },
+  // 約 900 ℃ の赤熱（§10.7 の表の色）
   'carbon-burn': { fuel: 'C', flame: '#ff5400', word: '赤熱', bed: true, src: ['D1'] },
   'coke-burn': { fuel: 'C', flame: '#ff5400', word: '赤熱', bed: true, src: ['D1'] },
   'p4-burn': { fuel: 'P4', flame: '#fff1d6', word: '明るい炎', smoke: '#f4f4f0', caption: 'burn:P4', src: ['C32'] },
 };
 /**
  * 炎を出さない反応（O₂ を使っても燃えない、または熱で光るだけ）。
+ * copper-oxide：銅は黒い CuO になる [C3]。ostwald-2：常温で進み、無色から赤褐色 [C34]。焙焼・溶錬・転炉：温度で光るだけ（§10.7）。
  * hcl-synthesis（H₂ が Cl₂ の中で燃える）は、炎の言い方の出典がそろうまで炎を描かない（SPEC2 §12）
  */
 export const NO_FLAME = ['copper-oxide', 'ostwald-2', 'zinc-roast', 'lead-roast', 'copper-matte', 'copper-converter', 'hcl-synthesis'];
@@ -191,14 +210,14 @@ export const NO_FLAME = ['copper-oxide', 'ostwald-2', 'zinc-roast', 'lead-roast'
 export const EXO = ['slaking', 'so3-absorb', 'phosphoric'];
 
 /**
- * 原子量（IUPAC CIAAW の簡略値）。気体の分子量と、空気より重いか軽いかに使う。
+ * 原子量（IUPAC CIAAW の標準原子量の簡略値）。気体の分子量と、空気より重いか軽いかに使う。
  * 模試の計算に使う丸めた原子量（mock.ts の MASS）とは別
  */
 export const ATOMIC: Record<string, number> = {
   H: 1.008, C: 12.011, N: 14.007, O: 15.999, F: 18.998, Na: 22.99, Mg: 24.305, Al: 26.982, Si: 28.085, P: 30.974, S: 32.06, Cl: 35.45,
   K: 39.098, Ca: 40.078, Cr: 51.996, Mn: 54.938, Fe: 55.845, Cu: 63.546, Zn: 65.38, Br: 79.904, Ag: 107.87, Sn: 118.71, I: 126.9, Ba: 137.33, Pb: 207.2,
 };
-/** 化学式からモル質量（g/mol）。化学式のない物質、知らない元素を含む物質は null */
+/** 化学式（formula.ts で分解する）からモル質量（g/mol）。化学式のない物質、知らない元素を含む物質は null */
 export function molarOf(id: string): number | null {
   if (!hasSub(id)) return null;
   const f = sub(id).formula;
@@ -210,7 +229,7 @@ export function molarOf(id: string): number | null {
 /** 空気の平均分子量（N₂ : O₂ = 4 : 1） */
 export const AIR = 28.8;
 export type GasClass = 'heavy' | 'light' | 'neutral';
-/** 空気より重い（M > 30.8）・軽い（M < 26.8）・ほぼ同じ（差が 2 以内） */
+/** 空気より重い（M > 30.8）・軽い（M < 26.8）・ほぼ同じ（差が 2 以内）。同じ温度で比べたときの話 */
 export const gasClass = (M: number): GasClass => (M > AIR + 2 ? 'heavy' : M < AIR - 2 ? 'light' : 'neutral');
 
 /**
@@ -222,7 +241,7 @@ export const gasClass = (M: number): GasClass => (M > AIR + 2 ? 'heavy' : M < AI
 export interface PlumeRow { hex: string | null; white?: 'smoke' | 'mist'; clearTiles?: number; air?: string; src: string[] }
 const P = (hex: string | null, src: string[], extra: Partial<PlumeRow> = {}): PlumeRow => ({ hex, src, ...extra });
 export const PLUMES: Record<string, PlumeRow> = {
-  // ---- 色のある気体 ----
+  // ---- 色のある気体（Br₂・I₂ は蒸気の色）----
   Cl2: P('#b9cf4a', ['C46']), NO2: P('#a4532c', ['C15']), O3: P('#a9cfe8', ['C16']), F2: P('#e6e2a0', ['C47']),
   Br2: P('#b0482a', ['C21']), I2: P('#9b4fd0', ['C22', 'C4']),
   // ---- 無色の気体 ----
@@ -232,12 +251,14 @@ export const PLUMES: Record<string, PlumeRow> = {
   C3H6: P(null, ['general']), C2H2: P(null, ['general']), HCHO: P(null, ['general']), CH2CHCl: P(null, ['general']), C2H4O: P(null, ['general']),
   CH3Cl: P(null, ['general']), HCN: P(null, ['general']), CH2CHCHCH2: P(null, ['general']),
   // ---- 白く見えるもの（何が白いのかを説明に書く）----
+  // 水蒸気は無色の気体。出口のすぐ上は輪、冷えて水滴（湯気）になった先だけ白い
   H2O: P('#f2f4f6', ['JYG'], { white: 'mist', clearTiles: 0.3 }),
+  // SO₃ そのものは無色。白いのは空気中の水分とできた硫酸の霧
   SO3: P('#f4f4f2', ['C48'], { white: 'mist' }),
   NH4Cl: P('#f4f4f2', ['C18', 'C45'], { white: 'smoke' }),
   P4O10: P('#f4f4f0', ['C32'], { white: 'smoke' }),
 };
-/** 煙の見た目：色（無色なら null）、分子量、空気と比べた重さ */
+/** 煙の見た目：色（無色なら null）、分子量、空気と比べた重さ（SPEC2 §5.5 の形） */
 export function plumeOf(id: string): { hex: string | null; M: number; cls: GasClass; white?: 'smoke' | 'mist'; clearTiles?: number } {
   const p = PLUMES[id], l = LOOKS[id];
   const M = molarOf(id) ?? AIR;
@@ -255,8 +276,8 @@ export const hexRgb = (hex: string) => `${parseInt(hex.slice(1, 3), 16)},${parse
 /** 色のある物質か（見た目の表にあり、無色・ほぼ無色でない）。捕集びんは中の気体で決める */
 export const colouredOf = (id: string): boolean => { const l = LOOKS[jarGas(id) ?? id]; return !!l && !/無色/.test(l.word); };
 /**
- * 反応や納品の「ぽん」の描き方。色のある生成物は、その色の吸収する煙（puff）。無色の生成物は光（light）で、
- * その色はスキンの中立の白（POP_LIGHT）を描く側が決めるので、rgb は使わない（物質の色を光にしない）
+ * 反応や納品の「ぽん」の描き方（S10）。色のある生成物は、その色の吸収する煙（puff）。無色の生成物は光（light）で、
+ * その色はスキンの中立の白（POP_LIGHT）を描く側が決めるので、rgb は使わない（物質の色を光にしない、SPEC2 §2 D6）
  */
 export function popLook(id: string): { rgb: string; mode: 'light' | 'puff' } {
   return colouredOf(id) ? { rgb: hexRgb(LOOKS[jarGas(id) ?? id].hex), mode: 'puff' } : { rgb: '255,255,255', mode: 'light' };
@@ -264,36 +285,37 @@ export function popLook(id: string): { rgb: string; mode: 'light' | 'puff' } {
 
 /**
  * 水溶液の色（SPEC2 §10.4）。hex は薄い液の色、conc は濃い液の色。ids は、その色を見た目の表（LOOKS）で持つ物質。
- * alpha はほとんど無色の液を描くときの上限。to は反応で変わったあとの色
+ * alpha はほとんど無色の液を描くときの上限。to は反応で変わったあとの色。
+ * cue は、同じ容器・沈殿槽に並ぶ色と近い液に付ける（反応の札が物質名を書く。試薬は試薬の名前）
  */
-export interface SolutionRow { word: string; hex: string | null; conc?: string; alpha?: number; to?: Form; ids?: string[]; cue?: Look['cue']; src: string[]; note?: string }
+export interface SolutionRow { word: string; hex: string | null; conc?: string; alpha?: number; to?: Form; ids?: string[]; cue?: Cue; src: string[]; note?: string }
 export const SOLUTIONS: Record<string, SolutionRow> = {
   'Cu2+': { word: '青色', hex: '#7fb6e8', conc: '#3b82d6', ids: ['CuSO4', 'Cu(NO3)2'], src: ['C5', 'C39'] },
-  CuCl2: { word: '青色（濃いと青緑色）', hex: '#3aa0c8', ids: ['CuCl2'], src: ['C20'], note: '言い方は教科書で確かめる（SPEC2 §12）' },
+  CuCl2: { word: '青色（濃いと青緑色）', hex: '#3aa0c8', ids: ['CuCl2'], cue: 'label', src: ['C20'], note: '言い方は教科書で確かめる（SPEC2 §12）' },
   'Cu(NH3)4': { word: '深青色', hex: '#1b3fa8', cue: 'reagent', src: ['C10'] },
-  'Fe2+': { word: '淡緑色', hex: '#b9d8b0', ids: ['FeSO4', 'FeCl2'], src: ['C7'] },
-  'Fe3+': { word: '黄褐色', hex: '#b98a2c', ids: ['FeCl3'], src: ['C7', 'C29'] },
+  'Fe2+': { word: '淡緑色', hex: '#b9d8b0', ids: ['FeSO4', 'FeCl2'], cue: 'label', src: ['C7'] },
+  'Fe3+': { word: '黄褐色', hex: '#b98a2c', ids: ['FeCl3'], cue: 'label', src: ['C7', 'C29'] },
   FeSCN: { word: '血赤色', hex: '#9a0a10', cue: 'label', src: ['C10'] },
-  MnO4: { word: '赤紫色', hex: '#8e2a7e', ids: ['KMnO4'], src: ['C7', 'C40'] },
-  'Mn2+': { word: 'ほぼ無色（淡桃色）', hex: '#f0dfe3', alpha: 0.15, ids: ['MnSO4', 'MnCl2'], src: ['C7'] },
+  MnO4: { word: '赤紫色', hex: '#8e2a7e', ids: ['KMnO4'], cue: 'label', src: ['C7', 'C40'] },
+  'Mn2+': { word: 'ほぼ無色（淡桃色）', hex: '#f0dfe3', alpha: 0.15, ids: ['MnSO4', 'MnCl2'], cue: 'label', src: ['C7'] },
   CrO4: { word: '黄色', hex: '#f2c81e', src: ['C5'] },
-  Cr2O7: { word: '橙赤色', hex: '#e8641e', to: F('#3f8f5a', '緑色'), src: ['GS'], note: '還元されて Cr³⁺ の緑色。言い方は分析器の検査の文（SPEC2 §12）' },
-  I3: { word: '褐色', hex: '#c08a3a', conc: '#8a4a14', ids: ['I2'], src: ['C7', 'C8'] },
+  Cr2O7: { word: '橙赤色', hex: '#e8641e', to: F('#3f8f5a', '緑色'), cue: 'label', src: ['GS'], note: '還元されて Cr³⁺ の緑色。言い方は分析器の検査の文（SPEC2 §12）' },
+  I3: { word: '褐色', hex: '#c08a3a', conc: '#8a4a14', ids: ['I2'], cue: 'label', src: ['C7', 'C8'] },
   'I2-starch': { word: '青紫色', hex: '#3b2a8a', cue: 'reagent', src: ['C22', 'C7'] },
-  'Br2-water': { word: '赤褐色（薄いと黄褐色）', hex: '#c8642a', ids: ['Br2'], src: ['C21'] },
-  'Cl2-water': { word: '淡黄緑色', hex: '#e3eba0', ids: ['Cl2'], src: ['C46'], note: '言い方は教科書で確かめる（SPEC2 §12）' },
+  'Br2-water': { word: '赤褐色（薄いと黄褐色）', hex: '#c8642a', ids: ['Br2'], cue: 'label', src: ['C21'] },
+  'Cl2-water': { word: '淡黄緑色', hex: '#e3eba0', ids: ['Cl2'], cue: 'label', src: ['C46'], note: '言い方は教科書で確かめる（SPEC2 §12）' },
   fehling: { word: '深青色', hex: '#1f4fb0', cue: 'reagent', src: ['C25'] },
   // Ag⁺・Pb²⁺・Al³⁺・Zn²⁺・Ca²⁺・Na⁺・K⁺・Ba²⁺ と、Ag・Zn・Al のアンミン錯イオン・ヒドロキシド錯イオン
   colourless: { word: '無色', hex: null, src: ['general'] },
 };
 
-/** pH 指示薬（SPEC2 §10.4、[C38]）。range は変色域 */
-export interface IndicatorInfo { name: string; acid: { hex: string | null; word: string }; mid?: Form; base: { hex: string | null; word: string }; faint?: Form; range?: [number, number]; src: string[] }
+/** pH 指示薬（SPEC2 §10.4、[C38]）。range は変色域。指示薬の色を描くときは、いつもスポイトと名前を添える（cue） */
+export interface IndicatorInfo { name: string; acid: { hex: string | null; word: string }; mid?: Form; base: { hex: string | null; word: string }; faint?: Form; range?: [number, number]; cue: Cue; src: string[] }
 export const INDICATORS: Record<string, IndicatorInfo> = {
-  pp: { name: 'フェノールフタレイン', acid: { hex: null, word: '無色' }, base: F('#ff5fa2', '赤色'), faint: F('#ffb3cf', '淡赤色'), range: [8.0, 9.8], src: ['C38'] },
-  mo: { name: 'メチルオレンジ', acid: F('#e0362a', '赤色'), base: F('#f2b81e', '黄色'), range: [3.1, 4.4], src: ['C38'] },
-  btb: { name: 'BTB', acid: F('#e8d02a', '黄色'), mid: F('#3faa5a', '緑色'), base: F('#2a6ad0', '青色'), range: [6.0, 7.6], src: ['C38'] },
-  litmus: { name: 'リトマス', acid: F('#d8404a', '赤色'), base: F('#3a5ad0', '青色'), src: ['C38'] },
+  pp: { name: 'フェノールフタレイン', acid: { hex: null, word: '無色' }, base: F('#ff5fa2', '赤色'), faint: F('#ffb3cf', '淡赤色'), range: [8.0, 9.8], cue: 'reagent', src: ['C38'] },
+  mo: { name: 'メチルオレンジ', acid: F('#e0362a', '赤色'), base: F('#f2b81e', '黄色'), range: [3.1, 4.4], cue: 'reagent', src: ['C38'] },
+  btb: { name: 'BTB', acid: F('#e8d02a', '黄色'), mid: F('#3faa5a', '緑色'), base: F('#2a6ad0', '青色'), range: [6.0, 7.6], cue: 'reagent', src: ['C38'] },
+  litmus: { name: 'リトマス', acid: F('#d8404a', '赤色'), base: F('#3a5ad0', '青色'), cue: 'reagent', src: ['C38'] },
 };
 /** 反応に加えてある指示薬（SPEC2 §10.16）。ほかの反応では指示薬を描かない */
 export interface Indicator { id: 'pp' | 'mo'; name: string; from: string | null; to: string; caption: string }
@@ -303,11 +325,12 @@ export const RECIPE_INDICATOR: Record<string, Indicator> = {
   // 酸が使われていくと、赤から黄へ
   'scrub-nh3': { id: 'mo', name: 'メチルオレンジ', from: '#e0362a', to: '#f2b81e', caption: 'indicatorMO' },
 };
-/** 触媒の見た目（SPEC2 §10.16）。alt はくり返し変わるもう一つの姿（Cu ⇄ CuO）、T は光る温度 */
+/** 触媒の見た目（SPEC2 §10.16）。alt はくり返し変わるもう一つの姿（Cu ⇄ CuO）、T は運転温度（℃、光るかどうかは spectra.ts の G） */
 export interface Catalyst { name: string; hex: string; word: string; alt?: Form; T?: number; caption?: string; src: string[] }
 export const CATALYSTS: Record<string, Catalyst> = {
   'haber-bosch': { name: 'Fe₃O₄', hex: '#26262a', word: '黒色', src: ['C41'] },
   contact: { name: 'V₂O₅', hex: '#e8a83a', word: '黄〜橙色', src: ['C23'] },
+  // 白金網そのものは銀白色の金属。800 ℃ で赤く光る
   'ostwald-1': { name: '白金網', hex: '#d4d7db', word: '銀白色', T: 800, src: ['JOS'] },
   'lab-o2': { name: 'MnO₂', hex: '#28262a', word: '黒色', src: ['C40'] },
   'lab-o2b': { name: 'MnO₂', hex: '#28262a', word: '黒色', src: ['C40'] },
@@ -317,6 +340,8 @@ export const CATALYSTS: Record<string, Catalyst> = {
 /** 保存のしかた（SPEC2 §10.15）。容器の枠に描き、中身の色は変えない。substances.ts にある物質だけ */
 export const STORE: Record<string, Store> = { Na: 'kerosene', P4: 'water', HF: 'poly', HNO3: 'brown', KMnO4: 'brown', AgNO3: 'brown', NaOH: 'poly' };
 export const STORE_SRC: Record<string, string[]> = { Na: ['JNa'], P4: ['JP4'], HF: ['JHF'], HNO3: ['JHNO3'], KMnO4: ['C8'], AgNO3: ['JAgNO3'], NaOH: ['JNaOH'] };
+/** 保存のしかたの説明（captions.ts の鍵） */
+export const STORE_CAPTION: Record<string, string> = { Na: 'storeNa', P4: 'storeP4', HF: 'storeHF', HNO3: 'storeBrown', KMnO4: 'storeBrown', AgNO3: 'storeBrown', NaOH: 'storeNaOH' };
 for (const [id, s] of Object.entries(STORE)) if (LOOKS[id]) LOOKS[id].store = s;
 /** 水と混ざらない液体の層：酢酸エチルとジエチルエーテルは浮き、ニトロベンゼン（密度 1.20）は沈む */
 export const LAYERS: Record<string, 'top' | 'bottom'> = { CH3COOC2H5: 'top', C2H5OC2H5: 'top', C6H5NO2: 'bottom' };
@@ -324,50 +349,53 @@ export const LAYERS: Record<string, 'top' | 'bottom'> = { CH3COOC2H5: 'top', C2H
 /**
  * 分析器の検査の見た目（SPEC2 §10.11）。reagent は試験管の横にいつも書く試薬の名前（青い色どうしを見分ける手がかり）。
  * before → after は試験管の色（after が null なら無色になる）。wall は銀鏡の壁のグラデーション。
- * kind：flame 白金線と炎、tube 試験管、mirror 銀鏡、bubbles 泡（無色の気体は輪）、tyndall 横からの光、spots ろ紙の斑点
+ * kind：flame 白金線と炎、tube 試験管、mirror 銀鏡、bubbles 泡（無色の気体は輪）、tyndall 横からの光、spots ろ紙の斑点。
+ * per は試料のイオンごとの色、perWord はその言い方。p1 は余力があれば描くもの。
+ * 試薬の名前はいつも描くので、色のある検査にはどれも cue がある（炎色反応は元素記号）
  */
 export interface AnalyzerRow { reagent: string; before?: string; after?: string | null; word: string;
   kind: 'flame' | 'tube' | 'mirror' | 'bubbles' | 'tyndall' | 'spots'; ppt?: boolean; phases?: 2; sym?: string; wall?: [string, string];
-  per?: Record<string, string>; cue?: Look['cue']; p1?: boolean; src: string[] }
-const flameRow = (el: string): AnalyzerRow => ({ reagent: '白金線（青い炎）', before: BURNER.inner, after: FLAMES[el].hex, word: FLAMES[el].word, kind: 'flame', sym: el, cue: 'symbol', src: ['C1'] });
-const white = (reagent: string): AnalyzerRow => ({ reagent, after: '#f4f4f1', word: '白色', kind: 'tube', ppt: true, src: ['C33', 'C56', 'C2'] });
+  per?: Record<string, string>; perWord?: Record<string, string>; cue?: Cue; p1?: boolean; src: string[] }
+const flameRow = (el: string): AnalyzerRow => ({ reagent: '白金線（青い炎）', before: BURNER.inner, after: FLAME_TESTS[el].hex, word: FLAME_TESTS[el].word, kind: 'flame', sym: el, cue: 'symbol', src: ['C1'] });
+const white = (reagent: string): AnalyzerRow => ({ reagent, after: '#f4f4f1', word: '白色', kind: 'tube', ppt: true, cue: 'reagent', src: ['C33', 'C56', 'C2'] });
 const gasRow = (reagent: string): AnalyzerRow => ({ reagent, after: null, word: '気体が発生', kind: 'bubbles', src: ['GS'] });
-const mirror: AnalyzerRow = { reagent: 'アンモニア性硝酸銀（温める）', wall: ['#d9dde2', '#8d949c'], word: '銀白色（銀鏡）', kind: 'mirror', src: ['GS'] };
-const h2s: AnalyzerRow = { reagent: 'H₂S', after: '#222226', word: '黒色（ZnS は白色）', kind: 'tube', ppt: true, per: { Zn: '#f3f3ef' }, src: ['C2', 'C37'] };
+const mirror: AnalyzerRow = { reagent: 'アンモニア性硝酸銀（温める）', wall: ['#d9dde2', '#8d949c'], word: '銀白色（銀鏡）', kind: 'mirror', cue: 'reagent', src: ['GS'] };
+const h2s: AnalyzerRow = { reagent: 'H₂S', after: '#222226', word: '黒色（ZnS は白色）', kind: 'tube', ppt: true, per: { Zn: '#f3f3ef' }, perWord: { Zn: '白色' }, cue: 'reagent', src: ['C2', 'C37'] };
 const nh3: AnalyzerRow = { reagent: 'NH₃ 水（少量 → 過剰）', before: '#a9cfe2', after: '#1b3fa8', word: '青白色 → 深青色', kind: 'tube', phases: 2, cue: 'reagent', src: ['C10'] };
 const iod: AnalyzerRow = { reagent: 'ヨウ素液', before: '#c08a3a', after: '#3b2a8a', word: '青紫色', kind: 'tube', cue: 'reagent', src: ['C22', 'C7'] };
-const brw: AnalyzerRow = { reagent: '臭素水', before: '#c8642a', after: null, word: '無色（脱色）', kind: 'tube', src: ['C21'] };
+const brw: AnalyzerRow = { reagent: '臭素水', before: '#c8642a', after: null, word: '無色（脱色）', kind: 'tube', cue: 'reagent', src: ['C21'] };
 export const ANALYZER: Record<string, AnalyzerRow> = {
   flame_y: flameRow('Na'), flame_rp: flameRow('K'), flame_or: flameRow('Ca'), flame_yg: flameRow('Ba'), flame_bg: flameRow('Cu'),
-  has_cl: { reagent: '加熱した銅線', before: BURNER.inner, after: '#3ad9b4', word: '青緑色（F 以外のハロゲン）', kind: 'flame', src: ['C1', 'BE'] },
+  has_cl: { reagent: '加熱した銅線', before: BURNER.inner, after: '#3ad9b4', word: '青緑色（F 以外のハロゲン）', kind: 'flame', cue: 'reagent', src: ['C1', 'BE'] },
   fecl3: { reagent: 'FeCl₃ 水溶液', before: '#b98a2c', after: '#5b2a8e', word: '紫色', kind: 'tube', cue: 'reagent', src: ['C29', 'GS'] },
-  iodoform: { reagent: 'I₂ と NaOH（温める）', after: '#f2d23a', word: '黄色', kind: 'tube', ppt: true, src: ['C28'] },
+  iodoform: { reagent: 'I₂ と NaOH（温める）', after: '#f2d23a', word: '黄色', kind: 'tube', ppt: true, cue: 'reagent', src: ['C28'] },
   silver: mirror, hyd_silver: mirror, oxald: mirror,
   fehling: { reagent: 'フェーリング液（加熱）', before: '#1f4fb0', after: '#b8321e', word: '赤色', kind: 'tube', ppt: true, cue: 'reagent', src: ['C25'] },
   iodine: iod, starch: { ...iod, reagent: 'デンプン水溶液' },
-  biuret: { reagent: 'NaOH と少量の CuSO₄', before: '#a9cfe2', after: '#9a3a8a', word: '赤紫色', kind: 'tube', src: ['GS'] },
-  xantho: { reagent: '濃 HNO₃（加熱）、そのあと NH₃', before: '#e6c02a', after: '#f0a020', word: '黄色 → 橙黄色', kind: 'tube', src: ['GS'] },
-  sulfur: { reagent: 'NaOH（加熱）と酢酸鉛(II)', after: '#222226', word: '黒色', kind: 'tube', ppt: true, src: ['GS', 'C2'] },
+  biuret: { reagent: 'NaOH と少量の CuSO₄', before: '#a9cfe2', after: '#9a3a8a', word: '赤紫色', kind: 'tube', cue: 'reagent', src: ['GS'] },
+  xantho: { reagent: '濃 HNO₃（加熱）、そのあと NH₃', before: '#e6c02a', after: '#f0a020', word: '黄色 → 橙黄色', kind: 'tube', cue: 'reagent', src: ['GS'] },
+  sulfur: { reagent: 'NaOH（加熱）と酢酸鉛(II)', after: '#222226', word: '黒色', kind: 'tube', ppt: true, cue: 'reagent', src: ['GS', 'C2'] },
   br2: brw, aldose: brw,
-  oxid: { reagent: '硫酸酸性 K₂Cr₂O₇（温める）', before: '#e8641e', after: '#3f8f5a', word: '橙赤色 → 緑色', kind: 'tube', src: ['GS'] },
+  oxid: { reagent: '硫酸酸性 K₂Cr₂O₇（温める）', before: '#e8641e', after: '#3f8f5a', word: '橙赤色 → 緑色', kind: 'tube', cue: 'reagent', src: ['GS'] },
   fecn: { reagent: 'K₄[Fe(CN)₆]', after: '#1f3a8a', word: '濃青色', kind: 'tube', ppt: true, cue: 'reagent', src: ['C7'] },
   hcl: white('HCl'), h2so4: white('H₂SO₄'), co3: white('(NH₄)₂CO₃'),
   h2s_acid: h2s, h2s_base: h2s,
   nh3_few: nh3, nh3_ex: nh3,
   // 残る沈殿の色は物質ごと（Fe(OH)₃・Cu(OH)₂・Ag₂O）。Al・Zn・Pb の水酸化物は溶けて無色
-  naoh_ex: { reagent: 'NaOH 水溶液（過剰）', word: '沈殿が残る', kind: 'tube', phases: 2, per: { Fe: '#9a4a26', Cu: '#a9cfe2', Ag: '#6a4a32' }, src: ['C57', 'C59'] },
+  naoh_ex: { reagent: 'NaOH 水溶液（過剰）', word: '沈殿が残る', kind: 'tube', phases: 2, per: { Fe: '#9a4a26', Cu: '#a9cfe2', Ag: '#6a4a32' },
+    perWord: { Fe: '赤褐色', Cu: '青白色', Ag: '褐色' }, cue: 'reagent', src: ['C57', 'C59'] },
   na: gasRow('金属ナトリウム'), cold_water: gasRow('水'), acid_h2: gasRow('希塩酸'), nahco3: gasRow('NaHCO₃ 水溶液'),
   ext_nahco3: gasRow('NaHCO₃ 水溶液'), gas_hcl: gasRow('希塩酸'), water_o2: gasRow('水'),
   tyndall: { reagent: '横から光', word: '光の通り道が見える', kind: 'tyndall', src: ['GS'] },
   // ---- 余力があれば描く（P1）----
-  displace_cu: { reagent: 'CuSO₄ 水溶液', before: '#3b82d6', after: '#c8733f', word: '赤色の銅が析出', kind: 'tube', p1: true, src: ['C9'] },
-  displace_ag: { reagent: 'AgNO₃ 水溶液', after: '#d9dde2', word: '銀白色の銀が析出', kind: 'tube', p1: true, src: ['C9'] },
+  displace_cu: { reagent: 'CuSO₄ 水溶液', before: '#3b82d6', after: '#c8733f', word: '赤色の銅が析出', kind: 'tube', cue: 'reagent', p1: true, src: ['C9'] },
+  displace_ag: { reagent: 'AgNO₃ 水溶液', after: '#d9dde2', word: '銀白色の銀が析出', kind: 'tube', cue: 'reagent', p1: true, src: ['C9'] },
   passive: { reagent: '濃 HNO₃', word: '変化なし（不動態）', kind: 'tube', p1: true, src: ['GS'] },
-  ox_br: { reagent: 'KBr 水溶液', after: '#c8642a', word: '赤褐色（Br₂ が遊離）', kind: 'tube', p1: true, src: ['C21'] },
-  acidic: { reagent: '青色リトマス紙', before: '#3a5ad0', after: '#d8404a', word: '赤色', kind: 'tube', p1: true, src: ['C38'] },
-  basic: { reagent: 'フェノールフタレイン', after: '#ff5fa2', word: '赤色', kind: 'tube', p1: true, cue: 'reagent', src: ['C38'] },
-  has_n: { reagent: 'ソーダ石灰（加熱）、赤色リトマス紙', before: '#d8404a', after: '#3a5ad0', word: '青色', kind: 'tube', p1: true, src: ['C38'] },
-  to_cathode: { reagent: '直流の電圧', after: '#9a4a26', word: '陰極側へ移動', kind: 'tube', p1: true, src: ['GS'] },
+  ox_br: { reagent: 'KBr 水溶液', after: '#c8642a', word: '赤褐色（Br₂ が遊離）', kind: 'tube', cue: 'reagent', p1: true, src: ['C21'] },
+  acidic: { reagent: '青色リトマス紙', before: '#3a5ad0', after: '#d8404a', word: '赤色', kind: 'tube', cue: 'reagent', p1: true, src: ['C38'] },
+  basic: { reagent: 'フェノールフタレイン', after: '#ff5fa2', word: '赤色', kind: 'tube', cue: 'reagent', p1: true, src: ['C38'] },
+  has_n: { reagent: 'ソーダ石灰（加熱）、赤色リトマス紙', before: '#d8404a', after: '#3a5ad0', word: '青色', kind: 'tube', cue: 'reagent', p1: true, src: ['C38'] },
+  to_cathode: { reagent: '直流の電圧', after: '#9a4a26', word: '陰極側へ移動', kind: 'tube', cue: 'reagent', p1: true, src: ['GS'] },
   coag_small: { reagent: '少量の電解質', word: '沈殿する（凝析）', kind: 'tube', p1: true, src: ['GS'] },
   // 電気泳動のろ紙のニンヒドリン（紫色：ゲームの札 org-ninhydrin と同じ言い方）。デンプン（6.5）・FeCl₃ とフェノール（4.4）と近いので試薬名を書く
   ninhydrin: { reagent: 'ニンヒドリン（温める）', after: '#5a3a9a', word: '紫色', kind: 'spots', cue: 'reagent', p1: true, src: ['JNH', 'GK'] },
@@ -377,7 +405,7 @@ export const ANALYZER: Record<string, AnalyzerRow> = {
 export const COLOUR_WORDS = ['白色', '黒色', '赤色', '赤褐色', '褐色', '黒褐色', '黒紫色', '紫色', '赤紫色', '青紫色', '青色', '深青色', '濃青色', '青白色', '青緑色',
   '緑色', '淡緑色', '黄緑色', '淡黄緑色', '黄色', '淡黄色', '黄褐色', '黄金色', '橙赤色', '橙色', '橙黄色', '淡青色', '淡赤色', '銀白色', '灰色', '灰黒色', '無色',
   'ほぼ無色（淡桃色）', '白色（ゲル状）', '血赤色', '紅色', '深赤色', '淡黄白色', '淡桃色'];
-/** 文の中の色の言葉（「褐色がかった黄色」なら 褐色 と 黄色） */
+/** 文の中の色の言葉（「褐色がかった黄色」なら 褐色 と 黄色。「濃いと」「光で」などの修飾や「白濁」「赤熱」は拾わない） */
 export const colourWordsIn = (text: string): string[] => text.match(/[淡濃深薄青赤黄緑紫白黒褐橙紅灰銀金血桃無]+色/g) ?? [];
 
 
@@ -416,7 +444,7 @@ export function lookSentence(id: string): string {
 
 /** 条件のうち、熱を加えるもの・光を当てるもの */
 const HEAT = /加熱|高温|融解|℃|乾留|アルカリ融解|焙焼/;
-/** 融解した塩や NaOH の中で起きる反応（水溶液ではない） */
+/** 融解した塩や NaOH の中で起きる反応（融解塩・融解した氷晶石・アルカリ融解。水溶液ではない） */
 const MELT = /融解/;
 
 /** 装置の絵と、反応の様子の説明に使う、反応の見た目 */
@@ -458,9 +486,9 @@ export interface ReactionLook {
   /** 水溶液の反応に入ってくる、見た目の決まっている気体と固体（物質 id） */
   gasIn: string[];
   solidsIn: string[];
-  /** 生じる気体の係数（同じ温度・圧力なら体積の比）。水の電気分解なら [2, 1]（H₂ : O₂） */
+  /** 生じる気体の係数を、生成物の並び順に（同じ温度・圧力なら体積の比）。水の電気分解なら [2, 1]（H₂ : O₂） */
   gasRatio: number[];
-  /** 反応エンタルピー（kJ）。数値のない反応は undefined */
+  /** 反応エンタルピー（kJ、thermo.ts の表の値）。数値のない反応は undefined */
   dH?: number;
 }
 

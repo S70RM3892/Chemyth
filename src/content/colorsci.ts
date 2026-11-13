@@ -104,15 +104,26 @@ export function oklchOfLab([L, a, b]: Lab): Lab {
 }
 /** '#rrggbb' → OKLCh */
 export const oklchOf = (hex: string): Lab => oklchOfLab(oklabOf(hex));
+/** 0〜255 の RGB → OKLCh（画素の測定用） */
+export const oklchOfRgb = (c: RGB3): Lab => oklchOfLab(oklabOfLinear(c.map((v) => toLinear(v / 255)) as RGB3));
+/** 0〜255 の RGB → HSV（色相は度 0〜360、彩度と明度は 0〜1）。無彩色の色相は 0 */
+export function hsvOfRgb([r, g, b]: RGB3): RGB3 {
+  const R = r / 255, G = g / 255, B = b / 255, mx = Math.max(R, G, B), mn = Math.min(R, G, B), d = mx - mn;
+  let h = 0;
+  if (d > 0) h = mx === R ? 60 * (((G - B) / d) % 6) : mx === G ? 60 * ((B - R) / d + 2) : 60 * ((R - G) / d + 4);
+  return [(h + 360) % 360, mx === 0 ? 0 : d / mx, mx];
+}
 /** OKLab の色差（ΔE_OK） */
 export const deltaEOK = (a: Lab, b: Lab): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 /** 2 つの色相（度）の差。0〜180 */
 export const hueDiff = (h1: number, h2: number): number => { const d = Math.abs(h1 - h2) % 360; return d > 180 ? 360 - d : d; };
 
+/** 線形 RGB の相対輝度。WCAG 2.2 の定義の係数 0.2126・0.7152・0.0722（白はちょうど 1） */
+const lumOfLinear = ([r, g, b]: RGB3): number => 0.2126 * r + 0.7152 * g + 0.0722 * b;
 /** WCAG の相対輝度（0〜1） */
-export const relLum = (hex: string): number => xyzOfLinear(linearOf(hex))[1];
+export const relLum = (hex: string): number => lumOfLinear(linearOf(hex));
 /** 0〜255 の RGB の相対輝度 */
-export const relLumRgb = (c: RGB3): number => xyzOfLinear(c.map((v) => toLinear(v / 255)) as RGB3)[1];
+export const relLumRgb = (c: RGB3): number => lumOfLinear(c.map((v) => toLinear(v / 255)) as RGB3);
 /** WCAG のコントラスト比（1〜21） */
 export function contrastRatio(y1: number, y2: number): number {
   const hi = Math.max(y1, y2), lo = Math.min(y1, y2);
@@ -135,11 +146,13 @@ export const MACHADO = {
   ],
 } as const;
 export type Cvd = keyof typeof MACHADO;
-/** 線形 RGB に行列をかける（0〜1 に切り詰める） */
-export function cvdLinear(c: RGB3, kind: Cvd): RGB3 {
+/** 線形 RGB に行列をかけたまま（切り詰めない）。純色の赤・緑・青なら、行列の列そのもの */
+export function cvdLinearRaw(c: RGB3, kind: Cvd): RGB3 {
   const M = MACHADO[kind];
-  return [0, 1, 2].map((k) => clamp(M[k][0] * c[0] + M[k][1] * c[1] + M[k][2] * c[2], 0, 1)) as RGB3;
+  return [0, 1, 2].map((k) => M[k][0] * c[0] + M[k][1] * c[1] + M[k][2] * c[2]) as RGB3;
 }
+/** 線形 RGB に行列をかける（0〜1 に切り詰める） */
+export const cvdLinear = (c: RGB3, kind: Cvd): RGB3 => cvdLinearRaw(c, kind).map((v) => clamp(v, 0, 1)) as RGB3;
 /** 1 型・2 型の色覚で見える色（8 ビットに丸めた '#rrggbb'） */
 export const cvdHex = (hex: string, kind: Cvd): string => hexOfLinear(cvdLinear(linearOf(hex), kind));
 /** 色覚の見え方ごとの CIEDE2000。kind を省くと一般の色覚 */
