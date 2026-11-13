@@ -18,7 +18,6 @@ export interface Place { lat: number; lon: number; tz: number }
 const RAD = Math.PI / 180, DAY = 86400000;
 
 // ---- 日本時間の暦 ----
-const leap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
 /** 日本時間の年・年の通し日（1 月 1 日 = 1）・0 時からの分（秒の端数つき） */
 export function jstOf(date: Date): { year: number; doy: number; minute: number } {
   const t = date.getTime() + KYOTO.tz * 3600000, year = new Date(t).getUTCFullYear(), ms = t - Date.UTC(year, 0, 1);
@@ -37,12 +36,15 @@ export function jstAt(date: Date, minute: number): Date {
 /** 太陽の中心の高度と方位（度。方位は北から時計回り）。大気の屈折は入れない（日の出・日の入りは高度 −0.833° で見る） */
 export interface Sun { el: number; az: number }
 /**
- * NOAA の一般式。year 年の通し日 doy の、その土地の時間帯の 0 時から minute 分の太陽。
- * 一年の長さは、うるう年なら 366 日（NOAA の注のとおり。うるう年でない年は SPEC2 L1 の式とまったく同じ）
+ * NOAA の一般式（SPEC2 L1 の式のとおり）。year 年の通し日 doy の、その土地の時間帯の 0 時から minute 分の太陽。
+ * 一年はうるう年でも 365 日で数える。この係数では、366 日で数えるよりうるう年の誤差が小さい（2024〜2036 年のうるう年で、
+ * Meeus の式と比べて高度 0.17° 以内。366 日で数えると 0.42° まで）。そのかわり、うるう年の大みそかの 0 時には 1 分で 0.34° 動く
+ * （ほかの日の 0 時は 0.25° まで）が、そのとき太陽は地平線の下 78° ほどにあり、光は変わらない。
+ * year は暦の名として受けとるだけで、式には使わない
  */
 export function sunPos(year: number, doy: number, minute: number, at: Place = KYOTO): Sun {
   const hour = minute / 60;
-  const g = ((2 * Math.PI) / (leap(year) ? 366 : 365)) * (doy - 1 + (hour - 12) / 24);
+  const g = ((2 * Math.PI) / 365) * (doy - 1 + (hour - 12) / 24);
   const eqt = 229.18 * (0.000075 + 0.001868 * Math.cos(g) - 0.032077 * Math.sin(g) - 0.014615 * Math.cos(2 * g) - 0.040849 * Math.sin(2 * g));
   const decl = 0.006918 - 0.399912 * Math.cos(g) + 0.070257 * Math.sin(g) - 0.006758 * Math.cos(2 * g) + 0.000907 * Math.sin(2 * g)
     - 0.002697 * Math.cos(3 * g) + 0.00148 * Math.sin(3 * g);

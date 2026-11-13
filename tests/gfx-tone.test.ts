@@ -101,8 +101,13 @@ describe('色を保つ肩（neutralCompress）', () => {
       for (let i = 0; i < 3; i++) expect(Math.abs(a[i] - b[i])).toBeLessThan(1e-8);
     }
   });
-  it('始まりより上の 1,000 色（0〜1 の色で、いちばん明るい成分が 0.94・0.80 より上）：OKLab の色相の変化は 2° 以下', () => {
-    // 画面に出したときの OKLab の色相で比べる（彩度がほとんどない色は色相を持たないので除く）。実際の最悪は 1.0°（始まり 0.80 の青）
+  it('始まりより上の 1,000 色（0〜1 の色で、いちばん明るい成分が 0.94・0.80 より上）：OKLab の色相の変化は 2° 以下。原色・2 次色は、始まり 0.94 で 2° 以下、0.80 で 3° 以下', () => {
+    // 画面に出したときの OKLab の色相で比べる（彩度がほとんどない色は色相を持たないので除く）
+    const hueShift = (x: Readonly<RGB>, start: number) => {
+      const b = okG2(neutralCompress(x, start));
+      return b.C > 0.01 ? angDiff(okG2(x).h, b.h) : 0;
+    };
+    // 決まった並びの 1,000 色（SPEC2 §7 の検査）。実際の最悪は始まり 0.94 で 0.30°、0.80 で 0.88°
     for (const start of [0.94, 0.8]) {
       const r = rng(2);
       let n = 0, worst = 0;
@@ -110,11 +115,21 @@ describe('色を保つ肩（neutralCompress）', () => {
         const x: RGB = [r(), r(), r()];
         if (Math.max(...x) < start) continue;
         n++;
-        const y = neutralCompress(x, start), a = okG2(x), b = okG2(y);
-        if (b.C > 0.01) { const d = angDiff(a.h, b.h); worst = Math.max(worst, d); expect(d, `${x}`).toBeLessThanOrEqual(2); }
+        const d = hueShift(x, start);
+        worst = Math.max(worst, d);
+        expect(d, `${x}`).toBeLessThanOrEqual(2);
       }
       expect(worst).toBeGreaterThan(0);
     }
+    // 色の立方体の角（いちばん明るさが 1 の原色・2 次色）。乱数の 1,000 色はここの近くまで来ない。
+    // 最悪は純な青 (0, 0, 1)：始まり 0.94 で 1.27°、0.80 で 2.91°（0〜1 を 1/60 きざみの格子で探しても、最悪はこの角）。
+    // つまり SPEC2 L3 の式のままの肩は、暗い見た目（始まり 0.80）の鮮やかな青で 2° をこえる。ここでは測った値でおさえる
+    const CORNERS: RGB[] = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0], [0, 1, 1], [1, 0, 1]];
+    for (const [start, bound] of [[0.94, 2], [0.8, 3]] as const) {
+      for (const x of CORNERS) expect(hueShift(x, start), `${start} ${x}`).toBeLessThanOrEqual(bound);
+    }
+    expect(hueShift([0, 0, 1], 0.94)).toBeCloseTo(1.273, 2);
+    expect(hueShift([0, 0, 1], 0.8)).toBeCloseTo(2.908, 2);
   });
   it('明るい光（いちばん明るい成分 〜64）の 1,000 色：NaN も負の値も出さず 1 を超えない。RGB の比の色相と成分の順はそのまま、白へ混ぜる分は彩度を下げるだけ', () => {
     // 白へ混ぜる分（g）は OKLab の色相を少し動かす（灯の芯のような、1 を大きく超える青で最大 20° ほど。彩度は下がる）。

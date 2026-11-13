@@ -185,14 +185,23 @@ describe('京都の太陽（NOAA の一般式）', () => {
     expect(sunPos(2026, 316, 16 * 60).az).toBeGreaterThan(180);
     for (let m = 0; m < 1440; m += 7) { const s = sunPos(2026, 316, m); expect(s.az).toBeGreaterThanOrEqual(0); expect(s.az).toBeLessThan(360); }
   });
-  it('日付と年の変わり目（うるう年は一年を 366 日として数える、NOAA の注）で、位置は跳ばない', () => {
+  it('日付と年の変わり目で、位置は跳ばない', () => {
     for (const y of [2027, 2028]) {
       const days = y === 2028 ? 366 : 365;
       for (let d = 0; d < days; d++) {
         const mid = jst(y, 1, 1 + d + 1).getTime();   // その日の終わりの 0 時
         // 天球の上の角度で比べる（真夜中は太陽が天底の近くにあり、方位だけは速く回る）
         const a = vec(sunAt(new Date(mid - MIN))), b = vec(sunAt(new Date(mid)));
-        expect(Math.acos(Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])) / RAD).toBeLessThan(0.3);
+        const step = Math.acos(Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])) / RAD;
+        // 式はうるう年でも一年を 365 日で数える（SPEC2 L1）ので、うるう年の大みそかから元日へは 1 分で 0.34° 動く
+        // （ふだんは 0.25° まで）。そのとき太陽は地平線の下 78° ほどにあり、日なたの重みは 0 なので、光は変わらない
+        const leapEnd = y === 2028 && d === days - 1;
+        expect(step, new Date(mid).toISOString()).toBeLessThan(leapEnd ? 0.4 : 0.3);
+        if (leapEnd) for (const t of [mid - MIN, mid]) {
+          const s = sunAt(new Date(t));
+          expect(s.el).toBeLessThan(-70);
+          expect(windowHand(s.el, s.az).aS).toBe(0);
+        }
       }
     }
     expect(Math.abs(sunPos(2028, 366, 12 * 60).el - sunPos(2027, 365, 12 * 60).el)).toBeLessThan(0.5);
