@@ -1329,7 +1329,6 @@ function boot(data: HotData) {
     paintArea();
     const t = TOOLS.find((x) => x.id === id)!;
     for (const [k, el] of buttons) { el.classList.toggle('on', k === tool); el.setAttribute('aria-pressed', String(k === tool)); }
-    showPicked();
     tip.replaceChildren(h('b', {}, clone ? `${t.name}をコピー中` : t.name), clone ? 'タップした場所に、同じ設定のものを貼りつける。ほかの道具を選ぶとやめる。' : t.tip);
     // 説明は選んだ直後だけ出して、じきに消す（出しっぱなしだと下側が地図をふさぐ）
     tip.hidden = false;
@@ -1338,6 +1337,8 @@ function boot(data: HotData) {
     paintOpts();
     paintFold();
     b2.picked(id);
+    // 棚を送るのは最後に（向きのボタンや最近の道具が出たり消えたりして、棚の幅が変わったあとで測る）
+    showPicked();
   };
   let tipTimer = 0;
   /** 道具ごとの切り替え（棚の右端）：ベルトは引く本数、設備は置く向き */
@@ -1369,13 +1370,15 @@ function boot(data: HotData) {
   let tab = GROUPS.some((g) => g.id === store.meta().tab) ? store.meta().tab! : 'move';
   const tabs = h('div', { id: 'tabs' }, ...GROUPS.map((g) => h('button', { type: 'button', id: `tab-${g.id}`, onclick: () => { tab = g.id; store.setMeta({ tab }); paintTabs(); sfx.tap(); } }, g.name)));
   bar.before(tabs);
+  // 棚を送るのは、開く棚が替わったときだけ（★ をつけ外ししただけで描き直したときは、送らない。長押しした道具が見えなくなる）
+  let tabShown = '';
   function paintTabs() {
     for (const g of GROUPS) {
       $(`tab-${g.id}`).classList.toggle('on', g.id === tab);
       for (const id of g.tools) buttons.get(id)?.classList.toggle('off', g.id !== tab);
     }
     b2.paintTabs(tab);
-    showPicked();
+    if (tab !== tabShown) { tabShown = tab; showPicked(); }
   }
   /** 選んだ道具が、棚の見えている所の外（横に送った先）にあれば、見える所まで送る。いまの棚にないときは、棚の頭へ（狭い画面では、棚の一部しか見えない） */
   function showPicked() {

@@ -1398,8 +1398,9 @@ button.cn-st { cursor: pointer; min-height: 30px; }
 /* 上と下に出す札の位置は、settings2.ts（watchLayout）が測った値で決める：--top-b は指令の札と上の帯の下の端、--band-b は範囲選択の帯・コピー中の帯の下の端（「停止中」・実績の札・上に出す通知は、その下に重ねずに出す）、--dock-h は下の道具の段（説明と棚）の高さ。
    下の札（通知・復習の札・小地図・場所のボタン）は、ふだんは 104px（棚と 1 行の説明の上）。説明が折り返したり、ボタンや文字を大きくして段が高くなったら、その上へ */
 #app { --dock-b: max(104px, calc(var(--dock-h, 96px) + 8px)); }
-/* 復習の札は、上へ伸びても指令の札と上の帯にかからない高さまで（入らない問いは札の中を送る。低い画面でも 140px は残す） */
-#rvcard { max-height: max(140px, min(56vh, calc(100% - (var(--top-b, 64px) + var(--dock-b) + 16px) / var(--z, 1)))); }
+/* 復習の札は、上へ伸びても指令の札と上の帯にかからない高さまで（入らない問いは札の中を送る。低い画面でも 140px は残す）。
+   上の端は --rv-top（札が出ているあいだは、指令の札の行が増えたり減ったりしても動かさない。settings2.ts） */
+#rvcard { max-height: max(140px, min(56vh, calc(100% - (var(--rv-top, var(--top-b, 64px)) + var(--dock-b) + 16px) / var(--z, 1)))); }
 /* 「停止中」の帯も、真ん中寄せのまま画面の幅まで使う（半分の幅で折り返さない） */
 #paused { width: max-content; max-width: calc(100% - 32px); }
 /* 上の帯は、ボタンだけが押せる（折り返した帯の箱の空いた所は、下の地図や指令の札へ通す）。狭い画面の帯は、横に送るので箱ごと押せる */
@@ -1415,7 +1416,7 @@ html.hand-left #app.z2-l-full:not(.z2-r-full) #zoom2 { left: auto; right: var(--
   html.card-right #app.mini-fit:has(#marks:not([hidden])) #rvcard { bottom: calc((var(--dock-b) + 40px) / var(--z, 1)); }
 }
 @media (max-width: 640px) {
-  #rvcard { max-height: max(140px, min(46vh, calc(100% - (var(--top-b, 64px) + var(--dock-b) + 16px) / var(--z, 1)))); }
+  #rvcard { max-height: max(140px, min(46vh, calc(100% - (var(--rv-top, var(--top-b, 64px)) + var(--dock-b) + 16px) / var(--z, 1)))); }
   /* 狭い棚では、最近の道具を出さない（出すと、いまの棚の道具が 1 つ分も見えなくなる。よく使う道具は ★ の棚へ） */
   #recent { display: none; }
   /* 通知は拡大しない（文字だけ大きくする）ので、位置も倍率で割らない */
