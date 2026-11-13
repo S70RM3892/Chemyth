@@ -263,7 +263,8 @@ export function initBuild2(c: B2Ctx) {
     const e = c.selected();
     if (!e || !pausable(e)) return;
     if (lock) { lockNote(); return; }
-    if (e.off) delete e.off; else e.off = true;
+    // 欄を消さずに空にする（欄を消すと、その設備だけデータの形が変わり、読むのが遅くなる）
+    e.off = e.off ? undefined : true;
     dirty = true; c.save(); sfx.tap();
     c.toast(e.off ? `${nameOf(e.kind)}を止めた。物も受け取らない。▶ で動かす。` : `${nameOf(e.kind)}を動かした。`, 2000);
   };
@@ -519,7 +520,7 @@ export function initBuild2(c: B2Ctx) {
     const inp = h('input', { type: 'text', class: 'memo-in', id: 'memo-in', value: e.memo ?? '', maxLength: 12, placeholder: '例：NH₃ 1 号', autocomplete: 'off', ariaLabel: 'この設備の名前' }) as HTMLInputElement;
     inp.onchange = () => {
       const v = inp.value.trim().slice(0, 12);
-      if (v) e.memo = v; else delete e.memo;
+      e.memo = v || undefined;
       dirty = true; c.save();
       c.toast(v ? `名前を「${v}」にした。地図に小さく出る。` : '名前を消した。', 1600);
     };

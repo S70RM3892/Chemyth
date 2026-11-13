@@ -251,3 +251,83 @@ describe('置いた・消したあとの、正面の設備の覚え書き', () =
     expect(addRail(w, [300, 300], [301, 300])).toBe(true);
   });
 });
+
+describe('とても大きな工場：計算をまとめる', () => {
+  /** 採取機 → 廃棄口の組を n 組ならべた工場（海の上：海水が採れる） */
+  const farm = (n: number) => {
+    const w = newWorld();
+    let made = 0;
+    for (let i = 0; made < n; i++) {
+      const x = 400 + (i % 80) * 2, y = 400 + Math.floor(i / 80) * 2;
+      if (place(w, 'extractor', x, y, 0) === null && place(w, 'vent', x + 1, y, 0) === null) made++;
+    }
+    return w;
+  };
+  const vented = (w: World) => Object.values(w.vented).reduce((a, b) => a + b, 0);
+  it('採取機が 3000 台を超えると 4 歩に 1 回まとめて進めるが、採れる数は 1 台あたり同じ', () => {
+    const small = farm(40), big = farm(3200);
+    for (let i = 0; i < 30 * 40; i++) { step(small, 1 / 30); step(big, 1 / 30); small.fx.length = 0; big.fx.length = 0; }
+    const a = vented(small) / 40, b = vented(big) / 3200;
+    expect(a).toBeGreaterThan(20);
+    expect(Math.abs(b - a) / a).toBeLessThan(0.03);
+    // 稼働率も同じように上がっている
+    expect(at(big, 400, 400)!.u).toBeGreaterThan(0.9);
+  });
+  it('飾りの出来事（煙など）は、1 歩に決まった数まで。数の記録は、すべて残る', () => {
+    const w = farm(400);
+    let most = 0;
+    for (let i = 0; i < 300; i++) { step(w, 1 / 30); most = Math.max(most, w.fx.length); w.fx.length = 0; }
+    expect(most).toBeGreaterThan(0);
+    expect(most).toBeLessThanOrEqual(48);
+    expect(vented(w)).toBeGreaterThan(400 * 5);
+  });
+  it('セーブ：設備は、すべての欄を同じ並びで持つ形で読み込まれ、書き出しには空の欄・覚え書きが出ない。読んで書いても変わらない', () => {
+    const w = newWorld();
+    place(w, 'extractor', 300, 300, 0); place(w, 'belt', 301, 300, 0); place(w, 'separator', 302, 300, 0);
+    station(w, 310, 300, 'in'); station(w, 330, 300, 'out');
+    at(w, 310, 300)!.buf = Array(50).fill('N2');
+    for (let i = 0; i < 200; i++) step(w, 1 / 60);
+    const s1 = serialize(w);
+    const entsPart = s1.slice(s1.indexOf('"ents":'), s1.indexOf(',"chapter"'));
+    expect(entsPart.length).toBeGreaterThan(100);
+    expect(entsPart).not.toMatch(/"(nb|nbRev|pl|own|rt|rtRev|rtVer|res|resAt)"/);
+    expect(entsPart).not.toMatch(/:null[,}]|:false[,}]/);
+    const r = deserialize(s1)!;
+    const keys = (e: Ent) => Object.keys(e).join(',');
+    const real = [...r.ents.values()].filter((e) => e.kind !== 'part' && e.kind !== 'hub');
+    expect(new Set(real.map(keys)).size).toBe(1);
+    // 2×2 の設備の残りのマスは、設備そのものを指している
+    expect(at(r, 311, 301)).toBe(at(r, 310, 300));
+    const strip = (s: string) => s.replace(/"savedAt":\d+/, '');
+    // 読み込むと、納品所は並びの最後に置き直され、荷の「動かした歩」は 0 に戻る（これまでどおり）。そのあとは、読んで書いても同じ
+    const s2 = serialize(r);
+    expect(strip(serialize(deserialize(s2)!))).toBe(strip(s2));
+  });
+});
+
+describe('自動の仮線路をまとめて描く', () => {
+  it('同じ行・同じ列を通る仮線路は 1 本になり、どの仮線路の道筋も含む', async () => {
+    const { autoRuns } = await import('../src/ui/railruns');
+    const w = newWorld();
+    const ins: Ent[] = [], outs: Ent[] = [];
+    for (let i = 0; i < 40; i++) ins.push(station(w, 500 + (i % 8) * 6, 500 + Math.floor(i / 8) * 4, 'in', 9));
+    for (let i = 0; i < 3; i++) outs.push(station(w, 600 + i * 4, 480, 'out', 9));
+    const a = autoRuns(w);
+    expect(a.pairs).toBe(120);
+    expect(a.list.map((l) => l.ch)).toEqual([9]);
+    const runs = a.list[0].runs;
+    // 横の線は積む駅の行ごと（ずらしは 5 とおり）、縦の線は「降ろす駅 × ずらし」まで：1 本ずつ描くより、ずっと少ない
+    expect(runs.length / 4).toBeLessThan(40 + 3 * 5 + 1);
+    const on = (x0: number, y0: number, x1: number, y1: number) => {
+      for (let k = 0; k < runs.length; k += 4) if (runs[k] <= Math.min(x0, x1) + 1e-9 && runs[k + 2] >= Math.max(x0, x1) - 1e-9 && runs[k + 1] <= Math.min(y0, y1) + 1e-9 && runs[k + 3] >= Math.max(y0, y1) - 1e-9) return true;
+      return false;
+    };
+    for (const e of ins) for (const d of outs) {
+      const pts = railOf(w, e, d)!.pts;
+      for (let i = 1; i < pts.length; i++) expect(on(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]), `${e.x},${e.y} → ${d.x},${d.y} 区間 ${i}`).toBe(true);
+    }
+    // 線路でつなぐと、その駅の仮線路は消える
+    layRail(w, [[ins[0].x + 2, ins[0].y], [outs[0].x - 1, ins[0].y], [outs[0].x - 1, outs[0].y]]);
+    expect(autoRuns(w).pairs).toBeLessThan(120);
+  });
+});

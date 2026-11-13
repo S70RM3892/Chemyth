@@ -500,8 +500,12 @@ export const RECIPES: Recipe[] = [
     'アニリンに無水酢酸を作用させると、アミド結合 –NH–CO– をもつアセトアニリドになる。かつて解熱剤に使われた。'),
 ];
 
+/** id から反応を引く表（装置は 1 歩ごとに自分の反応を引くので、端から探さない） */
+let byId: Map<string, Recipe> | null = null;
 export function recipeById(id: string | undefined): Recipe | undefined {
-  return RECIPES.find((r) => r.id === id);
+  if (id === undefined) return undefined;
+  if (!byId || byId.size !== RECIPES.length) { byId = new Map(); for (const r of RECIPES) if (!byId.has(r.id)) byId.set(r.id, r); }
+  return byId.get(id);
 }
 
 /** 電子を除いた生成物 */

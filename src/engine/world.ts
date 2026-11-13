@@ -61,11 +61,21 @@ export const SOURCE_HOLD = 12;
  *  これより長く動けない荷は「詰まっている」とみなして上乗せを断り、後ろへ詰まっていく（行き先のない副生成物は、これで装置を止める） */
 export const JAM_SEC = 2;
 
+/** 装置の段取り：1 歩ごとに引き直さなくてよいものを、まとめておく */
+export interface MachinePlan {
+  r: Recipe; rid: string; oo: string[]; os: number[] | undefined; dir: number; x: number; y: number;
+  /** 出口ごと：生成物の係数、出す先のマスと向き、出す先の設備（設備の顔ぶれ tRev のときのもの） */
+  k: number[]; tx: number[]; ty: number[]; td: Dir[]; t: (Ent | null)[]; tRev: number;
+}
 export interface Ent {
   /** 採取機が採る資源の覚え書き（場所 resAt のときの値。セーブには書かない） */
   res?: string; resAt?: number;
   /** 正面の設備の覚え書き（設備の顔ぶれ nbRev のときのもの。セーブには書かない） */
   nb?: Ent | null; nbRev?: number;
+  /** 大きな装置の残りのマス（part）が指す、装置そのもの（ref と同じもの。セーブには書かない） */
+  own?: Ent;
+  /** 装置の段取りの覚え書き（反応・出口の場所と係数。設定・向き・場所が変わったら作り直す。セーブには書かない） */
+  pl?: MachinePlan;
   kind: Kind;
   x: number;
   y: number;
@@ -760,14 +770,35 @@ export class EntMap extends Map<string, Ent> {
 export function at(w: World, x: number, y: number): Ent | undefined {
   const m = w.ents as EntMap;
   const e = m.num && inNum(x, y) ? m.num.get(numKey(x, y)) : m.get(key(x, y));
-  return e?.kind === 'part' ? w.ents.get(e.ref!) : e;
+  return e?.kind === 'part' ? e.own ?? w.ents.get(e.ref!) : e;
 }
 export const sizeOf = (e: Ent) => (e.big ? 2 : 1);
 export const footprint = (x: number, y: number, size: number): [number, number][] =>
   size === 1 ? [[x, y]] : [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]];
 /** 本体と、それが占める残りのマスを書き込む */
+/**
+ * 設備のデータを、すべての欄を同じ順で持つ形にそろえる（ない欄は undefined）。
+ * セーブから読んだ設備は、欄の顔ぶれと並びが 1 台ごとに違う（false や空の欄は書かないので）。形がばらばらだと、
+ * 何万台もを回る 1 歩と描画で、欄を 1 つ読むたびに遠回りになる。形が 1 つなら、どの欄もまっすぐ読める。
+ * undefined の欄は、セーブには書かれない
+ */
+export function shaped(o: Ent): Ent {
+  // 並び：1 歩ごとに読む欄を前に（設備 1 台の欄は、近くにまとまっているほど速く読める）
+  const e: Ent = {
+    kind: o.kind, x: o.x, y: o.y, dir: o.dir, off: o.off, offProg: o.offProg, big: o.big, ref: o.ref, own: o.own,
+    timer: o.timer, u: o.u, n: o.n, res: o.res, resAt: o.resAt, nb: o.nb, nbRev: o.nbRev,
+    recipe: o.recipe, pl: o.pl, inBuf: o.inBuf, outBuf: o.outBuf, outOrder: o.outOrder, outSlot: o.outSlot,
+    busy: o.busy, prog: o.prog, stuck: o.stuck, bad: o.bad, badT: o.badT, hb: o.hb, pw: o.pw, ts: o.ts,
+    item: o.item, items: o.items, rr: o.rr, sub: o.sub, test: o.test, st: o.st, ins: o.ins, li: o.li, pri: o.pri,
+    ch: o.ch, role: o.role, buf: o.buf, buf2: o.buf2, buf3: o.buf3, tr: o.tr, xtr: o.xtr, cars: o.cars, rail: o.rail, railTo: o.railTo,
+    left: o.left, sealed: o.sealed, cnt: o.cnt, rcn: o.rcn, memo: o.memo,
+  };
+  // 知らない欄（これより新しい版が書いたものなど）も、落とさずに持っておく
+  for (const k in o) if (!(k in e)) (e as unknown as Record<string, unknown>)[k] = (o as unknown as Record<string, unknown>)[k];
+  return e;
+}
 function put(w: World, e: Ent) {
-  for (const [x, y] of footprint(e.x, e.y, sizeOf(e))) w.ents.set(key(x, y), x === e.x && y === e.y ? e : { kind: 'part', x, y, dir: 0, ref: key(e.x, e.y) });
+  for (const [x, y] of footprint(e.x, e.y, sizeOf(e))) w.ents.set(key(x, y), x === e.x && y === e.y ? e : { kind: 'part', x, y, dir: 0, ref: key(e.x, e.y), own: e });
 }
 /** 消したものを元の場所に戻す。場所がふさがっていたら false */
 export function restore(w: World, e: Ent): boolean {
@@ -801,7 +832,7 @@ export function moveEnts(w: World, ents: Ent[], dx: number, dy: number): { ok: t
   }
   const removed = [...set], added: Ent[] = [];
   for (const e of removed) for (const [fx, fy] of footprint(e.x, e.y, sizeOf(e))) w.ents.delete(key(fx, fy));
-  for (const e of removed) { const c: Ent = { ...e, x: e.x + dx, y: e.y + dy }; put(w, c); added.push(c); }
+  for (const e of removed) { const c: Ent = shaped({ ...e, x: e.x + dx, y: e.y + dy, nb: undefined, nbRev: undefined, pl: undefined }); put(w, c); added.push(c); }
   // 走っている列車の行き先の駅をずらしたら、行き先も付け替える（線路がつながっていなければ、列車は引き返す）
   const moved = new Map(removed.filter((e) => e.kind === 'station').map((e) => [key(e.x, e.y), key(e.x + dx, e.y + dy)]));
   if (moved.size) for (const e of w.ents.values()) if (e.kind === 'station') for (const tr of [e.tr, ...(e.xtr ?? [])]) if (tr?.to && moved.has(tr.to)) tr.to = moved.get(tr.to);
@@ -844,13 +875,13 @@ export function place(w: World, kind: Kind, x: number, y: number, dir: Dir): str
   const big = BIG.includes(kind);
   if (footprint(x, y, big ? 2 : 1).some(([fx, fy]) => w.ents.has(key(fx, fy)))) return big ? 'この装置は 2×2 マスを使う。空いた場所に置け' : 'そこはもう埋まっている';
   if (floorOf(y) === 1 && (kind === 'extractor' || kind === 'station')) return kind === 'extractor' ? '採取機は 1 階にしか置けない。採ったものを昇降機で上げろ' : '貨物駅は 1 階にしか置けない';
-  const e: Ent = { kind, x, y, dir };
+  const e: Ent = shaped({ kind, x, y, dir });
   if (kind === 'lift') {
     // 昇降機は 2 つで 1 組：置いた側が入口、もう一方の階の同じ場所が出口
     const oy = y + (floorOf(y) ? -FLOOR_DY : FLOOR_DY);
     if (w.ents.has(key(x, oy))) return 'もう一方の階の同じ場所がふさがっている';
     e.item = null; e.role = 'in';
-    w.ents.set(key(x, oy), { kind: 'lift', x, y: oy, dir, item: null, role: 'out' });
+    w.ents.set(key(x, oy), shaped({ kind: 'lift', x, y: oy, dir, item: null, role: 'out' }));
   }
   if (isSep(kind)) { e.item = null; e.buf = []; e.buf2 = []; e.buf3 = []; }
   if (kind === 'tank') { e.cnt = 0; e.rcn = 0; e.timer = 0; e.rr = 0; }
@@ -1403,12 +1434,18 @@ export const FEED_TIERS = [10, 100, 1000];
 const FEED_BONUS = [10, 30, 100];
 export const fedTier = (w: World, sym: string) => FEED_TIERS.filter((n) => (w.fed[sym] || 0) >= n).length;
 /** 納めた物質に含まれる原子を、元素ごとに数える */
+/** 物質ごとの、納品所が飲み込む元素と数（化学式を読むのは、物質ごとに 1 度だけ） */
+const feedAtoms = new Map<string, Record<string, number> | null>();
 function feed(w: World, s: string) {
-  const su = sub(s);
-  let atoms: Record<string, number> = {};
-  try { if (su.formula) atoms = parseFormula(su.formula); else for (const el of su.rep ?? []) atoms[el] = (atoms[el] || 0) + 1; } catch { return; }
+  let atoms = feedAtoms.get(s);
+  if (atoms === undefined) {
+    const su = sub(s);
+    let all: Record<string, number> = {};
+    try { if (su.formula) all = parseFormula(su.formula); else for (const el of su.rep ?? []) all[el] = (all[el] || 0) + 1; atoms = {}; for (const el in all) if (ELEMENTS.some((e) => e.sym === el)) atoms[el] = all[el]; } catch { atoms = null; }
+    feedAtoms.set(s, atoms);
+  }
+  if (!atoms) return;
   for (const el in atoms) {
-    if (!ELEMENTS.some((e) => e.sym === el)) continue;
     const before = fedTier(w, el);
     w.fed[el] = (w.fed[el] || 0) + atoms[el];
     const after = fedTier(w, el);
@@ -1508,7 +1545,9 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
  */
 function ahead(w: World, e: Ent, erev: number | undefined): Ent | undefined {
   if (erev === undefined) return at(w, e.x + DX[e.dir], e.y + DY[e.dir]);
-  if (e.nbRev !== erev) { e.nb = at(w, e.x + DX[e.dir], e.y + DY[e.dir]) ?? null; e.nbRev = erev; }
+  // いまの顔ぶれの番号で確かめる（1 歩の途中で設備が消えたときも、消えた設備へ渡さない）
+  const now = (w.ents as EntMap).rev;
+  if (e.nbRev !== now) { e.nb = at(w, e.x + DX[e.dir], e.y + DY[e.dir]) ?? null; e.nbRev = now; }
   return e.nb ?? undefined;
 }
 /** push と同じ。受け取る側 t がわかっているとき */
@@ -1607,14 +1646,15 @@ function pushInto(w: World, t: Ent | undefined, x: number, y: number, d: Dir, s:
       tally(w, s, 3, n);
       // 有毒な気体も、そのまま捨ててよい。数だけ記録する
       if (TOXIC[s]) bump(w.emitted, s, n);
-      w.fx.push({ x, y, type: 'vent', s });
+      if (fxRoom > 0) { fxRoom--; w.fx.push({ x, y, type: 'vent', s }); }
       return true;
     case 'extractor':
     case 'depot':
     case 'sampler':
       return false;
     default: {
-      const r = recipeById(t.recipe);
+      // 反応は、装置の段取りの覚え書きがあればそこから（毎回、表を引かない）
+      const tp = t.pl, r = tp && tp.rid === t.recipe ? tp.r : recipeById(t.recipe);
       if (!r || !t.inBuf) return false;
       // 電解槽は、電池の e⁻ を受け取ると、そのあいだ 2 倍の速さで動く
       if (s === 'e' && r.machine === 'electrolyzer') {
@@ -1623,7 +1663,8 @@ function pushInto(w: World, t: Ent | undefined, x: number, y: number, d: Dir, s:
         t.pw = Math.min(POWER_MAX, (t.pw || 0) + POWER_SEC * n);
         return true;
       }
-      const need = r.inputs.find(([id]) => id === s)?.[1];
+      let need = 0;
+      for (let i = 0; i < r.inputs.length; i++) if (r.inputs[i][0] === s) { need = r.inputs[i][1]; break; }
       // 使わない物質は受け取らない。ベルトはそこで止まるので、理由がわかるように印をつける
       if (!need) { t.bad = s; t.badT = w.tick; return false; }
       // 入れすぎた分はあふれて捨てる（1 本のベルトに混ぜても詰まらない）
@@ -1632,10 +1673,11 @@ function pushInto(w: World, t: Ent | undefined, x: number, y: number, d: Dir, s:
       //  - 原料がそろっていて動けるとき：受け取らずに待たせる（使い切れない分を捨てない。まとまった荷が着いても無駄にならない）
       const cap = need * 4, have = t.inBuf[s] || 0;
       if (have >= cap) {
-        const starved = r.inputs.some(([id, k]) => id !== s && (t.inBuf![id] || 0) < k);
+        let starved = false;
+        for (let i = 0; i < r.inputs.length; i++) if (r.inputs[i][0] !== s && (t.inBuf[r.inputs[i][0]] || 0) < r.inputs[i][1]) { starved = true; break; }
         if (w.noSpill || !starved) return false;
         if (dry) return true;
-        w.fx.push({ x, y, type: 'spill', s }); bump(w.spilled, s, n); bucket(w).spill += n; tally(w, s, 3, n);
+        if (fxRoom > 0) { fxRoom--; w.fx.push({ x, y, type: 'spill', s }); } bump(w.spilled, s, n); bucket(w).spill += n; tally(w, s, 3, n);
         return true;
       }
       if (dry) return true;
@@ -1645,6 +1687,74 @@ function pushInto(w: World, t: Ent | undefined, x: number, y: number, d: Dir, s:
   }
 }
 
+/** 飾りの出来事（react・vent・spill）を、いまの 1 歩であと何個作ってよいか。step の外では、いくつでも */
+const FX_STEP = 48;
+let fxRoom = Infinity;
+/**
+ * 1 歩で動かす設備の一覧（置いた順。何もしない設備＝大きな装置の残りのマス・廃棄口・納品所は入れない）。置く・消すが起きるまで覚えておく。
+ * all：ぜんぶ。fast：毎歩動かすもの（ベルト・駅と列車など、動きが見えるもの）。slow[0..3]：採取機と反応装置を、場所で 4 つの組に分けたもの
+ */
+interface StepLists { rev: number; all: Ent[]; fast: Ent[]; slow: Ent[][]; nSlow: number }
+const stepCache = new WeakMap<World, StepLists>();
+function stepLists(w: World, erev: number | undefined): StepLists {
+  const c = stepCache.get(w);
+  if (c && erev !== undefined && c.rev === erev) return c;
+  const out: StepLists = { rev: erev ?? -1, all: [], fast: [], slow: [[], [], [], []], nSlow: 0 };
+  for (const e of w.ents.values()) {
+    if (e.kind === 'part' || e.kind === 'vent' || e.kind === 'hub') continue;
+    out.all.push(e);
+    if (e.kind === 'extractor' || isMachine(e.kind)) { out.slow[(e.x * 7 + e.y * 13) & 3].push(e); out.nSlow++; } else out.fast.push(e);
+  }
+  if (erev !== undefined) stepCache.set(w, out);
+  return out;
+}
+/**
+ * とても大きな工場（採取機と反応装置が STAG_MIN 台を超える）では、採取機と反応装置を 4 歩に 1 回、4 歩ぶんの時間をまとめて進める
+ * （組ごとに 1 歩ずつずらす）。採れる数・反応の回数は同じで、1 歩で回る台数が 4 分の 1 になる。組ごとの、まだ進めていない時間をここに持つ
+ */
+const STAG_MIN = 3000;
+const stagAcc = new WeakMap<World, Float64Array>();
+/** 装置 e の段取り。設定（反応・出口の並びと場所）・向き・場所が同じあいだは、前のものを使う */
+function planOf(e: Ent): MachinePlan | null {
+  const p = e.pl;
+  if (p && p.rid === e.recipe && p.oo === e.outOrder && p.os === e.outSlot && p.dir === e.dir && p.x === e.x && p.y === e.y) return p;
+  const r = recipeById(e.recipe), oo = e.outOrder;
+  if (!r || !oo) { e.pl = undefined; return null; }
+  const k: number[] = [], tx: number[] = [], ty: number[] = [], td: Dir[] = [], t: (Ent | null)[] = [];
+  for (let i = 0; i < oo.length; i++) {
+    let c = 1;
+    for (const o of r.outputs) if (o[0] === oo[i]) { c = o[1]; break; }
+    const q = outPort(e, i);
+    k.push(c); tx.push(q.tx); ty.push(q.ty); td.push(q.d); t.push(null);
+  }
+  return (e.pl = { r, rid: r.id, oo, os: e.outSlot, dir: e.dir, x: e.x, y: e.y, k, tx, ty, td, t, tRev: -1 });
+}
+/** 出口に、ためておける量（反応 hb 回ぶん）以上たまっている生成物があるか */
+function planBlocked(pl: MachinePlan, ob: number[], hb: number): boolean {
+  for (let i = 0; i < pl.k.length; i++) if (ob[i] >= pl.k[i] * hb) return true;
+  return false;
+}
+/** 原料が 1 回ぶんそろっているか */
+function planFed(r: Recipe, ib: Record<string, number>): boolean {
+  for (let i = 0; i < r.inputs.length; i++) if ((ib[r.inputs[i][0]] || 0) < r.inputs[i][1]) return false;
+  return true;
+}
+/** たまっている生成物を、出口から出す。たまっている分は、ひとまとめの荷にして出す（1 個ずつ出すと、係数の大きい生成物で詰まる） */
+function planFlush(w: World, e: Ent, pl: MachinePlan, ob: number[], erev: number | undefined) {
+  for (let i = 0; i < pl.k.length; i++) {
+    if (ob[i] <= 0) continue;
+    const k = ob[i] < STACK_MAX ? ob[i] : STACK_MAX;
+    let t: Ent | undefined;
+    if (erev === undefined) t = at(w, pl.tx[i], pl.ty[i]);
+    else {
+      // 出す先の設備は、置く・消すが起きるまで覚えておく（1 歩の途中で消えたときも、探し直す）
+      const now = (w.ents as EntMap).rev;
+      if (pl.tRev !== now) { for (let q = 0; q < pl.k.length; q++) pl.t[q] = at(w, pl.tx[q], pl.ty[q]) ?? null; pl.tRev = now; }
+      t = pl.t[i] ?? undefined;
+    }
+    if (pushInto(w, t, pl.tx[i], pl.ty[i], pl.td[i], pl.oo[i], undefined, k)) ob[i] -= k;
+  }
+}
 const occRev = new WeakMap<World, number>();
 /** 積む駅 e の列車 1 本を、1 歩進める（毎歩・列車ごとに呼ぶので、ここでは配列も関数も作らない） */
 function runTrain(w: World, e: Ent, tr: Train, buf: string[], dt: number, sver: number) {
@@ -1728,7 +1838,26 @@ export function step(w: World, dt: number) {
   // 駅の顔ぶれの番号は、1 歩のあいだ変わらない（駅ごとに確かめ直さない）
   const sver = stationVer(w);
   const erev: number | undefined = (w.ents as EntMap).rev;
-  for (const e of w.ents.values()) {
+  // 飾りの出来事（煙・土ぼこり・火花）は、1 歩に FX_STEP 個まで（何千台もが同時に動く工場で、画面に出せない数の出来事を作らない）
+  fxRoom = FX_STEP;
+  // 何もしない設備（大きな装置の残りのマス・廃棄口・納品所）を除いた一覧を、置いた順のまま回る
+  const sl = stepLists(w, erev), huge = sl.nSlow > STAG_MIN, dt0 = dt, kU0 = kU;
+  let acc = stagAcc.get(w);
+  if (!acc) stagAcc.set(w, (acc = new Float64Array(4)));
+  const ph = w.tick & 3;
+  if (huge) for (let q = 0; q < 4; q++) acc[q] += dt0; else acc.fill(0);
+  const dtS = acc[ph];
+  if (huge) acc[ph] = 0;
+  const kUS = 1 - Math.exp(-dtS / UTIL_TAU);
+  // 大きな工場：まず毎歩動かすもの、次に、この歩の番の組の採取機と反応装置（まとめた時間 dtS で）
+  for (let pass = 0; pass < (huge ? 2 : 1); pass++) {
+  const list = !huge ? sl.all : pass === 0 ? sl.fast : sl.slow[ph], stag = pass === 1;
+  // eslint-disable-next-line @typescript-eslint/no-shadow
+  const dt = stag ? dtS : dt0, kU = stag ? kUS : kU0;
+  for (let li = 0; li < list.length; li++) {
+    const e = list[li];
+    // この 1 歩の途中で設備が消えたとき（納品所が広がったときなど）：消えた設備は動かさない
+    if (erev !== undefined && (w.ents as EntMap).rev !== erev && at(w, e.x, e.y) !== e) continue;
     // 一時停止している装置は、反応も採取も出すことも止める（途中の反応・ためた物はそのまま残る）。
     // 途中の反応は busy から offProg へ預ける（止めている間は「動いている」ことにしない）。稼働率は下がっていき、詰まり・受け取れない物質の印は外す
     if (e.off) {
@@ -1763,7 +1892,8 @@ export function step(w: World, dt: number) {
         }
         // まとまった荷は、つながっている出口の数で等分して配る（1 個ずつ順に配ったときと同じ割合になる）。
         // ふさがっている出口の分は手元に残り、次の回に、また等分する
-        const outs = [0, 1, 2].map((k) => ((e.rr || 0) + k) % 3).filter((i) => { const d = portDir(e.dir, i); return push(w, e.x + DX[d], e.y + DY[d], d, it.s, it.rc, 1, true); });
+        const outs: number[] = [];
+        for (let k = 0; k < 3; k++) { const i = ((e.rr || 0) + k) % 3, d = portDir(e.dir, i); if (push(w, e.x + DX[d], e.y + DY[d], d, it.s, it.rc, 1, true)) outs.push(i); }
         if (!outs.length) break;
         let left = it.n!;
         const share = Math.floor(left / outs.length), extra = left % outs.length;
@@ -1827,7 +1957,7 @@ export function step(w: World, dt: number) {
               if (x !== e.item.s && !x.includes(':')) { bump(w.made, x, cnt); bucket(w).made += cnt; tally(w, x, 0, cnt); }
             }
             if (r.main !== e.item.s && r.side !== e.item.s && r.side2 !== e.item.s) tally(w, e.item.s, 1, cnt);
-            w.fx.push({ x: e.x + 0.5, y: e.y + 0.5, type: 'react', s: r.side ?? r.main ?? r.side2 ?? e.item.s });
+            if (fxRoom > 0) { fxRoom--; w.fx.push({ x: e.x + 0.5, y: e.y + 0.5, type: 'react', s: r.side ?? r.main ?? r.side2 ?? e.item.s }); }
             e.item = null; e.busy = false; e.prog = 0; e.n = (e.n || 0) + cnt;
           }
         }
@@ -1895,16 +2025,19 @@ export function step(w: World, dt: number) {
         // 出口がふさがっている間も採り続け、SOURCE_HOLD 個までためて、空いたときにまとめて出す
         const cap = every * SOURCE_HOLD, full = (e.timer || 0) >= cap - 1e-9;
         // いっぱいで、出口を確かめる番でもない歩：何も変わらない（稼働率だけ下がる）。何千台も並ぶ畑で、ここが 1 歩の大半
-        if (full && ((w.tick + e.x * 7 + e.y * 13) & 3) !== 0) { e.timer = cap; e.u = (e.u ?? 1) * (1 - kU); break; }
-        e.timer = Math.min((e.timer || 0) + dt, cap);
+        // （4 歩に 1 回まとめて進めるときは、来るたびに出口を確かめる）
+        if (full && !stag && ((w.tick + e.x * 7 + e.y * 13) & 3) !== 0) { e.timer = cap; e.u = (e.u ?? 1) * (1 - kU); break; }
+        // まとめて進めるときは、その間に採れた分をためられるように（ためられる量より長い時間をまとめても、採れる数が減らない）
+        e.timer = Math.min((e.timer || 0) + dt, stag && !full ? Math.max(cap, dt + every) : cap);
         const k = Math.floor(e.timer / every + 1e-9);
         // いっぱいまでためて出口がふさがったままの採取機は、4 歩に 1 回だけ出口を確かめる（何千台も並ぶ畑で、毎歩すべての出口を調べない。場所でずらす）
-        if (k >= 1 && (!full || ((w.tick + e.x * 7 + e.y * 13) & 3) === 0)) {
+        if (k >= 1 && (!full || stag || ((w.tick + e.x * 7 + e.y * 13) & 3) === 0)) {
           // 採れる資源は場所で決まる。場所が変わるまで覚えておく
           const at2 = e.x * 65536 + e.y;
           if (e.resAt !== at2) { e.res = resourceAt(e.x, e.y); e.resAt = at2; }
           if (pushInto(w, ahead(w, e, erev), e.x + DX[e.dir], e.y + DY[e.dir], e.dir, e.res!, undefined, k)) { e.timer = Math.max(0, e.timer - k * every); e.n = (e.n || 0) + k; tally(w, e.res!, 0, k); }
         }
+        if (e.timer > cap) e.timer = cap;
         // ためられる量がいっぱいになると、採れるのに出せない
         e.u = (e.u ?? 1) + ((e.timer < every * SOURCE_HOLD - 1e-9 ? 1 : 0) - (e.u ?? 1)) * kU;
         break;
@@ -1958,56 +2091,58 @@ export function step(w: World, dt: number) {
       case 'part':
         break;
       default: {
-        const r = recipeById(e.recipe);
-        if (!r || !e.inBuf || !e.outBuf || !e.outOrder) break;
+        if (!e.recipe || !e.inBuf || !e.outBuf || !e.outOrder) break;
+        const pl = planOf(e);
+        if (!pl) break;
+        const r = pl.r, ob = e.outBuf, ib = e.inBuf, no = pl.k.length, mul = (e.pw || 0) > 0 ? 2 : 1;
         if (e.bad && w.tick - (e.badT || 0) > 45) e.bad = undefined;
         // 出口にためておける量：ベルトが HOLD_TILES マス進む間にできる分。機械がベルトより速くても、出口の先が流れていれば止まらない
-        e.hb = Math.max(1, Math.ceil((HOLD_TILES / speed) / (r.time / (rate * ((e.pw || 0) > 0 ? 2 : 1)))));
-        const flush = () => e.outOrder!.forEach((s, i) => {
-          if (e.outBuf![i] <= 0) return;
-          // たまっている分は、ひとまとめの荷にして出す（1 個ずつ出すと、ベルトが 1 マス進むたびに 1 個しか出せず、係数の大きい生成物で詰まる）
-          const p = outPort(e, i), k = Math.min(e.outBuf![i], STACK_MAX);
-          if (push(w, p.tx, p.ty, p.d, s, undefined, k)) e.outBuf![i] -= k;
-        });
+        const hb = (e.hb = Math.max(1, Math.ceil((HOLD_TILES / speed) / (r.time / (rate * mul)))));
+        // まとめた時間が反応 1 回の半分より長いときは、細かく分けて進める（まとめて進めても、反応の回数が減らないように）
+        const reps = stag ? Math.max(1, Math.ceil((dt * rate * mul) / r.time / 0.5)) : 1, dtm = dt / reps;
+        for (let rp = 0; rp < reps; rp++) {
         if (!e.busy) {
           // 出口にためておける量を超えた生成物があるうちは、次の反応を始めない（副生成物を放置すると、ここで詰まる）
-          if (!outputBlocked(e, r) && r.inputs.every(([s, n]) => (e.inBuf![s] || 0) >= n)) {
-            for (const [s, n] of r.inputs) { e.inBuf[s] -= n; tally(w, s, 1, n); }
+          if (!planBlocked(pl, ob, hb) && planFed(r, ib)) {
+            for (let q = 0; q < r.inputs.length; q++) { ib[r.inputs[q][0]] -= r.inputs[q][1]; tally(w, r.inputs[q][0], 1, r.inputs[q][1]); }
             e.busy = true;
             e.prog = 0;
           }
         } else {
-          e.prog = (e.prog || 0) + (dt * rate * ((e.pw || 0) > 0 ? 2 : 1)) / r.time;
-          if (e.pw) e.pw = Math.max(0, e.pw - dt);
+          e.prog = (e.prog || 0) + (dtm * rate * mul) / r.time;
+          if (e.pw) e.pw = Math.max(0, e.pw - dtm);
           if (e.prog >= 1) {
             const over = e.prog - 1;
             e.busy = false;
             e.prog = 0;
-            w.fx.push({ x: e.x + (sizeOf(e) - 1) / 2, y: e.y + (sizeOf(e) - 1) / 2, type: 'react', s: e.outOrder[0] });
+            if (fxRoom > 0) { fxRoom--; w.fx.push({ x: e.x + (sizeOf(e) - 1) / 2, y: e.y + (sizeOf(e) - 1) / 2, type: 'react', s: pl.oo[0] }); }
             e.n = (e.n || 0) + 1;
-            e.outOrder.forEach((s, i) => {
-              const k = r.outputs.find(([id]) => id === s)![1];
-              e.outBuf![i] += k;
-              if (s !== 'e') { bump(w.made, s, k); bucket(w).made += k; tally(w, s, 0, k); }
-              discover(w, s);
-            });
-            flush();
+            for (let q = 0; q < no; q++) {
+              const s2 = pl.oo[q], k = pl.k[q];
+              ob[q] += k;
+              if (s2 !== 'e') { bump(w.made, s2, k); bucket(w).made += k; tally(w, s2, 0, k); }
+              discover(w, s2);
+            }
+            planFlush(w, e, pl, ob, erev);
             // 続けて動けるなら、同じコマのうちに次を始め、余った時間も持ち越す（1 回ごとに 1 コマ休むと、速い装置ほど表示の速さより遅くなる）
-            if (!outputBlocked(e, r) && r.inputs.every(([s, n]) => (e.inBuf![s] || 0) >= n)) {
-              for (const [s, n] of r.inputs) { e.inBuf[s] -= n; tally(w, s, 1, n); }
+            if (!planBlocked(pl, ob, hb) && planFed(r, ib)) {
+              for (let q = 0; q < r.inputs.length; q++) { ib[r.inputs[q][0]] -= r.inputs[q][1]; tally(w, r.inputs[q][0], 1, r.inputs[q][1]); }
               e.busy = true;
               e.prog = Math.min(over, 0.99);
             }
           }
         }
-        flush();
-        e.stuck = !e.busy && outputBlocked(e, r) ? (e.stuck || 0) + dt : 0;
+        }
+        planFlush(w, e, pl, ob, erev);
         // いまの状態（machineState と同じ。ここに来るのは一時停止していない装置だけ）
-        const st = e.busy ? 0 : outputBlocked(e, r) ? 2 : 1;
+        const blocked = !e.busy && planBlocked(pl, ob, hb);
+        e.stuck = blocked ? (e.stuck || 0) + dt : 0;
+        const st = e.busy ? 0 : blocked ? 2 : 1;
         (e.ts ??= [0, 0, 0])[st] += dt;
         e.u = (e.u || 0) + ((st === 0 ? 1 : 0) - (e.u || 0)) * kU;
       }
     }
+  }
   }
 }
 
@@ -2022,7 +2157,7 @@ export const FNAME_MAX = 20;
  * 整数でない数（進み具合・待ち時間・時計）は小数 3 桁まで（1 ミリ秒・0.1 % より細かい違いは、遊びに出ない）
  */
 const round3 = (v: number) => Math.round(v * 1000) / 1000;
-const slim = (k: string, v: unknown) => (v === null || v === false || k === 'res' || k === 'resAt' || k === 'nb' || k === 'nbRev' || k === 'rt' || k === 'rtRev' || k === 'rtVer' ? undefined : typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? round3(v) : v);
+const slim = (k: string, v: unknown) => (v === null || v === false || k === 'res' || k === 'resAt' || k === 'nb' || k === 'nbRev' || k === 'pl' || k === 'own' || k === 'rt' || k === 'rtRev' || k === 'rtVer' ? undefined : typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? round3(v) : v);
 /** 設備の一覧だけを、欄を整えながら 1 回で文字にする（配列の中の null は、場所を保つためにそのまま） */
 /**
  * 駅や列車にためた物の並びを、短く書く：同じ物が続く所は「物質, 個数」にまとめる（["N2", 1200] ＝ N2 が 1200 個）。
@@ -2042,7 +2177,25 @@ function rle(a: unknown[]): unknown[] {
 }
 /** rle の逆。数は、直前の物質の個数。古いセーブ（1 個ずつ）もそのまま読める。全部で LIST_MAX 個まで */
 const LIST_MAX = 20000;
-const entsJson = (list: Ent[]) => JSON.stringify(list, function (this: unknown, k, v) { return Array.isArray(this) ? (typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? round3(v) : v) : k === '' ? v : RLE_KEYS.has(k) && Array.isArray(v) && v.length > 1 ? rle(v) : slim(k, v); });
+/** セーブに書かない欄（1 歩や描画のための覚え書き） */
+const DROP_KEYS = new Set(['res', 'resAt', 'nb', 'nbRev', 'pl', 'own', 'rt', 'rtRev', 'rtVer']);
+/**
+ * セーブに書く形に写す：null・false・undefined と覚え書きの欄は落とし、整数でない数は小数 3 桁に、荷の並びはまとめる。
+ * （文字にするときに欄ごとに関数を呼ぶより、先に小さな写しを作るほうが速い。設備は、すべての欄を持つ形にそろえてあるので、欄が多い）
+ */
+function pack(v: unknown): unknown {
+  if (typeof v === 'number') return Number.isInteger(v) || !Number.isFinite(v) ? v : round3(v);
+  if (v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v)) { const out = new Array<unknown>(v.length); for (let i = 0; i < v.length; i++) out[i] = pack(v[i]); return out; }
+  const o = v as Record<string, unknown>, out: Record<string, unknown> = {};
+  for (const k in o) {
+    const x = o[k];
+    if (x === undefined || x === null || x === false || DROP_KEYS.has(k)) continue;
+    out[k] = RLE_KEYS.has(k) && Array.isArray(x) && x.length > 1 ? pack(rle(x)) : pack(x);
+  }
+  return out;
+}
+const entsJson = (list: Ent[]) => JSON.stringify(list.map(pack));
 export function serialize(w: World): string {
   const ents = entsJson([...w.ents.values()].filter((e) => e.kind !== 'part'));
   return JSON.stringify({
@@ -2155,7 +2308,7 @@ function readEnt(o: unknown): Ent | null {
   // 一時停止と名前（古いセーブにはない）
   if (e.off !== undefined && e.off !== true) delete e.off;
   if (e.memo !== undefined) { const m = typeof e.memo === 'string' ? e.memo.trim().slice(0, 12) : ''; if (m) e.memo = m; else delete e.memo; }
-  return e;
+  return shaped(e);
 }
 /** 古いセーブの、駅ごとの線路の角。形のおかしいものは null */
 const legacyRail = (a: unknown): [number, number][] | null =>

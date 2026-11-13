@@ -8,7 +8,7 @@
  *  - 重ね書き：資源地の名前と産出物、納品所、線路の網、いまの指令の資源地、区画ごとの生産の札、縮尺。重ならないように、大事なものから置く
  * 色は、見た目（Palette）と資源地の色（ZONES）から作る。新しいスキンでも、そのまま描ける。
  */
-import { TRAIN, lineRuns, railRuns, trainAt } from './railruns';
+import { AUTO_FANCY, TRAIN, autoRuns, lineRuns, railRuns, trainAt } from './railruns';
 import { ZONES, blobRadius, hubRect, isSea, zoneSpots, type Zone, type ZoneSpot } from '../content/map';
 import { lineColor, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
@@ -742,15 +742,30 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
     }
     ctx.globalAlpha = 1;
     const sver = stationVer(w);
+    // 仮線路がとても多い工場：重なりをまとめた線を、見える所だけ、1 回で引く（点線にしない。点線は、線の長さだけ手間がかかる）
+    const auto = autoRuns(w), autoMany = auto.pairs > AUTO_FANCY;
+    if (autoMany) {
+      ctx.lineCap = 'butt'; ctx.lineWidth = Math.max(1, z * 0.12); ctx.globalAlpha = 0.8;
+      for (const L of auto.list) {
+        const a = L.runs;
+        ctx.beginPath();
+        for (let k = 0; k < a.length; k += 4) {
+          if (a[k + 2] < x0 || a[k] > x1 + 1 || a[k + 3] < y0 || a[k + 1] > y1 + 1) continue;
+          ctx.moveTo(sx(Math.max(a[k], x0)), sy(Math.max(a[k + 1], y0))); ctx.lineTo(sx(Math.min(a[k + 2], x1 + 1)), sy(Math.min(a[k + 3], y1 + 1)));
+        }
+        ctx.strokeStyle = lineColor(L.ch); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
     for (const e of stationsOf(w)) {
       if (e.role !== 'in') continue;
       const ds = stationDests(w, e, sver);
       if (!ds.list.length) continue;
-      // 自動の仮線路（線路でつながっていない駅）は点線。行き先が多いときは、近い 3 か所だけ描く
-      if (!ds.laid) {
+      // 自動の仮線路（線路でつながっていない駅）は点線。とても多い工場では、下でまとめて描く
+      if (!ds.laid && !autoMany) {
         ctx.strokeStyle = lineColor(e.ch || 1); ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
         ctx.lineWidth = Math.max(1.5, z * 0.14); ctx.setLineDash([Math.max(4, z * 0.6), Math.max(3, z * 0.4)]);
-        for (let k = 0; k < ds.list.length && k < 3; k++) {
+        for (let k = 0; k < ds.list.length; k++) {
           const d = ds.list[k];
           if (Math.max(e.x, d.x) + 2 < x0 || Math.min(e.x, d.x) > x1 + 1 || Math.max(e.y, d.y) + 2 < y0 || Math.min(e.y, d.y) > y1 + 1) continue;
           const pts = railOf2(w, e, d)?.pts;

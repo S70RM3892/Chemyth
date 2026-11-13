@@ -111,3 +111,28 @@ export function megaWorld(): World {
   }
   return w;
 }
+
+/**
+ * 線路を敷かずに駅だけを並べた、とても大きな工場：積む駅 1,500（同じ番線）から、納品所のまわりの降ろす駅 7 つへ、自動の仮線路で運ぶ。
+ * 仮線路は「積む駅 × 降ろす駅」で 1 万本を超え、その全部と列車が、降ろす駅のまわりに集まる（そこを近くで見るのが、いちばん重い）。
+ * 積む駅には、まわりの採取機 4 台がじかに入れる。降ろした物は廃棄口へ捨てる
+ */
+export function autoWorld(): World {
+  const w = newWorld();
+  w.up = { extract: 5, belt: 5, machine: 5 };
+  w.research.push('yard');
+  const put = (e: Record<string, unknown>) => w.ents.set(`${e.x},${e.y}` as never, e as never);
+  const big = (e: Record<string, unknown>) => { put({ ...e, big: true }); for (const [dx, dy] of [[1, 0], [0, 1], [1, 1]]) put({ kind: 'part', x: (e.x as number) + dx, y: (e.y as number) + dy, dir: 0, ref: `${e.x},${e.y}` }); };
+  for (let i = 0; i < 1500; i++) {
+    const x = 70 + (i % 50) * 5, y = 60 + Math.floor(i / 50) * 5;
+    big({ kind: 'station', x, y, dir: 0, ch: 100, role: 'in', cars: 1, buf: Array(600).fill('N2') });
+    put({ kind: 'extractor', x: x - 1, y, dir: 0 }); put({ kind: 'extractor', x: x - 1, y: y + 1, dir: 0 });
+    put({ kind: 'extractor', x: x + 2, y, dir: 2 }); put({ kind: 'extractor', x: x + 2, y: y + 1, dir: 2 });
+  }
+  for (let i = 0; i < 7; i++) {
+    const st = { kind: 'station', x: 36 + (i % 4) * 3, y: i < 4 ? 20 : 32, dir: i < 4 ? 3 : 1, ch: 100, role: 'out', buf: [] };
+    big(st);
+    for (const k of [0, 1]) { const q = slotPort({ ...st, big: true } as never, k); put({ kind: 'vent', x: q.tx, y: q.ty, dir: 0 }); }
+  }
+  return w;
+}

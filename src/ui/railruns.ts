@@ -173,3 +173,63 @@ export function trainAt(w: World, e: Ent, tr: Train): void {
   const sgn = tr.back ? -1 : 1;
   if (bx !== ax || by !== ay) { T.dx = (bx - ax) * sgn; T.dy = (by - ay) * sgn; }
 }
+
+/** 自動の仮線路の組（積む駅 × 行き先）がこの数を超えたら、1 本ずつ描かず、重なりをまとめた線で描く */
+export const AUTO_FANCY = 60;
+/**
+ * 自動の仮線路（線路でつながっていない積む駅から、同じ番線の降ろす駅へ。横に進んでから縦に曲がる）を、番線ごとに、重なりをまとめた線にしたもの。
+ * 駅が千を超える工場では、仮線路は「積む駅 × 降ろす駅」で 1 万本を超え、その全部が降ろす駅のまわりに集まる。1 本ずつ描くと、そこで画面が止まる。
+ * 同じ行・同じ列を通る線は 1 本にまとめる（[x0, y0, x1, y1] の並び。横の線と縦の線）。pairs は、仮線路の組の数。駅の顔ぶれと線路が変わるまで覚えておく
+ */
+type AutoRun = { ch: number; runs: Float64Array };
+let autoCache: { w: World; rev: number; ver: number; pairs: number; list: AutoRun[] } | null = null;
+export function autoRuns(w: World): { pairs: number; list: AutoRun[] } {
+  const ver = stationVer(w);
+  if (autoCache && autoCache.w === w && autoCache.rev === w.railRev && autoCache.ver === ver) return autoCache;
+  // 番線ごと：横の線は「y → 区間の並び」、縦の線は「x → 区間の並び」
+  const per = new Map<number, { h: Map<number, number[]>; v: Map<number, number[]> }>();
+  let pairs = 0;
+  for (const e of stationsOf(w)) {
+    if (e.role !== 'in') continue;
+    const d = stationDests(w, e, ver);
+    if (d.laid || !d.list.length) continue;
+    const ch = e.ch || 1;
+    let p = per.get(ch);
+    if (!p) per.set(ch, (p = { h: new Map(), v: new Map() }));
+    // 自動の仮線路の形（world.ts の autoRoute と同じ）：駅ごとに少しずらした高さで横へ、行き先の列で縦へ
+    const off = ((((e.x * 7 + e.y * 13) % 5) + 5) % 5 - 2) * 0.24, y = e.y + 1 + off;
+    let x0 = e.x + 1, x1 = e.x + 1;
+    for (const t of d.list) {
+      pairs++;
+      const vx = t.x + 1 + off, ty = t.y + 1;
+      if (vx < x0) x0 = vx;
+      if (vx > x1) x1 = vx;
+      let l = p.v.get(vx);
+      if (!l) p.v.set(vx, (l = []));
+      l.push(Math.min(y, ty), Math.max(y, ty));
+    }
+    let l = p.h.get(y);
+    if (!l) p.h.set(y, (l = []));
+    l.push(x0, x1);
+  }
+  const list: AutoRun[] = [];
+  for (const [ch, p] of per) {
+    const out: number[] = [];
+    const merge = (m: Map<number, number[]>, horiz: boolean) => {
+      for (const [c, iv] of m) {
+        // 区間を始まりの順に並べ、重なる・つながるものを 1 本に
+        const idx = Array.from({ length: iv.length / 2 }, (_, i) => i).sort((a, b) => iv[a * 2] - iv[b * 2]);
+        let a = iv[idx[0] * 2], b = iv[idx[0] * 2 + 1];
+        for (let q = 1; q <= idx.length; q++) {
+          if (q < idx.length && iv[idx[q] * 2] <= b) { if (iv[idx[q] * 2 + 1] > b) b = iv[idx[q] * 2 + 1]; continue; }
+          if (horiz) out.push(a, c, b, c); else out.push(c, a, c, b);
+          if (q < idx.length) { a = iv[idx[q] * 2]; b = iv[idx[q] * 2 + 1]; }
+        }
+      }
+    };
+    merge(p.h, true); merge(p.v, false);
+    list.push({ ch, runs: Float64Array.from(out) });
+  }
+  autoCache = { w, rev: w.railRev, ver, pairs, list };
+  return autoCache;
+}

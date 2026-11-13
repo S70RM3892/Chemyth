@@ -20,7 +20,7 @@ import { AMINO_ORDER, aminoOf, phOf, poleAt, type AminoKey } from '../content/ph
 import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/sep';
 import { drawFar, farBegin, farEnd } from './far';
 import { bodyLite, buildChunkLite, hubLite } from './skinLite';
-import { TRAIN, lineRuns, railJunctions, railRuns, trainAt } from './railruns';
+import { AUTO_FANCY, TRAIN, autoRuns, lineRuns, railJunctions, railRuns, trainAt } from './railruns';
 import { bodyMyth, buildChunkMyth, hubMyth, mythAmbient, mythParticle, mythUnder, mythBelts, mythFrame, mythHubGlow, mythSelect, mythZoneLabel } from './skinMyth';
 import { drawGlints, hubMeter, mapStats, noteFx } from './mapfx';
 import { newPlume, plumePaint, plumeRadius, plumeReact, PLUME_CAP, stepPlume, type Plume } from './plumephys';
@@ -634,7 +634,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   const inView = (e: Ent) => e.x >= x0 - 2 && e.x <= x1 + 2 && e.y - off >= y0 - 2 && e.y - off <= y1 + 2;
   // 見えている設備（この階）を、1 コマに 1 度だけ選ぶ。描く所ごとに全部の設備を見直さない（設備が 1 万を超えても、見える分だけの手間で済む）
   const vis: Ent[] = [];
-  for (const e of w.ents.values()) if (e.x >= x0 - 3 && e.x <= x1 + 3 && e.y - off >= y0 - 3 && e.y - off <= y1 + 3) vis.push(e);
+  visibleEnts(w, x0 - 3, y0 - 3 + off, x1 + 3, y1 + 3 + off, vis);
   // ---- 光と効果の層（WebGL の合成段があるときだけ）----
   const G = view.fx?.glow ?? null, M = view.fx?.mask ?? null;
   if (lab) labFrame(G, M, !!three, calm);
@@ -1298,8 +1298,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     ctx.setLineDash([z * 0.14, z * 0.1]);
     ctx.strokeStyle = P.hi; ctx.lineWidth = Math.max(1, z * 0.04);
     ctx.fillStyle = punk || lab ? `rgba(${P.glow},0.1)` : 'rgba(255,225,77,0.16)';
-    for (const e of w.ents.values()) {
-      if (e.y < FLOOR_DY / 2 || e.kind === 'part') continue;
+    for (const e of upperEnts(w)) {
       const ey = e.y - FLOOR_DY;
       if (e.x < x0 - 2 || e.x > x1 + 2 || ey < y0 - 2 || ey > y1 + 2) continue;
       const sz = sizeOf(e) * z, pad = z * 0.12;
@@ -1438,16 +1437,36 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     // 見える列車を先に集める（列車が千本あっても、場所を出すのは 1 本あたり決まった手間。画面の外は、ここで捨てる）
     const seenTr: { tr: Train; x: number; y: number; dx: number; dy: number; col: string }[] = [];
     const sver = stationVer(w);
+    // 仮線路がとても多い工場（駅が千を超え、仮線路が 1 万本を超えて降ろす駅のまわりに集まる）：
+    // 1 本ずつ影・枕木をつけて描かず、重なりをまとめた線を、見える所だけ、桁と番線の色の 2 回で引く
+    const auto = autoRuns(w), autoMany = auto.pairs > AUTO_FANCY;
+    if (autoMany) {
+      const ax0 = x0 - 1, ay0 = y0 - 1, ax1 = x1 + 2, ay1 = y1 + 2;
+      ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
+      for (const L of auto.list) {
+        const a = L.runs;
+        ctx.beginPath();
+        let any = false;
+        for (let k = 0; k < a.length; k += 4) {
+          if (a[k + 2] < ax0 || a[k] > ax1 || a[k + 3] < ay0 || a[k + 1] > ay1) continue;
+          ctx.moveTo(sx(Math.max(a[k], ax0)), sy(Math.max(a[k + 1], ay0))); ctx.lineTo(sx(Math.min(a[k + 2], ax1)), sy(Math.min(a[k + 3], ay1)));
+          any = true;
+        }
+        if (!any) continue;
+        ctx.strokeStyle = ink; ctx.lineWidth = Math.max(2, z * 0.13); ctx.stroke();
+        ctx.strokeStyle = lineColor(L.ch); ctx.lineWidth = Math.max(1, z * 0.07); ctx.stroke();
+      }
+    }
     for (const e of stationsOf(w)) {
       if (e.role !== 'in') continue;
       const ds = stationDests(w, e, sver);
       if (!ds.list.length) continue;
       const col = lineColor(e.ch || 1);
-      // 自動の仮線路（線路でつながっていない駅）：地面の影 → 枕木 → 桁 → 路線色。行き先が多いときは、近い 3 か所だけ描く
-      // （敷いた線路の上の色は、上でまとめて描いた）
-      if (!ds.laid) {
+      // 自動の仮線路（線路でつながっていない駅）：地面の影 → 枕木 → 桁 → 路線色
+      // （敷いた線路の上の色は、上でまとめて描いた。仮線路がとても多い工場では、下でまとめて描く）
+      if (!ds.laid && !autoMany) {
         ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
-        for (let k = 0; k < ds.list.length && k < 3; k++) {
+        for (let k = 0; k < ds.list.length; k++) {
           const d = ds.list[k];
           if (Math.max(e.x, d.x) + 3 < x0 || Math.min(e.x, d.x) - 1 > x1 || Math.max(e.y, d.y) + 3 < y0 || Math.min(e.y, d.y) - 1 > y1) continue;
           const r = railOf(w, e, d);
@@ -2032,6 +2051,52 @@ function token(ctx: CanvasRenderingContext2D, P: Palette, x: number, y: number, 
 
 /** 研究所スキンの装置に渡す、ここにしかない絵の道具 */
 const LAB_KIT = { glyph, poleMarks, powerMark };
+/**
+ * 画面に入る設備を選ぶための索引：設備を 16×16 マスの区画ごとに分けておき、見える区画だけを調べる
+ * （設備が 6 万あっても、毎コマ全部を見ない）。置く・消すが起きるまで覚えておく。並びは、置いた順のまま（重なりの上下が変わらないように）
+ */
+const VIS_CH = 16;
+let visIdx: { w: World; rev: number; m: Map<number, { e: Ent[]; q: number[] }>; upper: Ent[] } | null = null;
+function visIndex(w: World): NonNullable<typeof visIdx> | null {
+  const rev = (w.ents as { rev?: number }).rev;
+  if (rev === undefined) return null;
+  if (visIdx && visIdx.w === w && visIdx.rev === rev) return visIdx;
+  const m = new Map<number, { e: Ent[]; q: number[] }>(), upper: Ent[] = [];
+  let seq = 0;
+  for (const e of w.ents.values()) {
+    const k = Math.floor(e.x / VIS_CH) * 65536 + Math.floor(e.y / VIS_CH);
+    let c = m.get(k);
+    if (!c) m.set(k, (c = { e: [], q: [] }));
+    c.e.push(e); c.q.push(seq++);
+    if (e.y >= FLOOR_DY / 2 && e.kind !== 'part') upper.push(e);
+  }
+  return (visIdx = { w, rev, m, upper });
+}
+/** x0〜x1・y0〜y1（階のずれを足した座標）にある設備を、置いた順で out に入れる */
+function visibleEnts(w: World, x0: number, y0: number, x1: number, y1: number, out: Ent[]) {
+  const ix = visIndex(w);
+  if (!ix) { for (const e of w.ents.values()) if (e.x >= x0 && e.x <= x1 && e.y >= y0 && e.y <= y1) out.push(e); return; }
+  const cx0 = Math.floor(x0 / VIS_CH), cx1 = Math.floor(x1 / VIS_CH), cy0 = Math.floor(y0 / VIS_CH), cy1 = Math.floor(y1 / VIS_CH);
+  // 見える区画がとても多い（うんと引いている）ときは、全部を見るほうが速い
+  if ((cx1 - cx0 + 1) * (cy1 - cy0 + 1) > ix.m.size * 2) { for (const e of w.ents.values()) if (e.x >= x0 && e.x <= x1 && e.y >= y0 && e.y <= y1) out.push(e); return; }
+  const seqs: number[] = [];
+  for (let cx = cx0; cx <= cx1; cx++) for (let cy = cy0; cy <= cy1; cy++) {
+    const c = ix.m.get(cx * 65536 + cy);
+    if (!c) continue;
+    for (let i = 0; i < c.e.length; i++) { const e = c.e[i]; if (e.x >= x0 && e.x <= x1 && e.y >= y0 && e.y <= y1) { out.push(e); seqs.push(c.q[i]); } }
+  }
+  // 置いた順に並べ直す
+  const idx = seqs.map((_, i) => i).sort((a, b) => seqs[a] - seqs[b]), tmp = idx.map((i) => out[i]);
+  for (let i = 0; i < tmp.length; i++) out[i] = tmp[i];
+}
+/** 2 階の設備（1 階を見ているときに、上に透かして描く） */
+function upperEnts(w: World): Ent[] {
+  const ix = visIndex(w);
+  if (ix) return ix.upper;
+  const out: Ent[] = [];
+  for (const e of w.ents.values()) if (e.y >= FLOOR_DY / 2 && e.kind !== 'part') out.push(e);
+  return out;
+}
 /**
  * 採取機の絵の使い回し。採取機の畑では、同じ絵が画面に何百台も並ぶ。1 台ずつ線と面で描く代わりに、
  * 「向き・詰まり・停止・羽根の向き（EX_PHASES とおり）」ごとに 1 度だけ小さな絵に描き、あとはそれを貼る。
