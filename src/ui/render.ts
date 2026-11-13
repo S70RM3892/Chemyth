@@ -20,7 +20,7 @@ import { AMINO_ORDER, aminoOf, phOf, poleAt, type AminoKey } from '../content/ph
 import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/sep';
 import { drawFar, farBegin, farEnd } from './far';
 import { bodyLite, buildChunkLite, hubLite } from './skinLite';
-import { bodyMyth, buildChunkMyth, hubMyth, mythAmbient, mythBelts, mythFrame, mythHubGlow, mythSelect, mythZoneLabel } from './skinMyth';
+import { bodyMyth, buildChunkMyth, hubMyth, mythAmbient, mythParticle, mythUnder, mythBelts, mythFrame, mythHubGlow, mythSelect, mythZoneLabel } from './skinMyth';
 import { drawGlints, hubMeter, mapStats, noteFx } from './mapfx';
 import { newPlume, plumePaint, plumeRadius, plumeReact, PLUME_CAP, stepPlume, type Plume } from './plumephys';
 import { emissionOf, exhaustOf, plateNotes, plumeable } from './matterfx';
@@ -540,6 +540,11 @@ function spawn(w: World, P: Palette) {
       else particles.push({ x: f.x + 0.5 + (Math.random() - 0.5) * 0.2, y: f.y + 0.3, vx: (Math.random() - 0.5) * 0.3, vy: -0.25 - Math.random() * 0.2, age: 0, life: 0.8 + Math.random() * 0.4, color: 'smoke', r: 0.08 + Math.random() * 0.05 });
     } else if (f.type === 'spill') {
       particles.push({ x: f.x + 0.5, y: f.y + 0.5, vx: (Math.random() - 0.5) * 0.8, vy: 0.5, age: 0, life: 0.5, color: P.red, r: 0.06 });
+    } else if (P.skin === 'myth') {
+      // 幻想：反応の瞬間、虹色の星が四方へ飛び、紋章の輪が広がる
+      const RB = ['#ff6b9d', '#ffb347', '#ffe66d', '#7dffb0', '#6ecbff', '#b48cff'];
+      for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2 + Math.random() * 0.5, sp = 0.9 + Math.random() * 1.1; particles.push({ x: f.x + 0.5, y: f.y + 0.5, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 0.3, age: 0, life: 0.7 + Math.random() * 0.5, color: 'star', r: 0.1 + Math.random() * 0.08, tint: RB[i % 6] }); }
+      particles.push({ x: f.x + 0.5, y: f.y + 0.5, vx: 0, vy: 0, age: 0, life: 0.8, color: 'mring', r: 1.1 });
     } else {
       for (let i = 0; i < (P.skin === 'punk' ? 9 : 4); i++) {
         const a = Math.random() * Math.PI * 2;
@@ -639,6 +644,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   const G = view.fx?.glow ?? null, M = view.fx?.mask ?? null;
   if (lab) labFrame(G, M, !!three, calm);
   if (myth) mythFrame(G, calm);
+  // 幻想：地面のすぐ上に、納品所を中心にした大魔法陣と、動いている装置への光の脈
+  if (myth && !off && z >= 5) { const hr0 = hubRect(w.hubSize), busy: [number, number][] = []; for (const e of w.ents.values()) if (e.busy && floorOf(e.y) === (view.floor || 0)) busy.push([e.x + sizeOf(e) / 2, e.y + sizeOf(e) / 2]); mythUnder(ctx, P, sx, sy, z, t, hr0, busy); }
   /** 光の点：中心が明るく、外へ消える。rgb は '255,200,80' の形 */
   const shine = (c2: CanvasRenderingContext2D | null, x: number, y: number, r: number, rgb: string, a: number) => {
     if (!c2 || r <= 0 || x < -r || y < -r || x > cw + r || y > ch + r) return;
@@ -1655,6 +1662,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       ctx.globalAlpha = k * (punk ? (light ? 0.5 : 0.3) : 0.32);
       ctx.fillStyle = p.tint ?? (punk ? (light ? '#ffffff' : '#aeb7bf') : P.soft);
       ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y), z * p.r * (2.6 - k * 1.6), 0, Math.PI * 2); ctx.fill();
+    } else if (p.color === 'star' || p.color === 'mring') {
+      mythParticle(ctx, P, p.color, sx(p.x), sy(p.y), z * p.r, k, p.tint, t);
     } else if (p.color === 'spark') {
       ctx.strokeStyle = (punk && !light) || lab ? P.hi : P.red;
       ctx.lineWidth = lw(0.035);

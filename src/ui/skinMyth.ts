@@ -391,6 +391,7 @@ export function hubMyth(ctx: CanvasRenderingContext2D, P: Palette, px: number, p
     ctx.fillStyle = hue(t, k / 5, 95, light ? 60 : 78); star4(ctx, ox, oy, z * 0.09, 0.3); ctx.fill();
   }
 
+  if (z >= 8) mythPillar(ctx, P, cx, ky - CH2 * 0.3, s, t);
   // いま欲しがっているもの（水晶の下の、金の縁の札）
   const u = Math.min(s / 2, Math.max(z * 1.2, R * 0.9));
   const goal = currentGoal(w), gs = goal ? sub(goal.s) : null, plain = !gs?.formula || !!gs.mask;
@@ -486,6 +487,7 @@ let shootIn = 2;
  */
 export function mythAmbient(ctx: CanvasRenderingContext2D, P: Palette, cw: number, ch: number, t: number, dt: number) {
   const light = P.name === 'light', big = Math.max(cw, ch), tt = calm ? 0 : t;
+  mythSky(ctx, P, cw, ch, t);
   ctx.save();
   if (light) {
     // 金の光の帯
@@ -574,4 +576,203 @@ export function mythAmbient(ctx: CanvasRenderingContext2D, P: Palette, cw: numbe
     // 光の層：光の粒を本当に光らせる
     for (let i = 0; i < 70; i += 2) { const m = motes[i]; G.fillStyle = MYTH_RAINBOW[m.c] + (light ? '18' : '55'); G.beginPath(); G.arc(m.x * cw, m.y * ch, 3 + m.s * 2, 0, TAU); G.fill(); }
   }
+}
+
+// =====================================================================
+// 覚醒：地面の下の大魔法陣と光の脈、反応の瞬間の星、空を渡るもの
+// =====================================================================
+/**
+ * 地面のすぐ上、設備の下に描く：納品所を中心にした大魔法陣（3 重の輪・十二芒星・逆に回る四角・刻み）、
+ * 納品所から動いている装置へ伸びる光の脈（虹色の粒が流れる）、4 秒ごとに広がる波紋
+ */
+export function mythUnder(ctx: CanvasRenderingContext2D, P: Palette, sx: (x: number) => number, sy: (y: number) => number, z: number, t: number, hub: { x: number; y: number; s: number }, busy: [number, number][]) {
+  const light = P.name === 'light', tt = calm ? 0 : t, hx = sx(hub.x + hub.s / 2), hy = sy(hub.y + hub.s / 2);
+  const Rg = (hub.s / 2 + 5.5) * z, col = light ? '138,95,23' : P.glow, a0 = light ? 0.3 : 0.34;
+  ctx.save();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // 光の脈：納品所から、動いている装置へ
+  if (z >= 9) {
+    const n = Math.min(busy.length, 48);
+    for (let i = 0; i < n; i++) {
+      const bx = sx(busy[i][0]), by = sy(busy[i][1]), dx = bx - hx, dy = by - hy, len = Math.hypot(dx, dy);
+      if (len < z * 2 || len > z * 60) continue;
+      const bend = (hash(busy[i][0], busy[i][1]) - 0.5) * 0.5, mx = (hx + bx) / 2 - dy * bend, my = (hy + by) / 2 + dx * bend;
+      ctx.beginPath(); ctx.moveTo(hx, hy); ctx.quadraticCurveTo(mx, my, bx, by);
+      ctx.strokeStyle = `rgba(${col},${light ? 0.16 : 0.2})`; ctx.lineWidth = Math.max(1, z * 0.07); ctx.stroke();
+      ctx.setLineDash([z * 0.02, z * 0.7]); ctx.lineDashOffset = -tt * z * 1.6 - i * z * 0.3;
+      ctx.strokeStyle = hue(t, i * 0.07, 95, light ? 52 : 72, 0.95); ctx.lineWidth = Math.max(2, z * 0.12); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+  // 大魔法陣
+  const lw0 = Math.max(1, z * 0.045);
+  ctx.strokeStyle = `rgba(${col},${a0})`; ctx.lineWidth = lw0;
+  for (const k of [1, 0.93, 0.62, 0.57]) { ctx.beginPath(); ctx.arc(hx, hy, Rg * k, 0, TAU); ctx.stroke(); }
+  // 刻み（外の 2 つの輪のあいだ）：3 種類の印が巡る
+  const ticks = 72, rot = tt * 0.05;
+  ctx.beginPath();
+  for (let i = 0; i < ticks; i++) {
+    const a = rot + (i / ticks) * TAU, r0 = Rg * 0.94, r1 = Rg * 0.99, c = Math.cos(a), s0 = Math.sin(a);
+    if (i % 3 === 0) { ctx.moveTo(hx + c * r0, hy + s0 * r0); ctx.lineTo(hx + c * r1, hy + s0 * r1); }
+    else if (i % 3 === 1) { const a2 = a + 0.025; ctx.moveTo(hx + c * r0, hy + s0 * r0); ctx.lineTo(hx + Math.cos(a2) * r1, hy + Math.sin(a2) * r1); ctx.lineTo(hx + Math.cos(a2 + 0.025) * r0, hy + Math.sin(a2 + 0.025) * r0); }
+    else { const rm = (r0 + r1) / 2; ctx.moveTo(hx + c * rm + lw0, hy + s0 * rm); ctx.arc(hx + c * rm, hy + s0 * rm, lw0, 0, TAU); }
+  }
+  ctx.stroke();
+  // 十二芒星（5 つ飛ばしで結ぶ）と、逆に回る 2 つの四角
+  ctx.beginPath();
+  for (let i = 0; i <= 12; i++) { const a = rot * 1.6 + ((i * 5) / 12) * TAU; ctx.lineTo(hx + Math.cos(a) * Rg * 0.93, hy + Math.sin(a) * Rg * 0.93); }
+  ctx.strokeStyle = `rgba(${col},${a0 * 0.7})`; ctx.stroke();
+  for (let k = 0; k < 2; k++) { ctx.beginPath(); for (let i = 0; i < 4; i++) { const a = -rot * 2.2 + k * (TAU / 8) + (i / 4) * TAU; ctx.lineTo(hx + Math.cos(a) * Rg * 0.57, hy + Math.sin(a) * Rg * 0.57); } ctx.closePath(); ctx.stroke(); }
+  // 輪の上の 12 の星（虹の色が巡る）
+  for (let i = 0; i < 12; i++) {
+    const a = rot * 1.6 + (i / 12) * TAU, px = hx + Math.cos(a) * Rg * 0.93, py = hy + Math.sin(a) * Rg * 0.93;
+    ctx.fillStyle = hue(t, i / 12, 95, light ? 55 : 72, light ? 0.75 : 0.9); star4(ctx, px, py, z * (0.22 + 0.06 * Math.sin(tt * 2 + i)), 0.32); ctx.fill();
+  }
+  // 波紋：納品所から広がる
+  if (!calm) for (let k = 0; k < 2; k++) {
+    const u = ((t / 4 + k * 0.5) % 1), r = Rg * 1.3 * u;
+    ctx.strokeStyle = `rgba(${col},${(1 - u) * (light ? 0.3 : 0.4)})`; ctx.lineWidth = lw0 * (2.4 - u * 1.6);
+    ctx.beginPath(); ctx.arc(hx, hy, r, 0, TAU); ctx.stroke();
+  }
+  ctx.restore();
+  if (G) {
+    G.strokeStyle = `rgba(${P.glow},${light ? 0.08 : 0.22})`; G.lineWidth = Math.max(2, z * 0.14);
+    G.beginPath(); G.arc(hx, hy, Rg * 0.96, 0, TAU); G.stroke();
+  }
+}
+
+/** 反応の瞬間などの粒：star は回りながら飛ぶ星、mring は広がる紋章の輪。k は残りの割合（1 → 0） */
+export function mythParticle(ctx: CanvasRenderingContext2D, P: Palette, kind: string, x: number, y: number, size: number, k: number, tint: string | undefined, t: number) {
+  if (kind === 'star') {
+    ctx.globalAlpha = Math.min(1, k * 1.6);
+    ctx.save(); ctx.translate(x, y); ctx.rotate(t * 4 + size);
+    ctx.fillStyle = tint ?? P.hi; star4(ctx, 0, 0, size * (0.6 + 0.6 * k), 0.3); ctx.fill();
+    ctx.fillStyle = '#ffffff'; star4(ctx, 0, 0, size * 0.35 * k, 0.4); ctx.fill();
+    ctx.restore();
+    if (G) { G.fillStyle = `rgba(${P.glow},${(P.name === 'light' ? 0.05 : 0.12) * k})`; G.beginPath(); G.arc(x, y, size * 1.2, 0, TAU); G.fill(); }
+  } else {
+    const r = size * (1.15 - k * 0.75);
+    ctx.globalAlpha = k * 0.9;
+    ctx.strokeStyle = tint ?? P.hi; ctx.lineWidth = Math.max(1.2, size * 0.05);
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.stroke();
+    ctx.beginPath(); for (let i = 0; i < 8; i++) { const a = t * 1.5 + (i / 8) * TAU; ctx.moveTo(x + Math.cos(a) * r * 0.86, y + Math.sin(a) * r * 0.86); ctx.lineTo(x + Math.cos(a) * r * 1.12, y + Math.sin(a) * r * 1.12); } ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+/** 納品所から立つ光の柱と、うしろで回る光の矢（納品所の絵の上に重ねる） */
+export function mythPillar(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, s: number, t: number) {
+  const light = P.name === 'light', tt = calm ? 0 : t, pw = s * 0.16, ph = s * 1.5, pulse = 0.75 + 0.25 * Math.sin(tt * 2.2);
+  ctx.save();
+  if (!light) ctx.globalCompositeOperation = 'lighter';
+  // 回る光の矢
+  for (let i = 0; i < 14; i++) {
+    const a = tt * 0.12 + (i / 14) * TAU, len = s * (0.75 + 0.3 * ((i * 7) % 5) / 5), wd = 0.035 + 0.02 * (i % 3);
+    const g = ctx.createLinearGradient(cx, cy, cx + Math.cos(a) * len, cy + Math.sin(a) * len);
+    g.addColorStop(0, hue(t, i / 14, 95, light ? 62 : 70, light ? 0.2 : 0.26)); g.addColorStop(1, hue(t, i / 14, 95, 70, 0));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a - wd) * len, cy + Math.sin(a - wd) * len); ctx.lineTo(cx + Math.cos(a + wd) * len, cy + Math.sin(a + wd) * len); ctx.closePath(); ctx.fill();
+  }
+  // 光の柱：水晶の上から空へ
+  const top = cy - s * 0.2 - ph, g = ctx.createLinearGradient(0, cy - s * 0.2, 0, top);
+  g.addColorStop(0, `rgba(255,255,255,${(light ? 0.5 : 0.55) * pulse})`); g.addColorStop(0.35, hue(tt, 0.1, 95, light ? 72 : 68, (light ? 0.28 : 0.34) * pulse)); g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(cx - pw * 0.35, cy - s * 0.2); ctx.lineTo(cx + pw * 0.35, cy - s * 0.2); ctx.lineTo(cx + pw, top); ctx.lineTo(cx - pw, top); ctx.closePath(); ctx.fill();
+  // 柱を昇る星
+  if (!calm) for (let i = 0; i < 7; i++) {
+    const u = (t * 0.22 + i / 7) % 1, x = cx + Math.sin(t * 1.3 + i * 2.4) * pw * (0.3 + u * 0.6), y = cy - s * 0.2 - ph * u;
+    ctx.fillStyle = `rgba(255,255,255,${(1 - u) * 0.95})`; star4(ctx, x, y, s * 0.03 * (1.4 - u), 0.3); ctx.fill();
+  }
+  ctx.restore();
+  if (G) {
+    const gg = G.createLinearGradient(0, cy, 0, top);
+    gg.addColorStop(0, `rgba(${P.glow},${light ? 0.16 : 0.4})`); gg.addColorStop(1, `rgba(${P.glow},0)`);
+    G.fillStyle = gg; G.fillRect(cx - pw * 1.4, top, pw * 2.8, ph + s * 0.2);
+  }
+}
+
+/** 星の海の空：満月と暈、空を渡る光の竜（45 秒に 1 度）。天空の庭の空：太陽と回る光の矢、レンズの光の玉、蝶 */
+export function mythSky(ctx: CanvasRenderingContext2D, P: Palette, cw: number, ch: number, t: number) {
+  const light = P.name === 'light', big = Math.max(cw, ch), tt = calm ? 0 : t;
+  ctx.save();
+  if (!light) {
+    ctx.globalCompositeOperation = 'lighter';
+    // 満月：暈（2 重の輪）と、淡い模様
+    const mx = cw * 0.87, my = ch * 0.17, mr = big * 0.045;
+    const halo = ctx.createRadialGradient(mx, my, mr * 0.8, mx, my, mr * 4.2);
+    halo.addColorStop(0, 'rgba(200,210,255,0.3)'); halo.addColorStop(0.4, 'rgba(150,130,255,0.1)'); halo.addColorStop(1, 'rgba(150,130,255,0)');
+    ctx.fillStyle = halo; ctx.fillRect(mx - mr * 4.2, my - mr * 4.2, mr * 8.4, mr * 8.4);
+    const disc = ctx.createRadialGradient(mx - mr * 0.3, my - mr * 0.3, mr * 0.1, mx, my, mr);
+    disc.addColorStop(0, 'rgba(255,255,250,0.85)'); disc.addColorStop(1, 'rgba(190,200,255,0.6)');
+    ctx.fillStyle = disc; ctx.beginPath(); ctx.arc(mx, my, mr, 0, TAU); ctx.fill();
+    ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = 'rgba(110,110,190,0.16)';
+    for (const [ox, oy, r] of [[-0.3, -0.15, 0.24], [0.25, 0.2, 0.3], [0.1, -0.42, 0.14], [-0.38, 0.38, 0.16]]) { ctx.beginPath(); ctx.arc(mx + ox * mr, my + oy * mr, r * mr, 0, TAU); ctx.fill(); }
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = 'rgba(190,200,255,0.12)'; ctx.lineWidth = 1.5;
+    for (const k of [2.1, 3.2]) { ctx.beginPath(); ctx.arc(mx, my, mr * k, 0, TAU); ctx.stroke(); }
+    // 光の竜：うねりながら左から右へ渡る。体は虹色の光の玉の連なり、背にひれ、頭に角とひげ
+    if (!calm) {
+      const u = (t % 45) / 14;
+      if (u < 1.25) {
+        const at = (q: number): [number, number] => [cw * (-0.25 + 1.5 * q), ch * (0.3 + 0.13 * Math.sin(q * 9 + 1) + 0.05 * Math.sin(q * 23))];
+        const N = 54, gap = 0.0065;
+        for (let i = N - 1; i >= 0; i--) {
+          const q = u - i * gap; if (q < -0.05) continue;
+          const [x, y] = at(q), [x2, y2] = at(q + 0.004), ang = Math.atan2(y2 - y, x2 - x), k = 1 - i / N, r = big * 0.012 * (0.25 + 0.9 * Math.sin(Math.min(1, k * 1.25) * Math.PI * 0.62));
+          const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2.2);
+          g.addColorStop(0, hue(t * 0.5, i / N, 95, 78, 0.5)); g.addColorStop(0.45, hue(t * 0.5, i / N, 95, 60, 0.22)); g.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = g; ctx.fillRect(x - r * 2.2, y - r * 2.2, r * 4.4, r * 4.4);
+          if (i % 3 === 0 && i > 2) { // 背びれ
+            ctx.fillStyle = hue(t * 0.5, i / N, 95, 80, 0.4);
+            ctx.beginPath(); ctx.moveTo(x + Math.cos(ang - 1.57) * r * 0.8, y + Math.sin(ang - 1.57) * r * 0.8); ctx.lineTo(x + Math.cos(ang - 2.2) * r * 2.4, y + Math.sin(ang - 2.2) * r * 2.4); ctx.lineTo(x + Math.cos(ang + 3.14) * r, y + Math.sin(ang + 3.14) * r); ctx.closePath(); ctx.fill();
+          }
+          if (i === 0) { // 頭：角、ひげ、目
+            ctx.strokeStyle = 'rgba(255,240,200,0.8)'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+            for (const sgn of [-1, 1]) {
+              ctx.beginPath(); ctx.moveTo(x, y); ctx.quadraticCurveTo(x + Math.cos(ang + sgn * 2.2) * r * 2, y + Math.sin(ang + sgn * 2.2) * r * 2, x + Math.cos(ang + sgn * 2.7) * r * 3.4, y + Math.sin(ang + sgn * 2.7) * r * 3.4); ctx.stroke();
+              ctx.beginPath(); ctx.moveTo(x + Math.cos(ang) * r, y + Math.sin(ang) * r); ctx.quadraticCurveTo(x + Math.cos(ang + sgn * 0.8) * r * 3, y + Math.sin(ang + sgn * 0.8) * r * 3 + Math.sin(t * 5) * r * 0.5, x + Math.cos(ang + sgn * 1.5) * r * 4.5, y + Math.sin(ang + sgn * 1.5) * r * 4.5); ctx.stroke();
+            }
+            ctx.fillStyle = '#ffffff'; star4(ctx, x + Math.cos(ang) * r * 0.5, y + Math.sin(ang) * r * 0.5, r * 0.9, 0.3); ctx.fill();
+          }
+          // こぼれる星屑
+          if (i % 5 === 2) { ctx.fillStyle = `rgba(255,255,255,${0.5 * (1 - k) + 0.2})`; star4(ctx, x + Math.sin(t * 3 + i) * r * 2, y + r * (1.5 + 2.5 * (1 - k)), r * 0.4, 0.3); ctx.fill(); }
+        }
+      }
+    }
+  } else {
+    // 太陽：回る光の矢と、レンズの光の玉
+    const sx0 = cw * 0.1, sy0 = ch * 0.1, sr = big * 0.05;
+    ctx.globalCompositeOperation = 'soft-light';
+    for (let i = 0; i < 18; i++) {
+      const a = tt * 0.05 + (i / 18) * TAU, len = big * (0.5 + 0.35 * ((i * 5) % 7) / 7), wd = 0.03 + 0.02 * (i % 2);
+      const g = ctx.createLinearGradient(sx0, sy0, sx0 + Math.cos(a) * len, sy0 + Math.sin(a) * len);
+      g.addColorStop(0, 'rgba(255,240,190,0.5)'); g.addColorStop(1, 'rgba(255,240,190,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(sx0, sy0); ctx.lineTo(sx0 + Math.cos(a - wd) * len, sy0 + Math.sin(a - wd) * len); ctx.lineTo(sx0 + Math.cos(a + wd) * len, sy0 + Math.sin(a + wd) * len); ctx.closePath(); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    const sun = ctx.createRadialGradient(sx0, sy0, 0, sx0, sy0, sr * 2.6);
+    sun.addColorStop(0, 'rgba(255,255,240,0.9)'); sun.addColorStop(0.3, 'rgba(255,226,150,0.45)'); sun.addColorStop(1, 'rgba(255,226,150,0)');
+    ctx.fillStyle = sun; ctx.fillRect(sx0 - sr * 2.6, sy0 - sr * 2.6, sr * 5.2, sr * 5.2);
+    // レンズの光の玉：太陽と画面の真ん中を結ぶ線の上
+    [[0.35, 0.5, 0], [0.6, 0.9, 2], [0.85, 0.35, 4], [1.2, 1.3, 5], [1.5, 0.6, 1]].forEach(([d, r, c]) => {
+      const fx = sx0 + (cw / 2 - sx0) * d * 1.3, fy = sy0 + (ch / 2 - sy0) * d * 1.3, rr0 = sr * r;
+      ctx.strokeStyle = MYTH_RAINBOW[c] + '30'; ctx.lineWidth = 2; ctx.fillStyle = MYTH_RAINBOW[c] + '16';
+      ctx.beginPath(); ctx.arc(fx, fy, rr0, 0, TAU); ctx.fill(); ctx.stroke();
+    });
+    // 蝶：羽ばたきながら、ゆるい輪を描いて飛ぶ
+    for (let i = 0; i < 9; i++) {
+      const sp = 0.05 + hash(i, 2.2) * 0.05, ph = hash(i, 4.4) * TAU;
+      const x = cw * (0.5 + 0.46 * Math.sin(tt * sp + ph) + 0.06 * Math.sin(tt * sp * 3.7 + i)), y = ch * (0.48 + 0.36 * Math.sin(tt * sp * 1.31 + ph * 2) + 0.05 * Math.cos(tt * sp * 4.3 + i));
+      const dir = Math.cos(tt * sp + ph) >= 0 ? 1 : -1, flap = Math.abs(Math.sin(t * (9 + i % 3) + i)), s0 = 6 + hash(i, 6.6) * 5, colr = MYTH_RAINBOW[i % 6];
+      ctx.save(); ctx.translate(x, y); ctx.rotate(dir * 0.25); ctx.globalAlpha = 0.85;
+      for (const sgn of [-1, 1]) {
+        ctx.save(); ctx.scale(sgn * (0.25 + 0.75 * flap), 1);
+        ctx.fillStyle = colr; ctx.beginPath(); ctx.moveTo(0, 0); ctx.bezierCurveTo(s0 * 0.4, -s0 * 1.3, s0 * 1.5, -s0 * 1.1, s0 * 1.1, -s0 * 0.1); ctx.bezierCurveTo(s0 * 1.3, s0 * 0.7, s0 * 0.4, s0 * 0.9, 0, 0); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.65)'; ctx.beginPath(); ctx.arc(s0 * 0.75, -s0 * 0.45, s0 * 0.22, 0, TAU); ctx.fill();
+        ctx.strokeStyle = 'rgba(42,35,86,0.6)'; ctx.lineWidth = 0.8; ctx.stroke();
+        ctx.restore();
+      }
+      ctx.fillStyle = '#2a2356'; ctx.fillRect(-0.8, -s0 * 0.5, 1.6, s0);
+      ctx.restore();
+    }
+  }
+  ctx.restore();
 }

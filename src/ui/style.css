@@ -1621,3 +1621,10 @@ html.calm[data-skin="myth"] *, html.calm[data-skin="myth"] *::before, html.calm[
 [data-skin="myth"] #goal::after { content: "✦"; border: 1.5px solid var(--gold-dark); color: var(--gold-dark); background: radial-gradient(circle, var(--hi-soft), transparent 70%); box-shadow: inset 0 0 0 1.5px var(--gold), 0 0 14px rgba(var(--glow), 0.6); font-size: 22px; transform: none; animation: myth-twinkle 4s ease-in-out infinite; opacity: 1; }
 :root[data-skin="myth"][data-theme="dark"] #goal::after { color: var(--gold); }
 @media (prefers-color-scheme: dark) { :root[data-skin="myth"]:not([data-theme="light"]) #goal::after { color: var(--gold); } }
+/* 幻想・覚醒：表紙の空がゆっくり流れ、題字が浮かぶ。主なボタンは光が脈打つ */
+@keyframes myth-drift { from { background-position: 0% 0%, 100% 0%, 50% 100%, 0 0; } to { background-position: 30% 20%, 60% 30%, 20% 80%, 0 0; } }
+@keyframes myth-pulse { 0%, 100% { box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.75), 0 8px 24px var(--shadow), 0 0 18px rgba(var(--glow), 0.5); } 50% { box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.9), 0 8px 24px var(--shadow), 0 0 42px rgba(var(--glow), 0.95), 0 0 80px rgba(var(--accent), 0.35); } }
+[data-skin="myth"] #title { background-size: 160% 160%, 160% 160%, 160% 160%, auto; animation: myth-drift 26s ease-in-out infinite alternate; }
+[data-skin="myth"] #title h1 { animation: myth-flow 7s linear infinite, myth-float 5s ease-in-out infinite; }
+[data-skin="myth"] .primary { animation: myth-flow 5s linear infinite, myth-pulse 2.8s ease-in-out infinite; }
+[data-skin="myth"] #topbtns button.hot { animation: myth-pulse 2.8s ease-in-out infinite; }
