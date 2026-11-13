@@ -1868,6 +1868,8 @@ function readEnt(o: unknown): Ent | null {
   if (e.ch !== undefined) e.ch = lineNo(Number(e.ch));
   if (e.role !== undefined && e.role !== 'in' && e.role !== 'out') delete e.role;
   for (const k of NUM_KEYS) if (e[k] !== undefined && !fin(e[k])) delete e[k];
+  // rr は、順に回す口・行き先・試料の、次の番号。0 以上の整数でなければ 0 から回し直す（0.5 や -1 では口や行き先が引けず、動かすたびに止まる）
+  if (e.rr !== undefined && !(Number.isSafeInteger(e.rr) && e.rr >= 0)) e.rr = 0;
   // 中身の物質がわからないタンクは、空として読む
   if (e.kind === 'tank' && e.sub === undefined) { e.cnt = 0; e.rcn = 0; }
   for (const k of ['li', 'pri'] as const) if (e[k] !== undefined && !isDir(e[k])) delete e[k];

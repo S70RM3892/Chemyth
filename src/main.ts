@@ -1902,10 +1902,17 @@ function boot(data: HotData) {
           b2.bpThumb(bp.stamps),
           h('span', { class: 'stack' }, (() => { const inp = h('input', { class: 'bp-name', type: 'text', id: `bp-name-${i}`, value: bp.name, maxLength: 30, ariaLabel: '設計図の名前' }); inp.onchange = () => { bp.name = inp.value.trim().slice(0, 30) || bp.name; saveLibrary(l); }; return inp; })(), h('span', { class: 'muted' }, `装置 ${n((b) => BIG.includes(b.kind))}・ベルト類 ${n((b) => b.kind === 'belt' || b.kind === 'bridge' || b.kind === 'tunnel')}・ほか ${n((b) => !BIG.includes(b.kind) && b.kind !== 'belt' && b.kind !== 'bridge' && b.kind !== 'tunnel')}`)),
           ...b2.bpOrder(l, i, () => { saveLibrary(l); showLibrary(); }),
-          h('button', { class: 'primary', type: 'button', id: `bp-use-${i}`, onclick: () => { blueprint = bp.stamps.map((b) => ({ ...b })); ghost = null; areaA = areaB = null; closeModal(); pick('area', true); } }, '使う'),
+          h('button', { class: 'primary', type: 'button', id: `bp-use-${i}`, onclick: () => useLibrary(bp.stamps) }, '使う'),
           h('button', { class: 'ghost', type: 'button', id: `bp-out-${i}`, onclick: () => showLibrary({ mode: 'out', text: encodeBlueprint(bp.name, bp.stamps) }) }, '書き出す'),
           h('button', { class: 'ghost warn', type: 'button', id: `bp-del-${i}`, onclick: () => b2.ask(`設計図「${bp.name}」を消す？`, 'この端末から消える。元には戻せない。', '消す', () => { l.splice(i, 1); saveLibrary(l); showLibrary(); }) }, '消す'));
       })) : h('p', {}, 'まだ保存した設計図はない。'));
+  };
+  /** 保存しておいた設計図を使う。前の版で読み込んだものや書き換えられたものもあるので、確かめてから持つ（この版では置けない設備は外す。見本を描くところで止まらないように） */
+  const useLibrary = (stamps: Stamp[]) => {
+    const ok = stamps.map((b) => cleanStamp(b)).filter((b): b is Stamp => !!b), bad = stamps.length - ok.length;
+    if (!ok.length) { closeModal(); toast('この設計図には、この版で置ける設備がない。', 4000); sfx.bad(); return; }
+    blueprint = ok; ghost = null; areaA = areaB = null; closeModal(); pick('area', true);
+    if (bad) toast(`${bad} 個は、この版では置けない設備だったので外した。`, 4000);
   };
   $('area-lib').onclick = () => showLibrary();
   $('area-cancel').onclick = () => { blueprint = null; ghost = null; areaA = areaB = null; paintArea(); };
@@ -1913,12 +1920,13 @@ function boot(data: HotData) {
   function pasteAt(x: number, y: number) {
     if (!blueprint) return;
     group = null;
-    let ok = 0;
+    let ok = 0, bad = 0;
     // 大きい装置から先に置く（ベルトに場所を取られないように）
     for (const b0 of [...blueprint].sort((p, q) => sizeOfKind(q.kind) - sizeOfKind(p.kind))) {
       // 保存しておいた設計図も、貼る前に確かめる（前の版で読み込んだ、知らない物質の設定などで地図が止まらないように）
       const b = cleanStamp(b0);
-      if (!b || doPlace(b.kind, x + b.dx, y + b.dy, b.dir)) continue;
+      if (!b) { bad++; continue; }
+      if (doPlace(b.kind, x + b.dx, y + b.dy, b.dir)) continue;
       ok++;
       const placed = at(world, x + b.dx, y + b.dy)!;
       const r = recipeById(b.recipe);
@@ -1930,7 +1938,9 @@ function boot(data: HotData) {
       // 昇降機は、置いた側が入口になる。写したのが出口なら、相方と入れ替える
       if (b.kind === 'lift' && b.role === 'out') { const p = liftPartner(world, placed); if (p) { placed.role = 'out'; p.role = 'in'; } }
     }
-    if (ok < blueprint.length) toast(`${blueprint.length} 個のうち ${ok} 個を置いた。残りは場所がふさがっていた。`); else toast(`${ok} 個を置いた。続けて別の場所にも置ける。`, 1800);
+    // 置けなかったわけは、場所がふさがっていたものと、この版では置けないものとを分けて言う
+    const busy = blueprint.length - ok - bad;
+    if (ok < blueprint.length) toast(`${blueprint.length} 個のうち ${ok} 個を置いた。${busy ? (bad ? `${busy} 個は場所がふさがっていた。` : '残りは場所がふさがっていた。') : ''}${bad ? `${bad} 個は、この版では置けない設備だったので外した。` : ''}`, bad ? 4000 : 2600); else toast(`${ok} 個を置いた。続けて別の場所にも置ける。`, 1800);
     ok ? sfx.place() : sfx.bad();
     ghost = null;
     paintArea();
@@ -2218,9 +2228,8 @@ function boot(data: HotData) {
   let miniTick = 0, idleSkip = 0;
   let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0, chapterBefore = 0, slowFrames = 0;
   const STEP = 1 / 60;
-  const frameBody = (now: number) => {
-    const dt = Math.min(0.1, (now - prev) / 1000);
-    prev = now;
+  /** 1 コマのうち、工場を進め、出来事を知らせ、ときどき保存する所 */
+  const simFrame = (now: number, dt: number) => {
     if (slot) {
       // 「限られた原料」は、予想を答えるまで動かさない
       if (modal.hidden && closingEl.hidden && !(sandbox?.c.kind === 'limit' && !world.pred)) {
@@ -2280,6 +2289,11 @@ function boot(data: HotData) {
       sinceSave += dt;
       if (sinceSave > 5) { sinceSave = 0; save(); saveCam(); paintSync(); }
       if (!warned && pf.breakMin && now - began > pf.breakMin * 60000) { warned = true; breakReminder(pf.breakMin); }
+    }
+  };
+  /** 視点を動かし、選んでいるものや道具の並びを合わせる所 */
+  const viewFrame = (dt: number) => {
+    if (slot) {
       // 立体表示は、平らな表示ほど引けない。下限より引いていたら（立体表示に切り替えたときなど）、すぐ下限まで寄る。
       // 寄りながら描くと、下限より引いた視野を立体で描くことになり、近くの絵の区画が何千枚も要って数秒止まる
       const zm = zMin();
@@ -2296,16 +2310,17 @@ function boot(data: HotData) {
       if (moveArm && moveArm !== selected) disarm();
       if (lastSeen !== world.seen) { lastSeen = world.seen; refreshTools(true); }
       if (lastRes !== world.research.length) { lastRes = world.research.length; refreshTools(true); paintOpts(); paintFloor(); }
+    }
+  };
+  /** 地図を描く所。省電力で描かずに休んだコマは false */
+  const drawFrame = (now: number, dt: number): boolean => {
+    if (slot) {
       const d0 = PERF ? performance.now() : 0;
       const idle = pf.saver && performance.now() - lastInput > 5 * 60000 && !shotPending;
       // 窓（シート）が開いているあいだは工場が止まり、地図と札は窓の下に透けて見えるだけ。描き直しも札の書きかえも 15 コマに 1 回でよい
-      //（毎コマ書きかえると、研究所スキンでは窓のうしろのぼかしも毎コマかけ直しになる）。遊んだ時間は、描かないコマも数える
-      //（次のコマは、外側の frame が先に頼んでいる）
+      //（毎コマ書きかえると、研究所スキンでは窓のうしろのぼかしも毎コマかけ直しになる）。遊んだ時間は、描かないコマも数える（hudFrame）
       const veiled = !modal.hidden && !shotPending;
-      if ((idle || veiled) && ++idleSkip % (veiled ? 15 : 6)) {
-        if (!veiled) { hud(); placeAct(); } else if (!sandbox && !document.hidden) addPlayTime(world, dt * 1000);
-        return;
-      }
+      if ((idle || veiled) && ++idleSkip % (veiled ? 15 : 6)) return false;
       const fx = fxOn(), t3 = fx && three && gw > 0;
       const view = { dusk: palette().name === 'light' ? dusk : dusk * 0.5, floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: moving && (moving.dx || moving.dy) ? moveGhost() : tool === 'area' ? ghostCells() : toolGhost(), lift: !!moving && !!(moving.dx || moving.dy), ports: moving ? null : selPorts(), marks: sameMarks(), allPlates: pf.plates, over: b2.draw };
       if (fx) {
@@ -2351,16 +2366,31 @@ function boot(data: HotData) {
         }
       }
       if (shotPending) takeShot();
+      if (PERF) { PERF.draw.push(performance.now() - d0); if (PERF.draw.length > 600) { PERF.draw.shift(); PERF.step.shift(); } }
+    }
+    return true;
+  };
+  /** 地図のほかの画面（ミニマップ・復習の札・指令の札など）を合わせる所。drawn：地図を描いたコマか（省電力で休んだコマは、指令の札だけ） */
+  const hudFrame = (dt: number, drawn: boolean) => {
+    if (slot) {
+      if (!drawn) {
+        // 窓の下で休んだコマは、札を書きかえず、遊んだ時間だけ数える
+        if (!modal.hidden && !shotPending) { if (!sandbox && !document.hidden) addPlayTime(world, dt * 1000); } else hud();
+        return;
+      }
       if (++miniTick % 20 === 0) paintMini();
       if (miniTick % 30 === 0) cardTick(performance.now());
       cardCheck();
       if (++sleepTick % 60 === 0) sleepCheck();
       if (!sandbox && !document.hidden) addPlayTime(world, dt * 1000);
-      if (PERF) { PERF.draw.push(performance.now() - d0); if (PERF.draw.length > 600) { PERF.draw.shift(); PERF.step.shift(); } }
       hud();
       b2.tick();
     }
-    placeAct();
+  };
+  /** 選んだものの操作の帯と、背景音楽 */
+  const actFrame = (now: number, drawn: boolean) => {
+    if (drawn || modal.hidden || shotPending) placeAct();
+    if (!drawn) return;
     // 背景音楽：工場の画面でだけ鳴らす。動いている装置が多いほど、音が増える
     if (now - musicAt > 250) {
       musicAt = now;
@@ -2369,10 +2399,20 @@ function boot(data: HotData) {
       musicTick(slot !== 0 && !document.hidden, all ? Math.min(1, (busy / all) * 0.6 + Math.min(1, all / 30) * 0.4) : 0);
     }
   };
-  /** 1 コマの途中で不具合が起きても、次のコマは必ず予約する（止めると、地図も時間も止まったまま、開き直しても戻らない） */
+  /**
+   * 1 コマ。途中で不具合が起きても、次のコマは必ず予約する（止めると、地図も時間も止まったまま、開き直しても戻らない）。
+   * 工場を進める所・視点・描く所・画面の札・操作の帯は、別々に守る。工場が動かなくても地図は描き、描けなくても選んで撤去できるように
+   */
   const frame = (now: number) => {
     requestAnimationFrame(frame);
-    try { frameBody(now); } catch (err) { frameFault(err, now); }
+    const dt = Math.min(0.1, (now - prev) / 1000);
+    prev = now;
+    let drawn = true;
+    try { simFrame(now, dt); } catch (err) { frameFault(err, now); }
+    try { viewFrame(dt); } catch (err) { frameFault(err, now); }
+    try { drawn = drawFrame(now, dt); } catch (err) { frameFault(err, now); unwindDraw(); }
+    try { hudFrame(dt, drawn); } catch (err) { frameFault(err, now); }
+    try { actFrame(now, drawn); } catch (err) { frameFault(err, now); }
   };
   requestAnimationFrame(frame);
   document.addEventListener('visibilitychange', () => { if (document.hidden) { save(); flushAccount(); } });
@@ -2388,13 +2428,20 @@ function boot(data: HotData) {
     try { save(); saveCam(); } catch { /* 保存できなくても、知らせる */ }
     if (slot && Date.now() - errTold > 30000) { errTold = Date.now(); toast('不具合が起きた。ここまでの工場は保存した。動きがおかしければ、メニューから「保存してタイトルへ戻る」で開き直せ。', 8000); }
   };
-  /** コマの中の不具合：ここでは保存しない（壊れた途中の状態を書き込まないように。ふだんの自動保存は、次のコマから続く）。
-   *  知らせるのは 30 秒に 1 度。描く途中で止まると、絵の状態（座標の変換や切り抜き）が戻らないので、1 秒に 1 度まで描き先を作り直す */
-  let faultLogged = -1e9, faultReset = -1e9;
+  /** コマの中の不具合：ここでは保存しない（壊れた途中の状態を書き込まないように。ふだんの自動保存は、工場を進める所が動けば続く）。
+   *  知らせるのは 30 秒に 1 度、記録は 10 秒に 1 度 */
+  let faultLogged = -1e9;
   const frameFault = (err: unknown, now: number) => {
     if (now - faultLogged > 10000) { faultLogged = now; console.error(err); }
     if (slot && Date.now() - errTold > 30000) { errTold = Date.now(); toast('不具合が起きた。動きがおかしければ、メニューから「保存してタイトルへ戻る」で開き直せ。', 8000); }
-    if (now - faultReset > 1000) { faultReset = now; try { resize(); } catch { /* 作り直せなくても、次のコマへ進む */ } }
+  };
+  /** 描く途中で止まったときは、2D の描き先を、そのコマの初めの状態へ戻す（save したままの座標の変換や切り抜き、薄さが、次のコマに残らないように）。
+   *  描いた絵は消さない（消すと、止まり続けるあいだ地図が見えなくなる） */
+  const unwindDraw = () => {
+    for (const c of [ctx, gndCtx, topCtx, glowCtx, maskCtx, heightCtx, glowSCtx]) {
+      for (let i = 0; i < 64; i++) c.restore();
+      c.globalAlpha = 1; c.globalCompositeOperation = 'source-over'; c.shadowBlur = 0; c.filter = 'none';
+    }
   };
   window.addEventListener('error', onCrash);
   window.addEventListener('unhandledrejection', onCrash);

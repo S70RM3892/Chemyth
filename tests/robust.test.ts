@@ -6,6 +6,7 @@ import { CHAPTERS } from '../src/content/goals';
 import { HUB_TILES } from '../src/content/map';
 import { RECIPES, productsOf } from '../src/content/recipes';
 import { TESTS } from '../src/content/samples';
+import { hasSub } from '../src/content/substances';
 import { at, configure, deserialize, layRail, newWorld, place, serialize, step, FLOOR_DY, type World } from '../src/engine/world';
 
 const run = (w: World, sec: number) => { for (let i = 0; i < sec * 60; i++) step(w, 1 / 60); };
@@ -73,6 +74,8 @@ describe('設計図の文字列を確かめる', () => {
     const { cleanStamp } = await import('../src/engine/blueprint');
     expect(cleanStamp({ kind: 'depot', dx: 0, dy: 0, dir: 0, sub: 'zzz' })).toEqual({ kind: 'depot', dx: 0, dy: 0, dir: 0 });
     expect(cleanStamp({ kind: 'constructor', dx: 0, dy: 0, dir: 0 })).toBeNull();
+    // 並びに紛れた、表でない値
+    for (const v of [null, undefined, 3, 'belt']) expect(cleanStamp(v as never), String(v)).toBeNull();
     // 自分で囲んだ範囲は、文字列の広さの上限（200 マス）を超えてもよい
     expect(cleanStamp({ kind: 'belt', dx: 500, dy: 0, dir: 1 })).toEqual({ kind: 'belt', dx: 500, dy: 0, dir: 1 });
   });
@@ -118,6 +121,36 @@ describe('セーブの読み込みを確かめる', () => {
     expect(w.seen).toBe(CHAPTERS.length - 1);
     // 読み込んだ工場は、そのまま動かせる
     expect(() => run(w, 3)).not.toThrow();
+  });
+
+  it('順に回す番号（rr）が 0 以上の整数でなければ、0 から回し直す（口や行き先が引けずに止まらない）', () => {
+    const d = blank();
+    d.ents.push(
+      // 試料の組を順に出す試薬棚
+      { kind: 'sampler', x: 30, y: 30, dir: 0, sub: 'set:A', rr: 0.5, timer: 99 },
+      { kind: 'sampler', x: 30, y: 31, dir: 0, sub: 'set:A', rr: -1, timer: 99 },
+      // 積む駅（発車するときに行き先を順に選ぶ）と、降ろす駅
+      { kind: 'station', x: 30, y: 40, dir: 0, big: true, role: 'in', ch: 2, rr: 1.5, buf: [], tr: { p: 0, back: false, cargo: ['NaCl'], wait: 9 } },
+      { kind: 'station', x: 30, y: 50, dir: 0, big: true, role: 'out', ch: 2, rr: 0.5, buf: ['NaCl', 'NaCl'] },
+      // 2 つの口から交互に出すタンク
+      { kind: 'tank', x: 40, y: 40, dir: 0, big: true, sub: 'NaCl', cnt: 30, rcn: 0, rr: 0.5, timer: 0 },
+    );
+    for (let x = 31; x < 34; x++) d.ents.push({ kind: 'belt', x, y: 30, dir: 0, item: null }, { kind: 'belt', x, y: 31, dir: 0, item: null });
+    const w = deserialize(JSON.stringify(d))!;
+    expect(() => run(w, 3)).not.toThrow();
+    const w0 = deserialize(JSON.stringify(d))!;
+    expect([at(w0, 30, 30)!.rr, at(w0, 30, 31)!.rr, at(w0, 30, 40)!.rr, at(w0, 30, 50)!.rr, at(w0, 40, 40)!.rr]).toEqual([0, 0, 0, 0, 0]);
+    // 試料の組は、組の物質を順に出している
+    expect(at(w, 31, 30)!.item?.s ?? at(w, 32, 30)!.item?.s).toBeTruthy();
+    // ふつうの番号は、そのまま読む
+    const d2 = blank();
+    d2.ents.push({ kind: 'splitter', x: 30, y: 30, dir: 0, rr: 2, item: null });
+    expect(at(deserialize(JSON.stringify(d2))!, 30, 30)!.rr).toBe(2);
+  });
+
+  it('物質の id でないもの（文字でない値）を、物質かどうか調べても止まらない', () => {
+    for (const v of [undefined, null, 3, {}, ['NaCl']]) expect(hasSub(v as never), String(v)).toBe(false);
+    expect(hasSub('NaCl')).toBe(true);
   });
 
   it('出口の物質が反応の生成物でない装置は、反応の設定を外す（反応が終わったところで止まらない）', () => {
