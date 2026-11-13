@@ -24,7 +24,7 @@ import { PLAIN_LOOK, POST_PRESETS, createPost, type Post } from './ui/gl';
 import { TOP_H, camera3, heightOf, pickTile, planeSize } from './ui/three';
 import { palette } from './ui/theme';
 import { FLAMES } from './content/looks';
-import { decodeBlueprint, encodeBlueprint, type Stamp } from './engine/blueprint';
+import { cleanStamp, decodeBlueprint, encodeBlueprint, type Stamp } from './engine/blueprint';
 import { showStats, type StatsCtx } from './ui/stats';
 import { paintPts, showAchievements, statsTick } from './ui/achieve';
 import { showChain } from './ui/chain';
@@ -1791,8 +1791,10 @@ function boot(data: HotData) {
     group = null;
     let ok = 0;
     // 大きい装置から先に置く（ベルトに場所を取られないように）
-    for (const b of [...blueprint].sort((p, q) => sizeOfKind(q.kind) - sizeOfKind(p.kind))) {
-      if (doPlace(b.kind, x + b.dx, y + b.dy, b.dir)) continue;
+    for (const b0 of [...blueprint].sort((p, q) => sizeOfKind(q.kind) - sizeOfKind(p.kind))) {
+      // 保存しておいた設計図も、貼る前に確かめる（前の版で読み込んだ、知らない物質の設定などで地図が止まらないように）
+      const b = cleanStamp(b0);
+      if (!b || doPlace(b.kind, x + b.dx, y + b.dy, b.dir)) continue;
       ok++;
       const placed = at(world, x + b.dx, y + b.dy)!;
       const r = recipeById(b.recipe);
@@ -2087,7 +2089,7 @@ function boot(data: HotData) {
   let miniTick = 0, idleSkip = 0;
   let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0, chapterBefore = 0, slowFrames = 0;
   const STEP = 1 / 60;
-  const frame = (now: number) => {
+  const frameBody = (now: number) => {
     const dt = Math.min(0.1, (now - prev) / 1000);
     prev = now;
     if (slot) {
@@ -2165,7 +2167,7 @@ function boot(data: HotData) {
       if (lastRes !== world.research.length) { lastRes = world.research.length; refreshTools(true); paintOpts(); paintFloor(); }
       const d0 = PERF ? performance.now() : 0;
       const idle = pf.saver && performance.now() - lastInput > 5 * 60000 && !shotPending;
-      if (idle && ++idleSkip % 6) { hud(); placeAct(); requestAnimationFrame(frame); return; }
+      if (idle && ++idleSkip % 6) { hud(); placeAct(); return; }
       const fx = fxOn(), t3 = fx && three && gw > 0;
       const view = { dusk: palette().name === 'light' ? dusk : dusk * 0.5, floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: moving && (moving.dx || moving.dy) ? moveGhost() : tool === 'area' ? ghostCells() : toolGhost(), lift: !!moving && !!(moving.dx || moving.dy), ports: moving ? null : selPorts(), marks: sameMarks(), allPlates: pf.plates, over: b2.draw };
       if (fx) {
@@ -2227,7 +2229,11 @@ function boot(data: HotData) {
       if (slot) for (const e of world.ents.values()) if (e.recipe) { all++; if (e.busy) busy++; }
       musicTick(slot !== 0 && !document.hidden, all ? Math.min(1, (busy / all) * 0.6 + Math.min(1, all / 30) * 0.4) : 0);
     }
+  };
+  /** 1 コマの途中で不具合が起きても、次のコマは必ず予約する（止めると、地図も時間も止まったまま、開き直しても戻らない） */
+  const frame = (now: number) => {
     requestAnimationFrame(frame);
+    try { frameBody(now); } catch (err) { frameFault(err, now); }
   };
   requestAnimationFrame(frame);
   document.addEventListener('visibilitychange', () => { if (document.hidden) { save(); flushAccount(); } });
@@ -2242,6 +2248,14 @@ function boot(data: HotData) {
   const onCrash = () => {
     try { save(); saveCam(); } catch { /* 保存できなくても、知らせる */ }
     if (slot && Date.now() - errTold > 30000) { errTold = Date.now(); toast('不具合が起きた。ここまでの工場は保存した。動きがおかしければ、メニューから「保存してタイトルへ戻る」で開き直せ。', 8000); }
+  };
+  /** コマの中の不具合：ここでは保存しない（壊れた途中の状態を書き込まないように。ふだんの自動保存は、次のコマから続く）。
+   *  知らせるのは 30 秒に 1 度。描く途中で止まると、絵の状態（座標の変換や切り抜き）が戻らないので、1 秒に 1 度まで描き先を作り直す */
+  let faultLogged = -1e9, faultReset = -1e9;
+  const frameFault = (err: unknown, now: number) => {
+    if (now - faultLogged > 10000) { faultLogged = now; console.error(err); }
+    if (slot && Date.now() - errTold > 30000) { errTold = Date.now(); toast('不具合が起きた。動きがおかしければ、メニューから「保存してタイトルへ戻る」で開き直せ。', 8000); }
+    if (now - faultReset > 1000) { faultReset = now; try { resize(); } catch { /* 作り直せなくても、次のコマへ進む */ } }
   };
   window.addEventListener('error', onCrash);
   window.addEventListener('unhandledrejection', onCrash);
