@@ -656,9 +656,10 @@ function boot(data: HotData) {
           h('p', { class: 'muted' }, '置き換える前の中身は控えておく。メニューの「データ」から、読み込む前に戻せる（控えは 1 回ぶん）。アルバムの写真はファイルに入っていないので、この端末のものがそのまま残る。'),
           h('div', { class: 'row' },
             h('button', { class: 'primary', type: 'button', id: 'imp-go', onclick: () => {
-              // 遊んでいる枠を置き換えるなら、先にタイトルへ戻る（いまの中身を保存してから控え、あとで上書きしないように）
+              // 遊んでいる枠を置き換えるなら、先に閉じる（いまの中身を保存してから控え、あとで上書きしないように）。
+              // タイトルは書き込んだあとで出す（タイトルが始める同期が、書き込む前の様子で動かないように）
               modal.hidden = true; sheet.replaceChildren();
-              toTitle();
+              leaveSlot();
               // 置き換える枠だけを控える（戻すときも、その枠だけを戻す）
               const prev: Record<string, string | null> = {};
               for (const n of ok) prev[String(n)] = store.read(n);
@@ -695,7 +696,8 @@ function boot(data: HotData) {
       h('div', { class: 'row' },
         h('button', { class: 'ghost warn', type: 'button', id: 'd-restore-go', onclick: () => {
           modal.hidden = true; sheet.replaceChildren();
-          toTitle();
+          // タイトルは戻したあとで出す（タイトルが始める同期が、消す前の一覧で、消した枠を受け取りに行かないように）
+          leaveSlot();
           const bad: number[] = [];
           for (const { n, json } of restorePlan(b, (k) => store.read(k))) {
             // 消した枠は、預けてある側にも「消した」印を送る（送らないと、同期で戻ってくる）
@@ -2179,7 +2181,9 @@ function boot(data: HotData) {
       else if (store.meta().news !== NEWS) showNews();
     },
   });
-  const toTitle = () => { rvCard.hidden = true; leaveCase(); save(); saveCam(); slot = 0; selected = null; moving = null; disarm(); actNote.hidden = true; $('paused').hidden = true; $('marks').hidden = true; app.classList.add('in-title'); title.show(); };
+  /** 遊んでいる枠を保存して閉じる（タイトルはまだ出さない。出すと同期が始まる） */
+  const leaveSlot = () => { rvCard.hidden = true; leaveCase(); save(); saveCam(); slot = 0; selected = null; moving = null; disarm(); actNote.hidden = true; $('paused').hidden = true; $('marks').hidden = true; app.classList.add('in-title'); };
+  const toTitle = () => { leaveSlot(); title.show(); };
   /** 今日のまとめ：タイトルへ戻る前に、今日の時間・復習・続いた日数・次の復習を見せる */
   const showToday = () => {
     const now = Date.now(), [n, ok] = todayCount(world, now), st = streakOf(world, now), ex = daysToExam(world, now);

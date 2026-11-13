@@ -49,6 +49,36 @@ describe('設計図の棚（ファイルからの読み込み）', () => {
     expect(b.stamps).toEqual(many);
   });
 
+  it('文字列で渡せる広さ（200 マス）を超える設計図も、棚からは消さない（引いて「画面全体」で囲んだもの）', () => {
+    const wide: Shelf = { name: '設計図 1：3 個', stamps: [
+      { kind: 'belt', dx: 0, dy: 0, dir: 0 },
+      { kind: 'belt', dx: 250, dy: 0, dir: 0 },
+      { kind: 'reactor', dx: 3, dy: 250, dir: 1, recipe: 'haber-bosch', outOrder: ['NH3'], outSlot: [2] },
+      { kind: 'station', dx: 780, dy: 540, dir: 0, ch: 4, role: 'out' },
+    ] };
+    expect(checkShelf(wide)).toEqual(wide);
+    expect(cleanShelf([wide, good])).toEqual({ list: [wide, good], dropped: 0 });
+    // 位置の形がおかしいものは、広さに関わらず外す
+    expect(checkShelf({ name: 'x', stamps: [{ kind: 'belt', dx: 250.5, dy: 0, dir: 0 }] })).toBeNull();
+    expect(checkShelf({ name: 'x', stamps: [{ kind: 'belt', dx: 0, dy: -250, dir: 0 }] })).toBeNull();
+    expect(checkShelf({ name: 'x', stamps: [{ kind: 'belt', dx: '250', dy: 0, dir: 0 }] })).toBeNull();
+    expect(checkShelf({ name: 'x', stamps: [{ kind: 'belt', dx: Infinity, dy: 0, dir: 0 }] })).toBeNull();
+    // 大きくて広いもの（BP_MAX を超え、BP_SPAN も超える）
+    const big: Stamp[] = Array.from({ length: BP_MAX + 10 }, (_, i) => ({ kind: 'belt', dx: i % 400, dy: Math.floor(i / 400) * 90, dir: 0 }));
+    expect(checkShelf({ name: 'big', stamps: big })!.stamps).toEqual(big);
+  });
+
+  it('棚の名前は、文字列で渡すときの 30 文字に切らない（自動でつく名前は長くなる）', () => {
+    const name = '設計図 12：' + '硫酸銅（Ⅱ）水溶液の電気分解'.padEnd(33, 'あ');
+    expect(name.length).toBe(40);
+    const b: Shelf = { name, stamps: [{ kind: 'belt', dx: 0, dy: 0, dir: 0 }] };
+    expect(checkShelf(b)).toEqual(b);
+    expect(checkShelf({ ...b, name: '  my bp  ' })!.name).toBe('my bp');
+    expect(checkShelf({ ...b, name: '   ' })!.name).toBe('受け取った設計図');
+    // 前の版で書き出したファイル（長い名前のまま）を読み込んでも、同じものとして足さない
+    expect(mergeShelf([checkShelf(b)!], cleanShelf([b]).list).added).toBe(0);
+  });
+
   it('読み込んだ設計図は、いまの棚に足す（消さない・同じものは足さない・あふれる分は足さない）', () => {
     const mine: Shelf = { name: 'my bp', stamps: [{ kind: 'belt', dx: 0, dy: 0, dir: 0 }] };
     // 何も入っていないファイル：いまの棚はそのまま
