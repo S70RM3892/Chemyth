@@ -13,8 +13,8 @@ import { isSep } from '../content/sep';
 import { hasSub, label, sub } from '../content/substances';
 import type { Stamp } from '../engine/blueprint';
 import { findRoute, type RouteStep } from '../engine/route';
-import { acceptsFrom, beltLine, dupSpot, looseOutputs, nameOf, reversedDirs, stockOf, whyNot, xEnts, xStamps, type Rect, type Xform } from '../engine/shape';
-import { at, BIG, configure, DX, DY, floorOf, FLOOR_DY, groundY, inflow, isMachine, MOVERS, PIN_MAX, PIN_NOTE, sizeOf, type Dir, type Ent, type Kind, type World } from '../engine/world';
+import { acceptsFrom, beltLine, dupSpot, looseOutputs, mirrorFixed, nameOf, reversedDirs, stockOf, whyNot, xEnts, xStamps, type Rect, type Xform } from '../engine/shape';
+import { at, BIG, configure, DX, DY, floorOf, FLOOR_DY, groundY, inflow, isMachine, liftPartner, MOVERS, PIN_MAX, PIN_NOTE, sizeOf, type Dir, type Ent, type Kind, type World } from '../engine/world';
 import { $, h } from './dom';
 import { buzz } from './prefs';
 import type { Camera, View } from './render';
@@ -45,8 +45,8 @@ export interface B2Ctx {
   turn(e: Ent, d: Dir): void;
   /** ここで手の組を区切る（このあとの手は、新しい 1 手になる） */
   cut(): void;
-  /** 設備を移したことを 1 手として記録する（線路の控えも） */
-  recordMove(removed: Ent[], added: Ent[], snap: [string, number | undefined][]): void;
+  /** 設備を移したことを 1 手として記録する（線路の控えも）。how：回す・鏡に映したときの付け替え */
+  recordMove(removed: Ent[], added: Ent[], snap: [string, number | undefined][], how?: Xform): void;
   save(): void;
   /** その設備へ移って選ぶ */
   focus(e: Ent): void;
@@ -231,6 +231,8 @@ export function initBuild2(c: B2Ctx) {
     if (s.kind !== 'tank') d.sub = s.sub;   // タンクの物質は中身なので写さない
     if (s.kind === 'station') { d.ch = s.ch ?? 1; d.role = s.role ?? 'in'; d.cars = s.cars; }
     if (s.kind === 'sensor' || s.kind === 'gate') d.ch = s.ch;
+    // 昇降機は、置いた側が入口になる。写したのが出口なら、相方と入れ替える
+    if (s.kind === 'lift' && s.role === 'out') { const p = liftPartner(c.world(), d); if (p) { d.role = 'out'; p.role = 'in'; } }
   };
   const dup = () => {
     const e = c.selected();
@@ -275,18 +277,19 @@ export function initBuild2(c: B2Ctx) {
   const filt = h('button', { type: 'button', id: 'area-filter', title: '囲んだ中から、ベルト類だけ・装置だけを選ぶ' }, FILTER_NAME.all);
   $('area-rot').after(rot2, flipX, flipY);
   $('area-all').after(filt);
+  const fixedNote = (warn: string[]) => { if (warn.length) c.toast(`${warn.join('・')}は、左右の出口が入れ替わらない。つなぎ直しが要る。`, 4200); };
   const xArea = (how: Xform) => {
     const bp = c.blueprint();
-    if (bp) { c.setBlueprint(xStamps(bp, how)); c.paintArea(); sfx.tap(); return; }
+    if (bp) { c.setBlueprint(xStamps(bp, how)); c.paintArea(); sfx.tap(); fixedNote(mirrorFixed(bp.map((b) => b.kind), how)); return; }
     if (lock) { lockNote(); return; }
     const r = c.areaRect(), es = c.inArea();
     if (!r || !es.length) return;
     const res = xEnts(c.world(), es, how, r);
     if (!res.ok) { c.toast(res.why, 2400); sfx.bad(); buzz(30); return; }
-    c.recordMove(res.removed, res.added, res.snap);
+    c.recordMove(res.removed, res.added, res.snap, how);
     c.setArea(res.box);
     c.paintArea(); c.save(); sfx.place(); buzz(12);
-    if (res.warn.length) c.toast(`${res.warn.join('・')}は、左右の出口が入れ替わらない。つなぎ直しが要る。`, 4200);
+    fixedNote(res.warn);
   };
   rot2.onclick = () => xArea('rot');
   flipX.onclick = () => xArea('flipX');

@@ -8,7 +8,7 @@
 import { MACHINES } from '../content/machines';
 import { isSep, sepReady, sepSlots } from '../content/sep';
 import type { Stamp } from './blueprint';
-import { at, BIG, DX, DY, FLOOR_DY, fitAnchor, floorOf, footprint, isMachine, key, liftPartner, MOVERS, outPort, portDir, restore, sizeOf, slotPort, tunnelPair, type Dir, type Ent, type Kind, type World } from './world';
+import { at, BIG, DX, DY, FLOOR_DY, fitAnchor, floorOf, footprint, isMachine, key, liftPartner, mendRails, MOVERS, outPort, portDir, railCells, restore, sizeOf, slotPort, tunnelPair, type Dir, type Ent, type Kind, type World } from './world';
 
 /** [x0, y0, x1, y1]（両端を含む） */
 export type Rect = [number, number, number, number];
@@ -30,6 +30,8 @@ const MIRROR_SMALL = [0, 2, 1], MIRROR_BIG = [1, 0, 3, 2, 5, 4];
 export const mirrorSlot = (big: boolean, s: number) => (big ? MIRROR_BIG : MIRROR_SMALL)[s] ?? s;
 /** 出口の左右が決まっていて、鏡に映しても入れ替えられない設備 */
 export const MIRROR_FIXED: Kind[] = ['analyzer', 'settler', 'funnel', 'phoresis'];
+/** 鏡に映すと、出口の左右が入れ替わらない設備の名前（回すだけなら空） */
+export const mirrorFixed = (kinds: Kind[], how: Xform): string[] => (how === 'rot' ? [] : [...new Set(kinds.filter((k) => MIRROR_FIXED.includes(k)).map((k) => MACHINES[k as keyof typeof MACHINES].name))]);
 
 const stampSize = (b: Stamp) => (BIG.includes(b.kind) ? 2 : 1);
 /** 設計図を回す・鏡に映す。左上は (0, 0) のまま */
@@ -44,19 +46,21 @@ export function xStamps(stamps: Stamp[], how: Xform): Stamp[] {
   });
 }
 
-/** 設備を移した写し。向き・出口の場所・立体交差の荷・合流の向きも付け替える */
-function copyX(e: Ent, x: number, y: number, how: Xform): Ent {
-  const c: Ent = { ...e, x, y, dir: xDir(e.dir, how) };
+/** 設備を移した写し。向き・出口の場所・立体交差の荷・合流の向きも付け替える。back なら、how の逆（元に戻すとき） */
+function copyX(e: Ent, x: number, y: number, how: Xform, back = false): Ent {
+  // 鏡は 2 度映せば元に戻る。右に 90° の逆は、右に 270°
+  const xd = (d: Dir): Dir => (back && how === 'rot' ? ((d + 3) % 4) as Dir : xDir(d, how));
+  const c: Ent = { ...e, x, y, dir: xd(e.dir) };
   if (how !== 'rot' && e.outOrder && !isSep(e.kind)) c.outSlot = e.outOrder.map((_, i) => mirrorSlot(!!e.big, e.outSlot?.[i] ?? i));
   if (e.items) {
     // 立体交差：[横の流れ, 縦の流れ]。回すと、横と縦が入れ替わる
     const items: Ent['items'] = [null, null];
-    e.items.forEach((it, a) => { if (!it) return; const d = xDir((it.d ?? a) as Dir, how); items[d % 2] = { ...it, d }; });
+    e.items.forEach((it, a) => { if (!it) return; const d = xd((it.d ?? a) as Dir); items[d % 2] = { ...it, d }; });
     c.items = items;
   }
-  if (e.ins) c.ins = xBits(e.ins, how);
-  if (e.li !== undefined) c.li = xDir(e.li, how);
-  if (e.pri !== undefined) c.pri = xDir(e.pri, how);
+  if (e.ins) { let r = 0; for (let d = 0; d < 4; d++) if ((e.ins >> d) & 1) r |= 1 << xd(d as Dir); c.ins = r; }
+  if (e.li !== undefined) c.li = xd(e.li);
+  if (e.pri !== undefined) c.pri = xd(e.pri);
   return c;
 }
 
@@ -92,21 +96,46 @@ export function xEnts(w: World, es: Ent[], how: Xform, rect?: Rect | null): XRes
   if (moved.size) for (const e of w.ents.values()) if (e.kind === 'station') for (const tr of [e.tr, ...(e.xtr ?? [])]) if (tr?.to && moved.has(tr.to)) tr.to = moved.get(tr.to);
   const box: Rect = how === 'rot' ? [x0, y0, x0 + H - 1, y0 + W - 1] : [x0, y0, x1, y1];
   const snap = floorOf(y0) ? [] : xRails(w, [x0, y0, x1, y1], how);
-  const warn = how === 'rot' ? [] : [...new Set([...set].filter((e) => MIRROR_FIXED.includes(e.kind)).map((e) => MACHINES[e.kind as keyof typeof MACHINES].name))];
+  const warn = mirrorFixed([...set].map((e) => e.kind), how);
   return { ok: true, removed: plan.map(([e]) => e), added: plan.map(([, c]) => c), box, snap, warn };
 }
-/** 囲みの中の線路を、設備と同じように回す・鏡に映す。かかわるマスの、変える前の線路を返す（元に戻すときに使う） */
+/**
+ * ずらした・回した設備を、いまの中身のまま別の場所へ移す（元に戻す・やり直すに使う）。ents[i] を、左上が to[i] のマスへ。
+ * how を付けると、向きなどをその付け替えで写す（back なら逆の付け替え）。動かす前の設備をしまっておいて戻すと、
+ * 動かしたあとに流れた物・できた物・減った物が食い違う（中身が増える）ので、いま置かれている設備そのものを動かす。
+ * いまはもう置かれていない設備は飛ばす。行き先が、動かすもの以外でふさがっていれば何もしない（ok が false）
+ */
+export function relocate(w: World, ents: Ent[], to: [number, number][], how?: Xform, back = false): { ok: boolean; removed: Ent[]; added: Ent[] } {
+  const plan: [Ent, Ent][] = [];
+  ents.forEach((e, i) => { if (w.ents.get(key(e.x, e.y)) === e) plan.push([e, how ? copyX(e, to[i][0], to[i][1], how, back) : { ...e, x: to[i][0], y: to[i][1] }]); });
+  const moving = new Set(plan.map(([e]) => e));
+  for (const [, c] of plan) for (const [fx, fy] of footprint(c.x, c.y, sizeOf(c))) {
+    const o = w.ents.get(key(fx, fy)), m = o?.kind === 'part' ? w.ents.get(o.ref!) : o;
+    if (o && !(m && moving.has(m))) return { ok: false, removed: [], added: [] };
+  }
+  for (const [e] of plan) for (const [fx, fy] of footprint(e.x, e.y, sizeOf(e))) w.ents.delete(key(fx, fy));
+  for (const [, c] of plan) restore(w, c);
+  // 走っている列車の行き先の駅を動かしたら、行き先も付け替える
+  const moved = new Map(plan.filter(([e]) => e.kind === 'station').map(([e, c]) => [key(e.x, e.y), key(c.x, c.y)]));
+  if (moved.size) for (const e of w.ents.values()) if (e.kind === 'station') for (const tr of [e.tr, ...(e.xtr ?? [])]) if (tr?.to && moved.has(tr.to)) tr.to = moved.get(tr.to);
+  return { ok: true, removed: plan.map(([e]) => e), added: plan.map(([, c]) => c) };
+}
+/**
+ * 囲みの中の線路を、設備と同じように回す・鏡に映す。かかわるマス（動かしたマスとその隣）の、変える前の線路を返す（元に戻すときに使う）。
+ * 囲みの外とのつながりは切れる（片側だけのつながりは残さない）
+ */
 export function xRails(w: World, r: Rect, how: Xform): [string, number | undefined][] {
   const W = r[2] - r[0] + 1, H = r[3] - r[1] + 1;
   const inside: [number, number, number][] = [];
   for (const [k, m] of w.rails) { const [x, y] = k.split(',').map(Number); if (x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]) inside.push([x, y, m]); }
   if (!inside.length) return [];
   const to = inside.map(([x, y, m]) => { const [rx, ry] = xPos(x - r[0], y - r[1], 1, W, H, how); return [r[0] + rx, r[1] + ry, xBits(m, how)] as [number, number, number]; });
-  const cells = new Set([...inside, ...to].map(([x, y]) => key(x, y)));
-  const snap = [...cells].map((k) => [k, w.rails.get(k)] as [string, number | undefined]);
+  const near = railCells([...inside, ...to].map(([x, y]) => key(x, y)));
+  const snap = [...near].map((k) => [k, w.rails.get(k)] as [string, number | undefined]);
   for (const [x, y] of inside) w.rails.delete(key(x, y));
   for (const [x, y, m] of to) { const k = key(x, y); w.rails.set(k, (w.rails.get(k) ?? 0) | m); }
   w.railRev++;
+  mendRails(w, near);
   return snap;
 }
 

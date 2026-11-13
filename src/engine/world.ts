@@ -139,6 +139,8 @@ export interface Ent {
   xtr?: Train[];
   /** 一時停止：止めている装置。step が飛ばし、物も受け取らない（保存する） */
   off?: boolean;
+  /** 一時停止した装置が、途中で止めた反応（分ける装置は処理）の進み具合。止めている間は busy を外してここに預け、動かすとここから続ける */
+  offProg?: number;
   /** 設備の名前（プレイヤーが付ける短いメモ。12 文字まで。地図に小さく出す。保存する） */
   memo?: string;
 }
@@ -273,8 +275,8 @@ export interface World {
   railRev: number;
   /** 敷いた線路の上の列車の位置。キーは 'x,y,進む向き'。同じ向きの列車は前の列車を追い越せない。保存しない */
   occ: Map<string, { o: object; t: number }>;
-  /** 複数の物質を同時に求める指令で、物質ごとに納めた数 */
-  multi: Record<string, number>;
+  /** 複数の物質を同時に求める指令で、物質ごとに納めた数。キーは指令（'章:番号'）。章ごとに残り、ほかの章の指令とは混ざらない */
+  multi: Record<string, Record<string, number>>;
   /** そのまま捨てた有毒な気体の数（物質ごとの累計） */
   emitted: Record<string, number>;
   /** 指令ごとの操業評価（いちばん良かったもの）。キーは '章:番号' */
@@ -349,12 +351,12 @@ export interface Route {
   custom: boolean;
 }
 const dirBetween = (a: [number, number], b: [number, number]): number => (b[0] === a[0] + 1 && b[1] === a[1] ? 0 : b[0] === a[0] && b[1] === a[1] + 1 ? 1 : b[0] === a[0] - 1 && b[1] === a[1] ? 2 : b[0] === a[0] && b[1] === a[1] - 1 ? 3 : -1);
-/** 隣り合う 2 マスを線路でつなぐ。つないだら true（すでにつながっていたら false） */
+/** 隣り合う 2 マスを線路でつなぐ。つないだら true（すでに両側からつながっていたら false。片側だけなら、もう片側も足す） */
 export function addRail(w: World, a: [number, number], b: [number, number]): boolean {
   const d = dirBetween(a, b);
   if (d < 0 || floorOf(a[1]) || floorOf(b[1])) return false;
   const ka = `${a[0]},${a[1]}`, kb = `${b[0]},${b[1]}`, ma = w.rails.get(ka) || 0, mb = w.rails.get(kb) || 0;
-  if ((ma >> d) & 1) return false;
+  if ((ma >> d) & 1 && (mb >> ((d + 2) % 4)) & 1) return false;
   w.rails.set(ka, ma | (1 << d));
   w.rails.set(kb, mb | (1 << ((d + 2) % 4)));
   w.railRev++;
@@ -377,6 +379,30 @@ export function removeRail(w: World, x: number, y: number): boolean {
 export function setRailMask(w: World, k: string, m: number | undefined) {
   if (m) w.rails.set(k, m); else w.rails.delete(k);
   w.railRev++;
+}
+/** マスと、その 4 方向の隣のキー */
+export const railCells = (keys: Iterable<string>): Set<string> => {
+  const out = new Set<string>();
+  for (const k of keys) { const [x, y] = k.split(',').map(Number); out.add(k); for (let d = 0; d < 4; d++) out.add(`${x + DX[d]},${y + DY[d]}`); }
+  return out;
+};
+/**
+ * 片側だけのつながりを外す：向き d のつながりは、隣にも向き (d + 2) % 4 のつながりがあるときだけ残す。
+ * 線路の範囲をずらす・回すと、外の隣が消えたマスを指したまま残ったり、動かしたマスが知らない隣を指したりするので、そのあとで直す
+ */
+export function mendRails(w: World, keys: Iterable<string>) {
+  let changed = false;
+  for (const k of keys) {
+    const m = w.rails.get(k);
+    if (m === undefined) continue;
+    const [x, y] = k.split(',').map(Number);
+    let r = m;
+    for (let d = 0; d < 4; d++) if ((m >> d) & 1 && !(((w.rails.get(`${x + DX[d]},${y + DY[d]}`) || 0) >> ((d + 2) % 4)) & 1)) r &= ~(1 << d);
+    if (r === m) continue;
+    if (r) w.rails.set(k, r); else w.rails.delete(k);
+    changed = true;
+  }
+  if (changed) w.railRev++;
 }
 /** 角のマスを順に結んで線路を敷く（まっすぐな区間は自動で埋める） */
 export function layRail(w: World, corners: [number, number][]) {
@@ -424,8 +450,9 @@ export function railRoute(w: World, a: Ent, b: Ent): Route | null {
         const m = w.rails.get(k)!, [x, y] = k.split(',').map(Number);
         for (let d = 0; d < 4; d++) {
           if (!((m >> d) & 1)) continue;
+          // 隣からもつながっているときだけ進む（片側だけのつながりは、描かれないので走らない）
           const nk = `${x + DX[d]},${y + DY[d]}`;
-          if (!prev.has(nk) && w.rails.has(nk)) { prev.set(nk, k); next.push(nk); }
+          if (!prev.has(nk) && ((w.rails.get(nk) || 0) >> ((d + 2) % 4)) & 1) { prev.set(nk, k); next.push(nk); }
         }
       }
       queue = next;
@@ -554,6 +581,10 @@ export function growHub(w: World): boolean {
   return grew;
 }
 export const goalCount = (w: World) => w.counts[w.chapter] || 0;
+/** 章 ch のいまの指令のキー（'章:番号'） */
+export const goalKey = (w: World, ch = w.chapter) => `${ch}:${w.progress[ch] || 0}`;
+/** 章 ch のいまの指令（複数の物質を同時に求めるもの）で、物質ごとに納めた数 */
+export const multiOf = (w: World, ch = w.chapter): Record<string, number> => w.multi[goalKey(w, ch)] ?? {};
 export const doneCount = (w: World) => w.progress.reduce((a, n) => a + n, 0);
 export function setChapter(w: World, i: number) {
   w.chapter = Math.max(0, Math.min(CHAPTERS.length - 1, i));
@@ -628,8 +659,8 @@ export function moveEnts(w: World, ents: Ent[], dx: number, dy: number): { ok: t
   return { ok: true, removed, added };
 }
 /**
- * 囲んだ範囲の線路を、設備と一緒にずらす。ずらす前の、かかわるマスの線路を返す（元に戻すときに使う）。
- * 行き先にもともとある線路とは、つなぎ目を重ねる
+ * 囲んだ範囲の線路を、設備と一緒にずらす。ずらす前の、かかわるマス（動かしたマスとその隣）の線路を返す（元に戻すときに使う）。
+ * 行き先にもともとある線路とは、つなぎ目を重ねる。範囲の外とのつながりは切れる（片側だけのつながりは残さない）
  */
 export function moveRails(w: World, r: [number, number, number, number], dx: number, dy: number): [string, number | undefined][] {
   const inside: [number, number, number][] = [];
@@ -637,10 +668,12 @@ export function moveRails(w: World, r: [number, number, number, number], dx: num
   if (!inside.length || (!dx && !dy)) return [];
   const cells = new Set<string>();
   for (const [x, y] of inside) { cells.add(key(x, y)); cells.add(key(x + dx, y + dy)); }
-  const snap = [...cells].map((k) => [k, w.rails.get(k)] as [string, number | undefined]);
+  const near = railCells(cells);
+  const snap = [...near].map((k) => [k, w.rails.get(k)] as [string, number | undefined]);
   for (const [x, y] of inside) w.rails.delete(key(x, y));
   for (const [x, y, m] of inside) { const k = key(x + dx, y + dy); w.rails.set(k, (w.rails.get(k) ?? 0) | m); }
   w.railRev++;
+  mendRails(w, near);
   return snap;
 }
 const MACHINE_NAME = (e: Ent) => (e.kind === 'belt' ? 'ベルト' : e.kind === 'part' ? '装置' : 'ほかの設備');
@@ -700,10 +733,21 @@ export function liftPartner(w: World, e: Ent): Ent | undefined {
 }
 /** 信号 ch が点いているか */
 export const signalOn = (w: World, ch: number | undefined) => (w.sig[ch || 1] || 0) > 0;
+/**
+ * 貨物駅の役割（積む駅・降ろす駅）を変える。列車に積んでいた荷は駅へ戻し、駅にためていた物もそのまま残す（新しい役割で積む・出す）。
+ * 路線番号を変えるだけなら列車はそのままでよい（行き先が合わなくなった列車は、step が荷を積んだまま引き返させる）
+ */
+export function setStationRole(e: Ent, role: 'in' | 'out') {
+  if (e.role === role) return;
+  const back = [e.tr, ...(e.xtr ?? [])].flatMap((t) => t?.cargo ?? []);
+  e.buf = [...back, ...(e.buf ?? [])];
+  e.tr = undefined; e.xtr = undefined;
+  e.role = role;
+}
 
 export function clearRecipe(e: Ent) {
   e.ts = undefined; e.n = 0; e.u = 0;
-  e.recipe = undefined; e.outOrder = undefined; e.outSlot = undefined; e.inBuf = undefined; e.outBuf = undefined; e.busy = false; e.prog = 0;
+  e.recipe = undefined; e.outOrder = undefined; e.outSlot = undefined; e.inBuf = undefined; e.outBuf = undefined; e.busy = false; e.prog = 0; e.offProg = undefined;
 }
 
 export interface Answer {
@@ -804,6 +848,7 @@ export function configure(e: Ent, r: Recipe, order: string[], poles?: ('c' | 'a'
   e.outBuf = e.outOrder.map(() => 0);
   e.busy = false;
   e.prog = 0;
+  e.offProg = undefined;
   e.ts = [0, 0, 0]; e.n = 0; e.u = 0;
 }
 
@@ -846,8 +891,8 @@ function tally(w: World, s: string, col: 0 | 1 | 2 | 3, n: number) {
 const passed = new WeakMap<Ent, number>();
 export const beltPassed = (e: Ent) => passed.get(e) || 0;
 
-/** 装置がいま止まっている理由。0 動いている、1 原料待ち、2 出口が詰まっている */
-export const machineState = (e: Ent): 0 | 1 | 2 => (e.busy ? 0 : outputBlocked(e) ? 2 : 1);
+/** 装置がいま止まっている理由。0 動いている、1 原料待ち、2 出口が詰まっている、3 一時停止している */
+export const machineState = (e: Ent): 0 | 1 | 2 | 3 => (e.off ? 3 : e.busy ? 0 : outputBlocked(e) ? 2 : 1);
 
 /** 出口に 1 回ぶん以上たまっている生成物があるか。あるうちは、次の反応を始められない */
 export function outputBlocked(e: Ent, r = recipeById(e.recipe)): boolean {
@@ -865,9 +910,11 @@ export interface FlowStats {
   goalPerMin: number;
   /** いまの速さで指令が終わるまでの秒数。流れていなければ null */
   etaSec: number | null;
-  /** 設定済みの装置の、直近の稼働率の平均（0〜1）。装置がなければ null */
+  /** 設定済みの装置（一時停止しているものを除く）の、直近の稼働率の平均（0〜1）。装置がなければ null */
   util: number | null;
   machines: number;
+  /** 一時停止している設定済みの装置。稼働率・詰まり・原料待ちには数えない */
+  paused: number;
   jammed: number;
   starved: number;
   unset: number;
@@ -883,7 +930,7 @@ export function flowStats(w: World): FlowStats {
   const mins = (n: number) => Math.max(BUCKET_SEC, Math.min(n * BUCKET_SEC, w.playMs / 1000)) / 60;
   const m1 = span(6), m5 = span(30);
   const ms = [...w.ents.values()].filter((e) => isMachine(e.kind));
-  const set = ms.filter((e) => e.recipe);
+  const conf = ms.filter((e) => e.recipe), set = conf.filter((e) => !e.off);
   const goalPerMin = sum(m1, 'goal') / mins(6);
   const g = currentGoal(w);
   const left = g ? requiredOf(w, g) - goalCount(w) : 0;
@@ -892,8 +939,8 @@ export function flowStats(w: World): FlowStats {
     perMin1: sum(m1, 'deliver') / mins(6), perMin5: sum(m5, 'deliver') / mins(30), goalPerMin,
     etaSec: g && goalPerMin > 0 ? (left / goalPerMin) * 60 : null,
     util: set.length ? set.reduce((a, e) => a + (e.u || 0), 0) / set.length : null,
-    machines: set.length, jammed: set.filter((e) => (machineState(e) === 2 && (e.stuck || 0) > 2.5) || !!e.bad).length,
-    starved: set.filter((e) => machineState(e) === 1 && (e.u || 0) < 0.15).length, unset: ms.length - set.length,
+    machines: set.length, paused: conf.length - set.length, jammed: set.filter((e) => (machineState(e) === 2 && (e.stuck || 0) > 2.5) || !!e.bad).length,
+    starved: set.filter((e) => machineState(e) === 1 && (e.u || 0) < 0.15).length, unset: ms.length - conf.length,
     wasteRate: made5 > 0 ? Math.min(1, lost5 / made5) : null,
   };
 }
@@ -960,7 +1007,7 @@ export function moveOutput(e: Ent, i: number, slot: number) {
 }
 
 /** n が、マス (x, y) へ向き d で物を送り出すか */
-function emits(w: World, n: Ent, x: number, y: number, d: Dir, depth = 0): boolean {
+export function emits(w: World, n: Ent, x: number, y: number, d: Dir, depth = 0): boolean {
   switch (n.kind) {
     case 'belt': case 'extractor': case 'depot': case 'sampler': case 'sensor': case 'gate': return n.dir === d;
     case 'lift': return n.role === 'out' && n.dir === d;
@@ -1034,6 +1081,7 @@ function stuckWhy(w: World, n: Ent, s: string): string {
   const t = outs.length === 1 ? at(w, outs[0].x, outs[0].y) : undefined;
   if (outs.length === 1 && !t) return 'この先に何もない（行き止まり）';
   if (!t) return '出口がどれもふさがっている';
+  if (t.off) return 'この先の装置が一時停止している（▶ で動かす）';
   if (t.kind === 'belt' && t.dir === (outs[0].d + 2) % 4) return '先のベルトが向かい合っている';
   if (t.kind === 'station') return t.role === 'out' ? '降ろす駅には入れられない' : '駅がいっぱい（列車が追いつかない）';
   if (t.kind === 'tank') return t.sub && t.sub !== s && (t.cnt || 0) + (t.rcn || 0) > 0 ? 'タンクに別の物質が入っている' : 'タンクがいっぱい';
@@ -1143,9 +1191,10 @@ function deliver(w: World, s: string, x: number, y: number, rc?: boolean, quiet 
     // 複数の物質を同時に求める指令：どれも必要な数に達したら達成。いちばん遅れているものが進み具合になる
     const all = [g.s, ...g.also], need = requiredOf(w, g);
     if (!all.includes(s)) return;
-    if ((w.multi[s] || 0) < need) { w.multi[s] = (w.multi[s] || 0) + 1; w.points++; bucket(w).goal++; }
-    w.counts[ch] = Math.min(...all.map((x) => w.multi[x] || 0));
-    if (w.counts[ch] >= need) { w.multi = {}; finishGoal(w, g, ch); }
+    const gk = goalKey(w, ch), m = (w.multi[gk] ??= {});
+    if ((m[s] || 0) < need) { m[s] = (m[s] || 0) + 1; w.points++; bucket(w).goal++; }
+    w.counts[ch] = Math.min(...all.map((x) => m[x] || 0));
+    if (w.counts[ch] >= need) { delete w.multi[gk]; finishGoal(w, g, ch); }
     return;
   }
   if (g.s !== s) {
@@ -1423,8 +1472,17 @@ export function step(w: World, dt: number) {
   if (w.tick % 600 === 0 && w.occ.size) for (const [k, o] of w.occ) if (o.t < w.tick - 2) w.occ.delete(k);
   const speed = beltSpeed(w), every = extractInterval(w), rate = machineRate(w), kU = 1 - Math.exp(-dt / UTIL_TAU);
   for (const e of w.ents.values()) {
-    // 一時停止している装置は、反応も採取も出すことも止める（途中の反応・ためた物はそのまま残る）
-    if (e.off) continue;
+    // 一時停止している装置は、反応も採取も出すことも止める（途中の反応・ためた物はそのまま残る）。
+    // 途中の反応は busy から offProg へ預ける（止めている間は「動いている」ことにしない）。稼働率は下がっていき、詰まり・受け取れない物質の印は外す
+    if (e.off) {
+      if (e.busy) { e.offProg = e.prog || 0; e.busy = false; e.prog = 0; }
+      if (isMachine(e.kind) || e.kind === 'extractor') e.u = (e.u ?? 0) * (1 - kU);
+      if (e.stuck) e.stuck = 0;
+      if (e.bad) e.bad = undefined;
+      continue;
+    }
+    // 動かしたら、預けた反応の続きから
+    if (e.offProg !== undefined) { e.busy = true; e.prog = e.offProg; e.offProg = undefined; }
     switch (e.kind) {
       case 'belt': {
         const it = e.item;
@@ -1723,7 +1781,8 @@ export function step(w: World, dt: number) {
         }
         flush();
         e.stuck = !e.busy && outputBlocked(e, r) ? (e.stuck || 0) + dt : 0;
-        const st = machineState(e);
+        // いまの状態（machineState と同じ。ここに来るのは一時停止していない装置だけ）
+        const st = e.busy ? 0 : outputBlocked(e, r) ? 2 : 1;
         (e.ts ??= [0, 0, 0])[st] += dt;
         e.u = (e.u || 0) + ((st === 0 ? 1 : 0) - (e.u || 0)) * kU;
       }
@@ -1868,6 +1927,8 @@ export function deserialize(json: string): World | null {
       e.rail = undefined; e.railTo = undefined;
       for (const t2 of [e.tr, ...(e.xtr ?? [])]) if (t2) t2.held = undefined;
     }
+    // 線路の範囲をずらすと片側だけのつながりが残っていた頃のセーブ：両側そろったつながりだけにする
+    mendRails(w, [...w.rails.keys()]);
     if (Array.isArray(d.progress)) {
       w.progress = CHAPTERS.map((c, i) => Math.min(c.goals.length, d.progress[i] | 0));
       w.counts = CHAPTERS.map((_, i) => d.counts?.[i] | 0);
@@ -1930,7 +1991,23 @@ export function deserialize(json: string): World | null {
     w.emitted = tallies(d.emitted);
     w.grades = table(d.grades);
     w.fed = table(d.fed);
-    w.multi = table(d.multi);
+    // 複数の物質を同時に求める指令の進み具合。各章のいまの指令の分だけ読む。
+    // 古いセーブは物質ごとの数を 1 つだけ持っていた（どの章のものか分からない）ので、進めている章ではその数と章の進み具合の大きいほう、
+    // ほかの章では章の進み具合（いちばん遅れている物質の数）を、物質ごとの数とする
+    w.multi = {};
+    const multiNum = (v: unknown) => (typeof v === 'number' && isFinite(v) && v > 0 ? Math.floor(v) : 0);
+    const old: Record<string, unknown> = d.multi && typeof d.multi === 'object' ? d.multi : {};
+    CHAPTERS.forEach((c, ch) => {
+      const g = c.goals[w.progress[ch]], gk = goalKey(w, ch);
+      if (!g?.also) return;
+      const saved = old[gk] && typeof old[gk] === 'object' ? (old[gk] as Record<string, unknown>) : null;
+      const m: Record<string, number> = {};
+      for (const s of [g.s, ...g.also]) {
+        const n = saved ? multiNum(saved[s]) : Math.max(w.counts[ch] || 0, ch === w.chapter ? multiNum(old[s]) : 0);
+        if (n) m[s] = n;
+      }
+      if (Object.keys(m).length) w.multi[gk] = m;
+    });
     w.playMs = fin(d.playMs) ? d.playMs : 0;
     w.fname = typeof d.fname === 'string' && d.fname.trim() ? d.fname.trim().slice(0, FNAME_MAX) : undefined;
     w.pins = Array.isArray(d.pins) ? d.pins.filter((p: { x?: unknown; y?: unknown }) => Number.isInteger(p?.x) && Number.isInteger(p?.y)).slice(0, PIN_MAX).map((p: { x: number; y: number; note?: unknown }) => ({ x: p.x, y: p.y, note: typeof p.note === 'string' ? p.note.slice(0, PIN_NOTE) : '' })) : [];

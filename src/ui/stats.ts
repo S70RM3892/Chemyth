@@ -71,6 +71,7 @@ const STATE = [
   { cls: 'good', icon: '●', text: '稼働' },
   { cls: 'warn', icon: '▲', text: '原料待ち' },
   { cls: 'bad', icon: '✕', text: '出口詰まり' },
+  { cls: 'off', icon: '‖', text: '一時停止' },
 ];
 export const utilClass = (u: number) => (u >= 0.7 ? 'good' : u >= 0.35 ? 'warn' : 'bad');
 
@@ -174,6 +175,7 @@ function whyChart(w: World): HTMLElement[] {
       { label: '原料待ち', n: sr.wait, cls: 'warn', icon: '▲' },
       { label: '出口詰まり', n: sr.jam, cls: 'bad', icon: '✕' },
       { label: '受け取れない物質', n: sr.bad, cls: 'bad2', icon: '！' },
+      ...(sr.off ? [{ label: '一時停止', n: sr.off, cls: 'off', icon: '‖' }] : []),
       { label: '未設定', n: sr.unset, cls: 'unset', icon: '？' },
     ]),
     total >= 1 ? h('p', { class: 'muted sbar-cap' }, '設定済みの装置が、設定してから過ごした時間の合計の内訳') : null,
@@ -189,13 +191,16 @@ function whyChart(w: World): HTMLElement[] {
 function typeTable(w: World): HTMLElement {
   const rows = machineTypes(w);
   if (!rows.length) return h('p', { class: 'muted', id: 'st-types' }, 'まだ装置を置いていない。');
-  return h('div', { class: 'tbl-wrap' }, h('table', { class: 'log types', id: 'st-types' },
+  const table = h('div', { class: 'tbl-wrap' }, h('table', { class: 'log types', id: 'st-types' },
     h('tr', {}, h('th', {}, '種類'), h('th', { class: 'n' }, '台数'), h('th', {}, '平均の稼働率'), h('th', { class: 'n' }, '● 稼働'), h('th', { class: 'n' }, '▲ 待ち'), h('th', { class: 'n' }, '✕ 詰まり')),
     ...rows.map((r) => h('tr', {},
       h('td', {}, h('b', {}, r.name)),
       h('td', { class: 'n' }, r.set === r.n ? String(r.n) : `${r.set} / ${r.n}`),
       h('td', {}, r.util === null ? h('span', { class: 'muted' }, '記録なし') : h('span', { class: 'tu' }, meter(r.util, utilClass(r.util)), h('small', {}, `${pct(r.util)} %`))),
       h('td', { class: 'n' }, String(r.run)), h('td', { class: 'n' }, String(r.wait)), h('td', { class: 'n' }, String(r.jam))))));
+  // 一時停止している装置は、稼働率にも状態ごとの台数にも入れず、表の下に別に書く（列を足すと、スマホの幅に収まらない）
+  const off = rows.filter((r) => r.off > 0);
+  return off.length ? h('div', {}, table, h('p', { class: 'muted', id: 'st-types-off' }, `‖ 一時停止：${off.map((r) => `${r.name} ${r.off} 台`).join('・')}（稼働率と状態ごとの台数には入れていない）`)) : table;
 }
 
 export interface StatsCtx extends PanelCtx { overlay(): boolean; setOverlay(on: boolean): void; focus(e: Ent): void }
@@ -210,13 +215,13 @@ export function showStats(c: StatsCtx) {
   // ---- 装置ごと ----
   const machines = [...w.ents.values()].filter((e) => isMachine(e.kind) && e.recipe).sort((a, b) => (a.u || 0) - (b.u || 0));
   const row = (e: Ent) => {
-    const r = recipeById(e.recipe)!, st = STATE[machineState(e)], ts = e.ts ?? [0, 0, 0], total = ts[0] + ts[1] + ts[2] || 1;
+    const r = recipeById(e.recipe)!, ms = machineState(e), st = STATE[ms], ts = e.ts ?? [0, 0, 0], total = ts[0] + ts[1] + ts[2] || 1;
     const b = h('button', { class: 'mrow', type: 'button', onclick: () => { sfx.tap(); c.focus(e); } },
       h('span', { class: 'mrow-t' }, h('b', {}, r.name), h('span', { class: 'muted' }, `${MACHINES[e.kind as keyof typeof MACHINES].name}・${e.n || 0} 回`)),
       h('span', { class: `state ${st.cls}` }, h('i', {}, st.icon), st.text),
       h('span', { class: 'mrow-u' }, `${pct(e.u || 0)} %`),
       meter(e.u || 0, utilClass(e.u || 0)),
-      h('span', { class: 'muted mrow-d' }, `通算：稼働 ${pct(ts[0] / total)} %・原料待ち ${pct(ts[1] / total)} %・詰まり ${pct(ts[2] / total)} %。${machineState(e) ? statusOf(e, r) : ''}`));
+      h('span', { class: 'muted mrow-d' }, `通算：稼働 ${pct(ts[0] / total)} %・原料待ち ${pct(ts[1] / total)} %・詰まり ${pct(ts[2] / total)} %。${ms === 3 ? '一時停止中（▶ で動かす）' : ms ? statusOf(e, r) : ''}`));
     return b;
   };
 
@@ -264,7 +269,7 @@ export function showStats(c: StatsCtx) {
       h('div', { class: 'tiles' },
         tile('納品の速さ', f.perMin1.toFixed(1), '個/分', `直近 1 分。5 分平均は ${f.perMin5.toFixed(1)}`, 'st-rate'),
         tile('いまの指令', f.goalPerMin.toFixed(1), '個/分', f.etaSec === null ? '指令の物質はまだ届いていない' : `この速さなら、あと ${mmss(f.etaSec)}`, 'st-goal'),
-        tile('装置の稼働率', f.util === null ? '—' : pct(f.util), f.util === null ? '' : '%', `設定済み ${f.machines} 台の、直近 20 秒ほどの平均`, 'st-util'),
+        tile('装置の稼働率', f.util === null ? '—' : pct(f.util), f.util === null ? '' : '%', `設定済み ${f.machines} 台の、直近 20 秒ほどの平均${f.paused ? `（一時停止の ${f.paused} 台を除く）` : ''}`, 'st-util'),
         tile('捨てた割合', f.wasteRate === null ? '—' : pct(f.wasteRate), f.wasteRate === null ? '' : '%', '直近 5 分に作ったもののうち、廃棄口とあふれで失った分', 'st-waste'),
         tile('操業評価', `S ${grade('S')}・A ${grade('A')}`, '', `B ${grade('B')}・C ${grade('C')}。指令を終えた時点の速さが毎分 30 個で S、15 個で A、6 個で B`, 'st-grade'),
         tile('有毒ガスの排出', String(emitted), '個', emitted ? `大気へそのまま捨てた数。罰はない。多いのは ${worst.map(([s2, n]) => `${label(s2)} ${n}`).join('、')}` : 'まだ有毒な気体を捨てていない', 'st-toxic'),

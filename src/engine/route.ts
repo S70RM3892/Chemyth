@@ -1,9 +1,10 @@
 /**
  * 自動ベルト「道」：始まりと終わりを選ぶと、空いたマスを通る最短の道筋を探す（A*）。
  * 置いてある設備は避ける。まっすぐ流れているベルトは、直角に横切れる（そこを立体交差にする。少し遠回りより高くつける）。
+ * ほかの設備が物を出している空きマス（採取機の前、行き止まりのベルトの先など）も避ける（ベルトを置くと、関係のない物が流れ込む）。
  * 曲がり角は少しだけ高くつけるので、同じ長さなら曲がりの少ない道を選ぶ
  */
-import { at, DX, DY, footprint, isMachine, sizeOf, slotPort, type Dir, type Ent, type World } from './world';
+import { at, DX, DY, emits, footprint, isMachine, sizeOf, slotPort, type Dir, type Ent, type World } from './world';
 import { acceptsFrom, emitsInto, outTargets } from './shape';
 
 /** 敷くマス：bridge なら、もとのベルトを立体交差に置きかえる（dir は流れる向き） */
@@ -32,6 +33,8 @@ export function findRoute(w: World, a: [number, number], b: [number, number]): R
   if (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) > MAX_DIST) return { ok: false, why: `遠すぎる（${MAX_DIST} マスまで）。途中で区切って敷け。` };
   const A = at(w, a[0], a[1]), B = at(w, b[0], b[1]);
   if (A && B && A === B) return { ok: false, why: '始まりと終わりが同じ設備だ。' };
+  // 始まりの設備以外が、物を送り込んでくる空きマス（ここにベルトを置くと、関係のない物が流れ込む）
+  const fed = (x: number, y: number) => ([0, 1, 2, 3] as Dir[]).some((d) => { const m = at(w, x - DX[d], y - DY[d]); return !!m && m !== A && emits(w, m, x, y, d); });
   // ---- 始まり：空いたマスならそこから。設備なら、その出口の前のマスから ----
   const starts: { x: number; y: number; d: number }[] = [];
   if (!A) starts.push({ x: a[0], y: a[1], d: 4 });
@@ -51,11 +54,11 @@ export function findRoute(w: World, a: [number, number], b: [number, number]): R
   else {
     if (B.kind === 'extractor' || B.kind === 'depot' || B.kind === 'sampler') return { ok: false, why: `${B.kind === 'extractor' ? '採取機' : B.kind === 'depot' ? '搬出口' : '試薬棚'}には流し込めない。` };
     const cells = cellsOf(w, B), mine = new Set(cells.map(([x, y]) => k2(x, y)));
-    // 設備が物を出しているマスには置かない（出てきた物と、ぶつかる）
+    // 設備が物を出しているマスには置かない（出てきた物と、ぶつかる）。ほかの設備が物を出しているマスも同じ（関係のない物が B へ流れ込む）
     const outsB = new Set(outTargets(w, B).map((o) => k2(o.tx, o.ty)));
     for (const [cx, cy] of cells) for (const d of [0, 1, 2, 3] as Dir[]) {
       const gx = cx - DX[d], gy = cy - DY[d], gk = k2(gx, gy);
-      if (mine.has(gk) || outsB.has(gk) || at(w, gx, gy) || !acceptsFrom(B, d)) continue;
+      if (mine.has(gk) || outsB.has(gk) || at(w, gx, gy) || !acceptsFrom(B, d) || fed(gx, gy)) continue;
       // 向きのある設備は、背中側から入れるのがよい（正面には、ふつう出口がある）
       const pen = B.kind === 'hub' || B.kind === 'vent' || B.kind === 'tank' || B.kind === 'station' ? 0 : d === B.dir ? 0 : d === (B.dir + 2) % 4 ? 6 : 2;
       const old = goals.get(gk);
@@ -71,12 +74,14 @@ export function findRoute(w: World, a: [number, number], b: [number, number]): R
   const H = by1 - by0 + 1, N = (bx1 - bx0 + 1) * H;
   const idx = (x: number, y: number) => (x - bx0) * H + (y - by0);
   const inBox = (x: number, y: number) => x >= bx0 && x <= bx1 && y >= by0 && y <= by1;
-  // 0 空き、1 ふさがり。2 は横に進むとき、4 は縦に進むときに、立体交差で横切れるベルト
+  // 0 空き、1 ふさがり。2 は横に進むとき、4 は縦に進むときに、立体交差で横切れるベルト。
+  // ほかの設備が物を送り込んでくる空きマスも、ふさがりとみなす。ただし選んだ始まりと終わりの空きマスは、そのまま使う（行き止まりのベルトの先から延ばすときなど）
+  const chosen = new Set([...starts.map((q) => idx(q.x, q.y)), ...(!B ? [idx(b[0], b[1])] : [])]);
   const info = new Int8Array(N).fill(-1);
   const tile = (x: number, y: number) => {
     const i = idx(x, y);
     let v = info[i];
-    if (v < 0) { const e = at(w, x, y); v = !e ? 0 : e.kind === 'belt' && straight(w, e) ? (e.dir % 2 ? 3 : 5) : 1; info[i] = v; }
+    if (v < 0) { const e = at(w, x, y); v = !e ? (!chosen.has(i) && fed(x, y) ? 1 : 0) : e.kind === 'belt' && straight(w, e) ? (e.dir % 2 ? 3 : 5) : 1; info[i] = v; }
     return v;
   };
   // ---- 囲まれていないか：両端から、空きマス（と横切れるベルト）を広げて確かめる。囲まれていれば、すぐにあきらめる ----

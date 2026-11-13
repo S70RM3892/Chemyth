@@ -233,16 +233,17 @@ export function mapStats(base: CanvasRenderingContext2D, top: CanvasRenderingCon
       const cfg = isMachine(e.kind) && !!e.recipe;
       if ((!cfg && e.kind !== 'extractor') || !inView(e)) continue;
       const u = Math.max(0, Math.min(1, e.u ?? (e.kind === 'extractor' ? 1 : 0))), sz = sizeOf(e), pad = z * 0.08, ctx = sz === 2 ? top : base;
-      const x = sx(e.x) + pad, y = sy(e.y) + pad, s = sz * z - pad * 2, edge = heatColor(u, light(P), cv, 0.95, true);
-      ctx.fillStyle = heatColor(u, light(P), cv, 0.42); ctx.fillRect(x, y, s, s);
-      if (cv && u < STALL) hatch(ctx, x, y, s, edge, Math.max(1, z * 0.045));
+      // 一時停止している装置は灰色で「‖」（遊んでいる装置と分ける）
+      const x = sx(e.x) + pad, y = sy(e.y) + pad, s = sz * z - pad * 2, edge = e.off ? 'rgba(118,122,128,0.95)' : heatColor(u, light(P), cv, 0.95, true);
+      ctx.fillStyle = e.off ? 'rgba(128,132,140,0.42)' : heatColor(u, light(P), cv, 0.42); ctx.fillRect(x, y, s, s);
+      if (cv && u < STALL && !e.off) hatch(ctx, x, y, s, edge, Math.max(1, z * 0.045));
       ctx.strokeStyle = edge; ctx.lineWidth = Math.max(2, z * 0.07); ctx.strokeRect(x, y, s, s);
       // 色だけに頼らない：近づけば割合を書く
       if (z >= 18 && !stats) {
-        const fs = Math.max(10, Math.min(14, z * 0.26));
+        const fs = Math.max(10, Math.min(14, z * 0.26)), tx = e.off ? '‖' : `${Math.round(u * 100)}%`;
         ctx.font = `700 ${fs}px ${FONT_MONO}`;
-        ctx.lineWidth = 3; ctx.strokeStyle = punk ? '#0b0d10' : P.paper; ctx.strokeText(`${Math.round(u * 100)}%`, x + s / 2, y + s - fs * 0.7);
-        ctx.fillStyle = punk ? '#eef0ea' : P.ink; ctx.fillText(`${Math.round(u * 100)}%`, x + s / 2, y + s - fs * 0.7);
+        ctx.lineWidth = 3; ctx.strokeStyle = punk ? '#0b0d10' : P.paper; ctx.strokeText(tx, x + s / 2, y + s - fs * 0.7);
+        ctx.fillStyle = punk ? '#eef0ea' : P.ink; ctx.fillText(tx, x + s / 2, y + s - fs * 0.7);
       }
     }
     for (const c of base === top ? [base] : [base, top]) c.textBaseline = 'alphabetic';
