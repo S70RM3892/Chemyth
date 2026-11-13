@@ -8,8 +8,8 @@
  *  画面部品（CSS）と地図（canvas）で同じ色を使う */
 export type ThemeName = 'light' | 'dark';
 export type ThemeChoice = 'auto' | ThemeName;
-export type Skin = 'note' | 'punk' | 'arcane' | 'lab' | 'lite' | 'myth';
-export const SKINS: Skin[] = ['note', 'punk', 'arcane', 'lab', 'lite', 'myth'];
+export type Skin = 'note' | 'punk' | 'arcane' | 'lab' | 'lite' | 'myth' | 'real';
+export const SKINS: Skin[] = ['note', 'punk', 'arcane', 'lab', 'lite', 'myth', 'real'];
 
 export interface Palette {
   key: string;
@@ -116,6 +116,18 @@ export const PALETTES: Record<string, Palette> = {
     key: 'myth-dark', skin: 'myth', name: 'dark', paper: '#0a0620', grid: 'rgba(160,140,255,0.05)', gridBold: 'rgba(160,140,255,0.13)', ink: '#f4ecff', soft: '#b5a8dc', red: '#ff6fa3', hi: '#6ef3ff',
     plate: '#1d1544', shadow: 'rgba(0,0,0,0.6)', edge: 'rgba(4,2,14,0.9)', glow: '150,130,255', font: SERIF,
     line: { solid: '#4d3c2c', liquid: '#12406e', gas: '#3d2c72', none: '#251b4d' },
+  },
+  // 実景・昼の構内：晴れた日の、コンクリートと鋼のプラント。窓の板は明るい灰白（中の絵の地）
+  'real-light': {
+    key: 'real-light', skin: 'real', name: 'light', paper: '#b7b4ac', grid: 'rgba(30,26,20,0.08)', gridBold: 'rgba(30,26,20,0.2)', ink: '#14181c', soft: '#4a5258', red: '#c8321e', hi: '#f2c21a',
+    plate: '#eef1f3', shadow: 'rgba(8,10,14,0.42)', edge: '#15181b', glow: '255,226,170', font: SYSTEM,
+    line: { solid: '#1b1c1f', liquid: '#4f7c9c', gas: '#d8ae24', none: '#8a949c' },
+  },
+  // 実景・夜の構内：ナトリウム灯の橙の光と、濡れた地面
+  'real-dark': {
+    key: 'real-dark', skin: 'real', name: 'dark', paper: '#1d2024', grid: 'rgba(255,255,255,0.05)', gridBold: 'rgba(255,255,255,0.12)', ink: '#e8edf2', soft: '#9aa4ae', red: '#ff5a44', hi: '#ffc21a',
+    plate: '#10161c', shadow: 'rgba(0,0,0,0.65)', edge: '#040506', glow: '255,190,110', font: SYSTEM,
+    line: { solid: '#101113', liquid: '#27455c', gas: '#7a6412', none: '#3a4048' },
   },
 };
 /** 幻想スキンの金（明るい面・縁）と、虹の 6 色 */

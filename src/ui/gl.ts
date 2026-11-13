@@ -847,6 +847,10 @@ const LOOKS: Record<string, Look> = {
   'myth-light': { shadow: 0.36, ao: 0.34, bevel: 0.55, sunColor: [1.08, 1.0, 0.9], god: 0.2, streak: 0.3, streakDir: 1, streakTint: [1.0, 0.86, 0.6], cloud: 0.12, waterRefl: 0.5, sky: [0.62, 0.8, 1.0], sat: 1.16, contrast: 0.1, shadowTint: [0.94, 0.93, 1.08], hiTint: [1.05, 1.0, 0.93], reflect: 0.2 },
   // 星の海：水晶と星の光が大きくにじみ、光の筋と星形のきらめきが強い。影は藍、明るい所は桃色に寄せる。暗い地に灯が映る
   'myth-dark': { shadow: 0.18, ao: 0.46, bevel: 0.5, sunColor: [0.9, 0.92, 1.15], god: 0.6, streak: 0.6, streakDir: 1, streakTint: [0.7, 0.75, 1.0], cloud: 0, waterRefl: 0.4, sky: [0.3, 0.2, 0.6], sat: 1.22, contrast: 0.2, shadowTint: [0.88, 0.92, 1.14], hiTint: [1.08, 0.96, 1.06], reflect: 0.5 },
+  // 実景・昼：強い日差しのはっきりした影と、物のきわの暗がり。色は少し抑え、明暗の差を上げる（写真の調子）。水たまりと水面に空が映る
+  'real-light': { shadow: 0.62, ao: 0.6, bevel: 0.5, sunColor: [1.06, 1.0, 0.92], god: 0.06, streak: 0, streakDir: 0, streakTint: [1, 1, 1], cloud: 0.28, waterRefl: 0.75, sky: [0.6, 0.76, 0.96], sat: 0.94, contrast: 0.18, shadowTint: [0.92, 0.96, 1.08], hiTint: [1.04, 1.01, 0.95], reflect: 0.22 },
+  // 実景・夜：ナトリウム灯の橙。影は青く沈み、濡れた地面に灯が映る
+  'real-dark': { shadow: 0.24, ao: 0.62, bevel: 0.42, sunColor: [1.12, 0.94, 0.72], god: 0.2, streak: 0.25, streakDir: 0, streakTint: [1.0, 0.8, 0.5], cloud: 0, waterRefl: 0.6, sky: [0.16, 0.2, 0.32], sat: 0.92, contrast: 0.24, shadowTint: [0.86, 0.94, 1.14], hiTint: [1.1, 0.98, 0.84], reflect: 0.5 },
 };
 /** 「高」の画質では、最高画質の上乗せを使わない（色調だけは同じにしない：前の見た目のまま） */
 export const PLAIN_LOOK: Look = { shadow: 0, ao: 0, bevel: 0, sunColor: [1, 1, 1], god: 0, streak: 0, streakDir: 0, streakTint: [1, 1, 1], cloud: 0, waterRefl: 0, sky: [1, 1, 1], sat: 1, contrast: 0, shadowTint: [1, 1, 1], hiTint: [1, 1, 1], reflect: 0 };
@@ -867,5 +871,8 @@ const BASE: Record<string, Pick<PostParams, 'ambient' | 'spill' | 'bloom' | 'bri
   // 幻想：光は大きくにじみ、明るい所も光る。水面はよくきらめく
   'myth-light': { ambient: 1.0, spill: 0.32, bloom: 0.6, bright: 0, threshold: 1, vignette: 0.16, grain: 0.008, scan: 0, aberration: 0.0004, relief: 0.3, glint: 0.8, tint: [1.01, 1.0, 1.02] },
   'myth-dark': { ambient: 0.76, spill: 1.2, bloom: 0.95, bright: 0.2, threshold: 0.82, vignette: 0.4, grain: 0.012, scan: 0, aberration: 0.0009, relief: 0.36, glint: 0.9, tint: [0.98, 0.98, 1.06] },
+  // 実景：にじみは控えめ。フィルムの粒子と、周辺の光量落ち、わずかな色のずれ（レンズで撮った絵の調子）
+  'real-light': { ambient: 1.0, spill: 0.2, bloom: 0.22, bright: 0.1, threshold: 0.9, vignette: 0.3, grain: 0.03, scan: 0, aberration: 0.0007, relief: 0.4, glint: 0.7, tint: [1.01, 1.0, 0.98] },
+  'real-dark': { ambient: 0.62, spill: 1.0, bloom: 0.6, bright: 0.25, threshold: 0.78, vignette: 0.46, grain: 0.04, scan: 0, aberration: 0.0009, relief: 0.42, glint: 0.6, tint: [1.03, 0.99, 0.94] },
 };
 export const POST_PRESETS: Record<string, Omit<PostParams, 'time'>> = Object.fromEntries(Object.keys(BASE).map((k) => [k, { reflect: 0, ...BASE[k], ...LOOKS[k], ...FRAME }]));

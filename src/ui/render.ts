@@ -21,6 +21,7 @@ import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/s
 import { drawFar, farBegin, farEnd } from './far';
 import { bodyLite, buildChunkLite, hubLite } from './skinLite';
 import { AUTO_FANCY, TRAIN, autoRuns, lineRuns, railJunctions, railRuns, trainAt } from './railruns';
+import { bodyReal, buildChunkReal, hubReal, realBelts, realZoneLabel } from './skinReal';
 import { bodyMyth, buildChunkMyth, hubMyth, mythAmbient, mythParticle, mythUnder, mythBelts, mythFrame, mythHubGlow, mythGuardian, mythSelect, mythTrain, mythZoneLabel } from './skinMyth';
 import { drawGlints, hubMeter, mapStats, noteFx } from './mapfx';
 import { newPlume, plumePaint, plumeRadius, plumeReact, PLUME_CAP, stepPlume, type Plume } from './plumephys';
@@ -82,6 +83,7 @@ function buildChunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
   if (P.skin === 'lab') return buildChunkLab(P, cx, cy, TS, CH);
   if (P.skin === 'lite') return buildChunkLite(P, cx, cy, TS, CH);
   if (P.skin === 'myth') return buildChunkMyth(P, cx, cy, TS, CH);
+  if (P.skin === 'real') return buildChunkReal(P, cx, cy, TS, CH);
   const cv = document.createElement('canvas');
   cv.width = cv.height = SIZE;
   const g = cv.getContext('2d')!;
@@ -614,7 +616,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   const keep = particles.length;
   FONT_HAND = P.font;
   FONT_SMALL = P.skin === 'punk' ? FONT_UI : P.font;
-  const punk = P.skin === 'punk', arcane = P.skin === 'arcane', lab = P.skin === 'lab', lite = P.skin === 'lite', myth = P.skin === 'myth', light = P.name === 'light';
+  const punk = P.skin === 'punk', arcane = P.skin === 'arcane', lab = P.skin === 'lab', lite = P.skin === 'lite', myth = P.skin === 'myth', real = P.skin === 'real', light = P.name === 'light';
 
   ctx.fillStyle = P.paper;
   ctx.fillRect(0, 0, cw, ch);
@@ -756,6 +758,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   ctx.textBaseline = 'alphabetic';
   for (const sp of zoneSpots(x0, y0, x1, y1)) {
     const zn = ZONES[sp.zone], lx = sp.cx, ly = sp.cy;
+    if (real) { realZoneLabel(ctx, P, zn.name, z >= 20 ? `${sub(zn.resource).name}・${zn.form}` : '', sx(lx), gy(ly), z); continue; }
     if (myth) { mythGuardian(ctx, P, sp.zone, sx(lx), gy(ly), z, t, zn.tint[1]); mythZoneLabel(ctx, P, zn.name, z >= 20 ? `${sub(zn.resource).name}・${zn.form}` : '', sx(lx), gy(ly), z, zn.tint[1]); continue; }
     if (lab) { labZoneLabel(ctx, P, zn.name, z >= 20 ? `${sub(zn.resource).name}・${zn.form}` : '', sx(lx), gy(ly), z, zn.tint[1]); continue; }
     if (punk) {
@@ -877,7 +880,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   // 厚み：ベルトと配管を地面から浮かせる。まず地面に落ちる影、次に手前の側面を描き、そのあと上面を描く
   const lift = z * 0.1;
   ctx.lineCap = 'round';
-  if (!far && !lab && !lite && !myth) {
+  if (!far && !lab && !lite && !myth && !real) {
     ctx.save();
     ctx.translate(lift * 0.7, lift * 1.7);
     ctx.strokeStyle = punk ? `rgba(0,0,0,${light ? 0.2 : 0.42})` : P.shadow;
@@ -892,6 +895,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   }
   if (lab) labBelts(ctx, P, z, t, beltSpeed(w), belts, pass, far, veryFar, sx, sy);
   else if (myth) mythBelts(ctx, P, z, t, beltSpeed(w), belts, pass, far, veryFar, sx, sy);
+  else if (real) realBelts(ctx, P, z, t, beltSpeed(w), belts, pass, far, veryFar, sx, sy);
   else if (punk) {
     // 工業：固体はゴムのベルトに鋼の側板、液体と気体は継ぎ手のある配管
     const PW = { solid: 0.62, liquid: 0.44, gas: 0.3, none: 0.5 };
@@ -1813,7 +1817,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
 
   use(base);
   if (punk) ambient(ctx, P, cw, ch, t, dt, sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), z);
-  if (!punk && !arcane && !lab && !lite && !myth) ambientNote(ctx, G, P, cw, ch, t, dt);
+  if (!punk && !arcane && !lab && !lite && !myth && !real) ambientNote(ctx, G, P, cw, ch, t, dt);
   if (myth) mythAmbient(ctx, P, cw, ch, t, dt);
   if (lab) labAmbient(ctx, P, cw, ch, t, dt);
   if (arcane) ambientArcane(ctx, G, P, cw, ch, t, dt);
@@ -2158,6 +2162,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
     }
   } else if (P.skin === 'lite') bodyLite(ctx, P, cx, cy, u, info.color, line);
   else if (P.skin === 'myth') bodyMyth(ctx, P, cx, cy, u, z, e, t, info.color, line);
+  else if (P.skin === 'real') bodyReal(ctx, P, cx, cy, u, z, e, t, info.color);
   else {
   // 台：紙に貼った札。影はずらしたベタ
   // 厚み：地面の影 → 機種の色の側面 → 上面
@@ -2981,6 +2986,7 @@ const hasSubLook = (id: string) => { try { return sub(id).state === 'solid'; } c
 function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, z: number, size: number, w: World, t: number) {
   if (P.skin === 'lab') { hubLab(ctx, P, px, py, z, size, w, t); return; }
   if (P.skin === 'myth') { hubMyth(ctx, P, px, py, z, size, w, t); return; }
+  if (P.skin === 'real') { hubReal(ctx, P, px, py, z, size, w, t); return; }
   if (P.skin === 'lite') { hubLite(ctx, P, px, py, z, size, w); return; }
   const s = z * size, lv = Math.max(0, [2, 4, 6, 8].indexOf(size)), punk = P.skin === 'punk', light = P.name === 'light';
   const cxh = px + s / 2, cyh = py + s / 2, line = Math.max(1.5, z * 0.05), m = z * 0.06, c = z * 0.3;
