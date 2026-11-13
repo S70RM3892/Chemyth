@@ -160,6 +160,8 @@ function boot(data: HotData) {
   /** 高さの層（最高画質の、平らな表示）：地面 0.1、水 0、ベルト・装置・納品所ほど高い。影とくぼみの陰りを作る */
   const heightCv = document.createElement('canvas'), heightCtx = heightCv.getContext('2d')!;
   const fxOn = () => !!post && gfxHigh && !post.lost();
+  /** WebGL の絵が失われて、戻ってくるのを待っているあいだ。このあいだは画質と立体表示を変えない（「使えない」と決めつけない） */
+  const glWait = () => !!post?.lost();
   // ---- 立体表示：地面の絵と、装置の天面の絵を別々に描き、WebGL で箱と影をつけて、傾いたカメラで見る ----
   let three = store.meta().view3d === 'on';
   const threeOn = () => three && fxOn();
@@ -206,9 +208,16 @@ function boot(data: HotData) {
   applyGfx();
   resize();
   // WebGL の絵が失われたら（iPad が裏で GPU を取り上げたときなど）、#gl を隠して平らな絵で続ける。
-  // 戻ってきたら、合成段を作り直す（失われた段のシェーダーやテクスチャは、もう使えない）
-  glCv.addEventListener('webglcontextlost', () => { applyGfx(); resize(); });
-  glCv.addEventListener('webglcontextrestored', () => { post = null; applyGfx(); resize(); });
+  // preventDefault で、ブラウザに戻すよう頼む（毎回。標準の画質で眠っている段が失われたときも）
+  glCv.addEventListener('webglcontextlost', (ev) => { ev.preventDefault(); applyGfx(); resize(); });
+  // 戻ってきたら、合成段を作り直す（失われた段のシェーダーやテクスチャは、もう使えない）。
+  // 標準の画質でも、段があったなら作り直して眠らせておく（この端末で高画質を使えることを覚えておくため）
+  glCv.addEventListener('webglcontextrestored', () => {
+    const had = !!post;
+    post = null;
+    if (had && !gfxHigh) { try { post = createPost(glCv); } catch { post = null; } }
+    applyGfx(); resize();
+  });
   const nearZoom = () => Math.max(40, Math.min(54, cw / 24));
   /** いま引ける限界。立体表示は、平らな表示ほど引けない */
   const zMin = () => (threeOn() ? Z_MIN_3D : Z_MIN);
@@ -721,8 +730,9 @@ function boot(data: HotData) {
         h('div', { class: 'row' }, h('span', { class: 'muted' }, '見た目'), h('span', { class: 'seg' }, ...skinButtons(showMenu)), h('span', { class: 'seg' }, ...themeButtons(showMenu))),
         item('m-sleep', (() => { const c = sleepCfg(); return c.on ? `睡眠と試験日（就寝 ${hhmm(c.bed)}・起床 ${hhmm(c.wake)}、その間は工場を閉める）` : '睡眠と試験日（閉店：なし）'; })(), () => showSleepSettings()),
         item('m-sound', soundOn() ? '音：あり' : '音：なし', () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); showMenu(); }),
-        item('m-gfx', fxOn() ? (gfxTier === 2 ? '画質：最高（影・光の筋・水面・色調。押すと「高」）' : '画質：高（光・発光・ゆらぎ。押すと「標準」）') : post || store.meta().gfx !== 'plain' ? '画質：標準（軽い。押すと「最高」）' : '画質：標準（この端末では高画質を使えない）', () => {
+        item('m-gfx', glWait() ? `画質：${!gfxHigh ? '標準' : gfxTier === 2 ? '最高' : '高'}（画面の描き直しを待っている）` : fxOn() ? (gfxTier === 2 ? '画質：最高（影・光の筋・水面・色調。押すと「高」）' : '画質：高（光・発光・ゆらぎ。押すと「標準」）') : post || store.meta().gfx !== 'plain' ? '画質：標準（軽い。押すと「最高」）' : '画質：標準（この端末では高画質を使えない）', () => {
           // 最高 → 高 → 標準 → 最高
+          if (glWait()) { toast('画面の描き直しを待っている。少ししてからもう一度。', 2600); return; }
           slowFrames = 0;
           if (fxOn() && gfxTier === 2) gfxTier = 1;
           else if (fxOn()) gfxHigh = false;
@@ -732,7 +742,8 @@ function boot(data: HotData) {
           if (gfxHigh && !fxOn()) toast('この端末では高画質を使えない。', 2600);
         }),
         item('m-mini', miniOn ? '全体の小地図：あり（右下。押すとその場所へ移る）' : '全体の小地図：なし', () => { miniOn = !miniOn; store.setMeta({ minimap: miniOn }); paintMini(); sfx.tap(); showMenu(); }),
-        item('m-3d', threeOn() ? '立体表示：オン（傾いた視点・箱・影）' : '立体表示：オフ（真上からの平らな表示）', () => {
+        item('m-3d', glWait() ? `立体表示：${three && gfxHigh ? 'オン' : 'オフ'}（画面の描き直しを待っている）` : threeOn() ? '立体表示：オン（傾いた視点・箱・影）' : '立体表示：オフ（真上からの平らな表示）', () => {
+          if (glWait()) { toast('画面の描き直しを待っている。少ししてからもう一度。', 2600); return; }
           three = !threeOn(); slowFrames = 0;
           if (three && !fxOn()) { gfxHigh = true; }
           applyGfx(); resize();
