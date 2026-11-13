@@ -2,7 +2,7 @@
  * 幻想スキン（天空の庭・星の海）：本物らしさより、絵の華やかさ。重さは気にしない（毎コマ、グラデーションと光を惜しまず描く）。
  * - 天空の庭（明）：空に浮かぶ花園。水彩のにじむ草地、花、雲の海、金の縁の水晶、虹と花びら
  * - 星の海（暗）：星雲と星座の地、光る水晶の原、オーロラ、流れ星、蛍のような光の粒
- * - ベルトは「光の川」：金の岸、流れる星屑。装置は宝石の台座：切子の面、金の二重の縁、回る紋章の輪、四隅の宝玉
+ * - ベルトは、荷を背にのせて運ぶ大蛇。反応器は竜の鱗の皮と爪。装置は宝石の台座：切子の面、金の二重の縁、回る紋章の輪、四隅の宝玉
  * - 納品所は「世界の水晶」：虹色の大水晶と、逆に回る魔法陣、まわりを巡る元素の宝玉
  * 守ること：装置の窓の中（反応の様子・物質の色）は、ほかのスキンと同じ絵（覚える中身は飾らない）。文字は読める濃さを保つ
  */
@@ -171,37 +171,70 @@ export function buildChunkMyth(P: Palette, cx: number, cy: number, TS: number, C
 type BK = 'solid' | 'liquid' | 'gas' | 'none';
 export interface MythBelt { e: Ent; c: { ax: number; ay: number; bx: number; by: number } }
 /**
- * 金の岸のあいだを、物の状態の色の光が流れる。上を、白い星屑と、時間でめぐる虹色の粒が、違う速さで流れる。
- * 川がマスをまたぐ所に、金の小さな星
+ * ベルトは、荷を背にのせて運ぶ大蛇。体は物の状態の色、腹は明るく、背には流れといっしょに動く横じまと、背びれの点線。
+ * ベルトの終わり（先がベルトでない所）に頭、始まり（どのベルトも入ってこない所）に細い尾。
+ * 頭と尾は、画面に見えているベルトどうしのつながりで決める
  */
 export function mythBelts(ctx: CanvasRenderingContext2D, P: Palette, z: number, t: number, speed: number, belts: MythBelt[], pass: (style: (k: BK) => void) => void, far: boolean, veryFar: boolean, sx: (x: number) => number, sy: (y: number) => number) {
   const light = P.name === 'light', W = { solid: 0.58, liquid: 0.48, gas: 0.4, none: 0.46 }, tt = calm ? 0 : t;
   const lw = (k: number) => Math.max(1, z * k);
+  const body = (k: BK) => mix(P.line[k], light ? '#1d3a2a' : '#0a1a22', light ? 0.3 : 0.32);
   ctx.lineCap = 'round';
-  // 岸：濃い金 → 金 → 明るい線
-  ctx.strokeStyle = light ? MYTH_GOLD_DARK : '#05030f';
-  pass((k) => { ctx.lineWidth = z * W[k] + lw(0.11); });
-  ctx.strokeStyle = MYTH_GOLD;
-  pass((k) => { ctx.lineWidth = z * W[k] + lw(0.05); });
-  // 流れ：状態の色。芯は明るく
-  pass((k) => { ctx.strokeStyle = light ? mix(P.line[k], '#ffffff', 0.15) : mix(P.line[k], '#000000', 0.25); ctx.lineWidth = z * W[k] - lw(0.02); });
-  pass((k) => { ctx.strokeStyle = light ? 'rgba(255,255,255,0.6)' : `rgba(${rgbOf(mix(P.line[k], '#b8a8ff', 0.6))},0.55)`; ctx.lineWidth = z * W[k] * 0.42; });
+  // 輪郭 → 体 → 明るい腹（真ん中の帯）
+  ctx.strokeStyle = light ? '#2a2010' : '#05030f';
+  pass((k) => { ctx.lineWidth = z * W[k] + lw(0.09); });
+  pass((k) => { ctx.strokeStyle = body(k); ctx.lineWidth = z * W[k]; });
+  pass((k) => { ctx.strokeStyle = light ? mix(P.line[k], '#ffffff', 0.35) : mix(P.line[k], '#b8a8ff', 0.25); ctx.lineWidth = z * W[k] * 0.5; });
   if (!veryFar) {
-    if (!light) ctx.globalCompositeOperation = 'lighter';
-    // 虹色の粒（ゆっくり）と、白い星屑（速く）
+    // 背の横じま：流れといっしょに進む（蛇が這うように見える）
+    ctx.lineCap = 'butt';
     ctx.lineDashOffset = -tt * speed * z * 0.5;
-    pass((k) => { ctx.strokeStyle = hue(t, k === 'solid' ? 0.08 : k === 'liquid' ? 0.55 : 0.75, 95, light ? 58 : 70, light ? 0.85 : 0.9); ctx.lineWidth = lw(0.07); ctx.setLineDash([z * 0.01, z * 0.24]); });
-    ctx.lineDashOffset = -tt * speed * z * 0.85 + z * 0.13;
-    pass(() => { ctx.strokeStyle = light ? 'rgba(255,255,255,0.95)' : 'rgba(235,240,255,0.85)'; ctx.lineWidth = lw(0.035); ctx.setLineDash([z * 0.09, z * 0.41]); });
+    pass((k) => { ctx.strokeStyle = light ? `rgba(${rgbOf(body(k))},0.55)` : 'rgba(0,0,0,0.42)'; ctx.lineWidth = z * W[k] * 0.9; ctx.setLineDash([z * 0.09, z * 0.24]); });
+    // 背びれ：金の点線
+    ctx.lineDashOffset = -tt * speed * z * 0.5 + z * 0.165;
+    pass(() => { ctx.strokeStyle = MYTH_GOLD; ctx.lineWidth = lw(0.06); ctx.setLineDash([z * 0.05, z * 0.28]); });
     ctx.setLineDash([]);
-    ctx.globalCompositeOperation = 'source-over';
+    ctx.lineCap = 'round';
   }
-  if (!far) {
-    // マスの継ぎ目の金の星
+  if (!far && belts.length) {
+    // 頭と尾：見えているベルトのつながりから
+    const K = (x: number, y: number) => x * 131071 + y, DXY = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+    const here = new Map<number, MythBelt>(), fed = new Set<number>();
+    for (const b of belts) here.set(K(b.e.x, b.e.y), b);
+    for (const b of belts) { const d = DXY[b.e.dir]; if (here.has(K(b.e.x + d[0], b.e.y + d[1]))) fed.add(K(b.e.x + d[0], b.e.y + d[1])); }
+    const edge = light ? '#2a2010' : '#05030f';
     for (const b of belts) {
-      const gx = sx(b.e.x + 0.5) + b.c.ax * z * 0.96, gy = sy(b.e.y + 0.5) + b.c.ay * z * 0.96;
-      star4(ctx, gx, gy, z * 0.13, 0.36); ctx.fillStyle = MYTH_GOLD; ctx.fill();
-      ctx.strokeStyle = light ? MYTH_GOLD_DARK : '#05030f'; ctx.lineWidth = Math.max(0.8, z * 0.02); ctx.stroke();
+      const k = (b.e.st ?? 'none') as BK, d = DXY[b.e.dir], cx = sx(b.e.x + 0.5), cy = sy(b.e.y + 0.5), wd = z * W[k];
+      if (!here.has(K(b.e.x + d[0], b.e.y + d[1]))) {
+        // 頭：出口の少し手前に、くさび形。目が 2 つ、舌がちろちろ
+        const hx = cx + d[0] * z * 0.3, hy = cy + d[1] * z * 0.3, px = -d[1], py = d[0], L = z * 0.46, Hw = wd * 0.95;
+        ctx.beginPath();
+        ctx.moveTo(hx - d[0] * L * 0.5 + px * Hw * 0.75, hy - d[1] * L * 0.5 + py * Hw * 0.75);
+        ctx.quadraticCurveTo(hx + d[0] * L * 0.3 + px * Hw, hy + d[1] * L * 0.3 + py * Hw, hx + d[0] * L, hy + d[1] * L);
+        ctx.quadraticCurveTo(hx + d[0] * L * 0.3 - px * Hw, hy + d[1] * L * 0.3 - py * Hw, hx - d[0] * L * 0.5 - px * Hw * 0.75, hy - d[1] * L * 0.5 - py * Hw * 0.75);
+        ctx.closePath();
+        ctx.fillStyle = mix(body(k), '#ffffff', light ? 0.1 : 0.18); ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw(0.045); ctx.stroke();
+        for (const sd of [-1, 1]) {
+          const ex = hx + d[0] * L * 0.25 + px * Hw * 0.42 * sd, ey = hy + d[1] * L * 0.25 + py * Hw * 0.42 * sd;
+          ctx.beginPath(); ctx.arc(ex, ey, Math.max(1.2, z * 0.045), 0, TAU); ctx.fillStyle = MYTH_GOLD; ctx.fill();
+          ctx.beginPath(); ctx.arc(ex, ey, Math.max(0.6, z * 0.02), 0, TAU); ctx.fillStyle = '#05030f'; ctx.fill();
+        }
+        if (z >= 22 && !calm && Math.sin(t * 5 + b.e.x * 1.3 + b.e.y * 2.1) > 0.3) {
+          const tx = hx + d[0] * L, ty = hy + d[1] * L, fl = z * 0.12;
+          ctx.strokeStyle = '#e0486a'; ctx.lineWidth = Math.max(0.8, z * 0.025);
+          ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(tx + d[0] * fl, ty + d[1] * fl);
+          ctx.moveTo(tx + d[0] * fl, ty + d[1] * fl); ctx.lineTo(tx + d[0] * fl * 1.6 + px * fl * 0.4, ty + d[1] * fl * 1.6 + py * fl * 0.4);
+          ctx.moveTo(tx + d[0] * fl, ty + d[1] * fl); ctx.lineTo(tx + d[0] * fl * 1.6 - px * fl * 0.4, ty + d[1] * fl * 1.6 - py * fl * 0.4);
+          ctx.stroke();
+        }
+      }
+      if (!fed.has(K(b.e.x, b.e.y))) {
+        // 尾：入口の側へ、細くなって終わる
+        const ax = cx + b.c.ax * z * 0.9, ay = cy + b.c.ay * z * 0.9, ux = b.c.ax * 2, uy = b.c.ay * 2, px = -uy, py = ux;
+        ctx.beginPath();
+        ctx.moveTo(ax + px * wd * 0.5, ay + py * wd * 0.5); ctx.lineTo(ax + ux * z * 0.45, ay + uy * z * 0.45); ctx.lineTo(ax - px * wd * 0.5, ay - py * wd * 0.5); ctx.closePath();
+        ctx.fillStyle = body(k); ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw(0.04); ctx.stroke();
+      }
     }
   }
   if (G && belts.length) {
@@ -221,6 +254,125 @@ export function mythBelts(ctx: CanvasRenderingContext2D, P: Palette, z: number, 
  * 宝石の台座：下に光の輪と回る紋章、濃い金の厚み、切子の八角形、金の二重の縁、四隅の宝玉（機種の色。動いている間は光る）、
  * まわりを巡る光の粒。真ん中は、窓の中の絵が読めるように、台の色の板
  */
+// =====================================================================
+// 竜の皮（反応器の台座）
+// =====================================================================
+/**
+ * 竜の鱗の皮（八角形の台座いっぱい。真ん中は、あとで窓の板が上にかぶさる）。1 度描いた絵を、大きさ・色・昼夜ごとに覚えておいて貼る
+ * （鱗は 1 台に 100 枚ほど。毎コマ 1 枚ずつ描くと、装置が並んだときに重い）。
+ * seam は、鱗のすき間だけを明るく描いた絵（動いているあいだ、熱で赤く光らせるのに重ねる）
+ */
+const scaleCache = new Map<string, { skin: HTMLCanvasElement; seam: HTMLCanvasElement }>();
+function dragonSkin(u: number, color: string, light: boolean): { skin: HTMLCanvasElement; seam: HTMLCanvasElement; size: number } {
+  const size = Math.max(8, Math.round(u)), key = `${size}|${color}|${light}`;
+  let c = scaleCache.get(key);
+  if (!c) {
+    if (scaleCache.size > 80) scaleCache.clear();
+    const half = size * 0.43, cut = size * 0.13, cx = size / 2, cy = size / 2;
+    const make = (seam: boolean) => {
+      const cv = document.createElement('canvas'); cv.width = cv.height = size;
+      const g = cv.getContext('2d')!;
+      // 八角形の中だけに描く（真ん中は、あとで板が上にかぶさる）
+      oct(g, cx, cy, half, cut);
+      g.clip();
+      const base = mix(color, light ? '#3a2a14' : '#1a0c08', light ? 0.3 : 0.42);
+      if (!seam) { g.fillStyle = base; g.fillRect(0, 0, size, size); }
+      // 鱗：半円を、行ごとに半分ずらして重ねる（下の行が上に重なる）
+      const r = Math.max(2.4, size * 0.07), rows = Math.ceil(size / (r * 1.05)) + 2, cols = Math.ceil(size / (r * 2)) + 2;
+      for (let j = 0; j < rows; j++) for (let i = -1; i < cols; i++) {
+        const x = i * r * 2 + (j % 2 ? r : 0), y = j * r * 1.05, n = hash(i * 3.1 + 7, j * 5.3 + 1);
+        g.beginPath(); g.arc(x, y, r, 0, Math.PI);
+        if (seam) { g.strokeStyle = 'rgba(255,255,255,0.95)'; g.lineWidth = Math.max(0.8, r * 0.22); g.stroke(); continue; }
+        // 1 枚ごとに、少しずつ明るさを変える。上の端に光、下の縁に影
+        g.fillStyle = mix(base, n > 0.5 ? mix(color, '#ffd9a0', 0.4) : '#000000', 0.12 + 0.5 * Math.abs(n - 0.5)); g.fill();
+        g.strokeStyle = light ? 'rgba(20,30,10,0.55)' : 'rgba(0,0,0,0.7)'; g.lineWidth = Math.max(0.7, r * 0.16); g.stroke();
+        g.beginPath(); g.arc(x, y + r * 0.12, r * 0.62, Math.PI * 0.15, Math.PI * 0.85);
+        g.strokeStyle = light ? 'rgba(255,255,255,0.28)' : `rgba(${rgbOf(mix(color, '#ffffff', 0.5))},0.3)`; g.lineWidth = Math.max(0.5, r * 0.12); g.stroke();
+      }
+      return cv;
+    };
+    c = { skin: make(false), seam: make(true) };
+    scaleCache.set(key, c);
+  }
+  return { ...c, size };
+}
+/**
+ * 竜の頭と尾。頭は台座の右上の角にのり、外（右上）を向く：角 2 本、光る目、動いているあいだは鼻先に小さな炎。
+ * 尾は左下の角から出て、先が巻く。窓（真ん中の板）にはかからない
+ */
+function dragonHeadTail(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, half: number, color: string, line: number, busy: boolean, pulse: number, t: number, ph: number) {
+  const light = P.name === 'light', skin = mix(color, light ? '#3a2a14' : '#1a0c08', light ? 0.25 : 0.35), edge = light ? '#3a2408' : '#05030f', lw = Math.max(0.8, line * 0.6);
+  // ---- 尾 ----
+  const tx = cx - half * 0.86, ty = cy + half * 0.86, sway = busy ? Math.sin(t * 2.2 + ph) * 0.12 : 0;
+  ctx.lineCap = 'round';
+  const tail = (wd: number, col: string) => {
+    ctx.strokeStyle = col;
+    // 根もとは太く、先へ 3 段で細く
+    const seg: [number, number, number, number, number, number, number][] = [
+      [tx, ty, tx - u * 0.1, ty + u * 0.06, tx - u * 0.13, ty + u * (0.0 + sway * 0.3), wd],
+      [tx - u * 0.13, ty + u * (0.0 + sway * 0.3), tx - u * 0.17, ty - u * 0.07, tx - u * 0.1, ty - u * (0.1 - sway * 0.4), wd * 0.66],
+      [tx - u * 0.1, ty - u * (0.1 - sway * 0.4), tx - u * 0.05, ty - u * 0.12, tx - u * 0.05, ty - u * (0.06 - sway * 0.5), wd * 0.36],
+    ];
+    for (const q of seg) { ctx.lineWidth = q[6]; ctx.beginPath(); ctx.moveTo(q[0], q[1]); ctx.quadraticCurveTo(q[2], q[3], q[4], q[5]); ctx.stroke(); }
+  };
+  tail(u * 0.075 + lw * 2, edge); tail(u * 0.075, skin);
+  // ---- 頭 ----
+  const hx = cx + half * 0.8, hy = cy - half * 0.8, S = u * 0.19, bob = busy ? Math.sin(t * 3 + ph) * u * 0.006 : 0;
+  ctx.save();
+  ctx.translate(hx, hy + bob); ctx.rotate(-Math.PI / 4);
+  // 角（うしろへ 2 本）
+  for (const sd of [-1, 1]) {
+    ctx.beginPath(); ctx.moveTo(-S * 0.35, sd * S * 0.3); ctx.lineTo(-S * 1.0, sd * S * 0.72); ctx.lineTo(-S * 0.1, sd * S * 0.48); ctx.closePath();
+    ctx.fillStyle = light ? '#f4ead0' : '#e8dcc0'; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw; ctx.stroke();
+  }
+  // 頭：うしろが広く、鼻先へ細い
+  ctx.beginPath();
+  ctx.moveTo(-S * 0.55, -S * 0.5);
+  ctx.quadraticCurveTo(S * 0.2, -S * 0.62, S * 0.95, -S * 0.2);
+  ctx.quadraticCurveTo(S * 1.12, 0, S * 0.95, S * 0.2);
+  ctx.quadraticCurveTo(S * 0.2, S * 0.62, -S * 0.55, S * 0.5);
+  ctx.quadraticCurveTo(-S * 0.75, 0, -S * 0.55, -S * 0.5);
+  ctx.closePath();
+  ctx.fillStyle = skin; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 1.3; ctx.stroke();
+  // 額の鱗の筋と、鼻の穴
+  ctx.strokeStyle = light ? 'rgba(255,255,255,0.35)' : `rgba(${rgbOf(mix(color, '#ffffff', 0.5))},0.45)`; ctx.lineWidth = lw * 0.7;
+  ctx.beginPath(); ctx.moveTo(-S * 0.4, 0); ctx.lineTo(S * 0.55, 0); ctx.stroke();
+  ctx.fillStyle = edge;
+  for (const sd of [-1, 1]) { ctx.beginPath(); ctx.arc(S * 0.82, sd * S * 0.1, Math.max(0.6, S * 0.045), 0, TAU); ctx.fill(); }
+  // 目：金。動いているあいだは、熱の色に光る
+  for (const sd of [-1, 1]) {
+    const ex = S * 0.2, ey = sd * S * 0.3;
+    if (busy) { ctx.fillStyle = `rgba(255,140,60,${0.35 * pulse})`; ctx.beginPath(); ctx.arc(ex, ey, S * 0.22, 0, TAU); ctx.fill(); }
+    ctx.beginPath(); ctx.ellipse(ex, ey, S * 0.13, S * 0.09, sd * 0.35, 0, TAU); ctx.fillStyle = busy ? mix(MYTH_GOLD, '#ff7a3a', 0.4 * pulse) : MYTH_GOLD; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 0.6; ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(ex, ey, S * 0.03, S * 0.08, sd * 0.35, 0, TAU); ctx.fillStyle = '#05030f'; ctx.fill();
+  }
+  // 息：動いているあいだ、鼻先に小さな炎（飾り。装置の中の炎の色とは別）
+  if (busy && !calm) {
+    const fl = S * (0.45 + 0.25 * Math.sin(t * 9 + ph)), fx = S * 1.08;
+    ctx.beginPath(); ctx.moveTo(fx, -S * 0.12); ctx.quadraticCurveTo(fx + fl * 0.7, -S * 0.2, fx + fl, 0); ctx.quadraticCurveTo(fx + fl * 0.7, S * 0.2, fx, S * 0.12); ctx.closePath();
+    ctx.fillStyle = 'rgba(255,150,60,0.85)'; ctx.fill();
+    ctx.beginPath(); ctx.moveTo(fx, -S * 0.06); ctx.quadraticCurveTo(fx + fl * 0.4, -S * 0.08, fx + fl * 0.55, 0); ctx.quadraticCurveTo(fx + fl * 0.4, S * 0.08, fx, S * 0.06); ctx.closePath();
+    ctx.fillStyle = 'rgba(255,240,190,0.95)'; ctx.fill();
+  }
+  ctx.restore();
+}
+/** 白い絵 src を、色 col で塗った絵（覚えておく） */
+const tintCache = new WeakMap<HTMLCanvasElement, Map<string, HTMLCanvasElement>>();
+function tinted(src: HTMLCanvasElement, col: string): HTMLCanvasElement {
+  let m = tintCache.get(src);
+  if (!m) tintCache.set(src, (m = new Map()));
+  let cv = m.get(col);
+  if (!cv) {
+    cv = document.createElement('canvas'); cv.width = src.width; cv.height = src.height;
+    const g = cv.getContext('2d')!;
+    g.drawImage(src, 0, 0); g.globalCompositeOperation = 'source-in'; g.fillStyle = col; g.fillRect(0, 0, cv.width, cv.height);
+    m.set(col, cv);
+  }
+  return cv;
+}
+/** 竜の皮を着る機種（火で反応させる装置） */
+const isDragon = (e: Ent) => e.kind === 'reactor';
+
 export function bodyMyth(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, z: number, e: Ent, t: number, color: string, line: number) {
   const light = P.name === 'light', busy = !!e.busy, tt = calm ? 0 : t, ph = e.x * 1.7 + e.y * 2.3, half = u * 0.43, cut = u * 0.13;
   const pulse = busy ? 0.6 + 0.4 * Math.sin(tt * 3 + ph) : 0.25;
@@ -267,20 +419,44 @@ export function bodyMyth(ctx: CanvasRenderingContext2D, P: Palette, cx: number, 
     ctx.strokeStyle = light ? 'rgba(138,95,23,0.45)' : 'rgba(200,190,255,0.22)'; ctx.lineWidth = Math.max(0.6, line * 0.3);
     ctx.beginPath(); for (let i = 0; i < 8; i++) { ctx.moveTo(cx + O[i][0], cy + O[i][1]); ctx.lineTo(cx + I[i][0], cy + I[i][1]); } ctx.stroke();
   }
+  // 反応器は竜：縁が鱗の皮。動いているあいだ、鱗のすき間が熱で赤く光り、息をするように明滅する
+  const dragon = isDragon(e) && z >= 12;
+  if (dragon) {
+    const d = dragonSkin(u, color, light);
+    ctx.drawImage(d.skin, cx - u / 2, cy - u / 2, u, u);
+    if (busy) {
+      const prev = ctx.globalCompositeOperation;
+      ctx.globalAlpha = 0.35 + 0.45 * pulse;
+      // 白いすき間の絵を、熱の色（赤 → 橙）で重ねる：下に、その色の光を敷いてから
+      ctx.globalCompositeOperation = light ? 'source-over' : 'lighter';
+      ctx.drawImage(tinted(d.seam, pulse > 0.75 ? '#ffb347' : '#ff5a2a'), cx - u / 2, cy - u / 2, u, u);
+      ctx.globalAlpha = 1; ctx.globalCompositeOperation = prev;
+    }
+  }
   // 金の二重の縁
   oct(ctx, cx, cy, half, cut); ctx.strokeStyle = light ? '#4a3208' : '#05030f'; ctx.lineWidth = line * 1.9; ctx.stroke();
   oct(ctx, cx, cy, half, cut); ctx.strokeStyle = MYTH_GOLD; ctx.lineWidth = line * 1.05; ctx.stroke();
   oct(ctx, cx, cy, half - line * 0.2, cut); ctx.strokeStyle = 'rgba(255,248,214,0.8)'; ctx.lineWidth = Math.max(0.6, line * 0.25); ctx.stroke();
   // 真ん中の板（窓の中の絵の地）
   oct(ctx, cx, cy, u * 0.34, u * 0.08); ctx.fillStyle = P.plate; ctx.fill(); ctx.strokeStyle = light ? MYTH_GOLD_DARK : 'rgba(200,190,255,0.5)'; ctx.lineWidth = Math.max(0.8, line * 0.45); ctx.stroke();
-  // 四隅の宝玉
-  if (z >= 20) for (const [gx, gy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+  // 四隅：竜は、台をつかむ爪。ほかは宝玉
+  if (dragon && z >= 20) for (const [gx, gy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+    const jx = cx + gx * (half - cut * 0.5), jy = cy + gy * (half - cut * 0.5), L = u * 0.1;
+    // 3 本の爪：角から外へ、少し開いて
+    for (let k = -1; k <= 1; k++) {
+      const a = Math.atan2(gy, gx) + k * 0.5, bx = jx - Math.cos(a) * L * 0.25, by = jy - Math.sin(a) * L * 0.25, px = -Math.sin(a) * L * 0.2, py = Math.cos(a) * L * 0.2;
+      ctx.beginPath(); ctx.moveTo(bx + px, by + py); ctx.lineTo(jx + Math.cos(a) * L, jy + Math.sin(a) * L); ctx.lineTo(bx - px, by - py); ctx.closePath();
+      ctx.fillStyle = light ? '#f4ead0' : '#e8dcc0'; ctx.fill(); ctx.strokeStyle = light ? '#4a3208' : '#05030f'; ctx.lineWidth = Math.max(0.7, line * 0.4); ctx.stroke();
+    }
+  } else if (z >= 20) for (const [gx, gy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
     const jx = cx + gx * (half - cut * 0.5), jy = cy + gy * (half - cut * 0.5), jr = Math.max(1.8, u * 0.04);
     if (busy) { ctx.fillStyle = `rgba(${rgbOf(color)},${0.35 * pulse})`; ctx.beginPath(); ctx.arc(jx, jy, jr * 2.3, 0, TAU); ctx.fill(); }
     ctx.beginPath(); ctx.arc(jx, jy, jr, 0, TAU); ctx.fillStyle = busy ? mix(color, '#ffffff', 0.25 + 0.3 * pulse) : mix(color, P.plate, 0.45); ctx.fill();
     ctx.strokeStyle = light ? '#4a3208' : '#05030f'; ctx.lineWidth = Math.max(0.8, line * 0.45); ctx.stroke();
     ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.beginPath(); ctx.arc(jx - jr * 0.3, jy - jr * 0.3, jr * 0.3, 0, TAU); ctx.fill();
   }
+  // 竜の頭（右上の角から外を向く）と尾（左下の角から巻く）
+  if (dragon && z >= 16) dragonHeadTail(ctx, P, cx, cy, u, half, color, line, busy, pulse, tt, ph);
   // 巡る光の粒
   if (busy && z >= 26 && !calm) {
     for (let i = 0; i < 3; i++) {
