@@ -62,6 +62,8 @@ export const SOURCE_HOLD = 12;
 export const JAM_SEC = 2;
 
 export interface Ent {
+  /** 採取機が採る資源の覚え書き（場所 resAt のときの値。セーブには書かない） */
+  res?: string; resAt?: number;
   kind: Kind;
   x: number;
   y: number;
@@ -619,7 +621,7 @@ export const toolUnlocked = (w: World, need: { done?: number; chapter?: number; 
 export function newWorld(): World {
   const w: World = {
     study: newStudy(),
-    ents: new Map(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, exams: [...EXAMS_DEFAULT], calib: { sure: [0, 0], maybe: [0, 0], guess: [0, 0] }, relearn: [], hcLog: [], side: null, night: null, dayMs: {}, tested: [], today: { day: '', wrong: [] }, revDays: {}, ret: RETENTION, bonusDay: '', cleared: [], delivered: {}, stock: {},
+    ents: new EntMap(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, exams: [...EXAMS_DEFAULT], calib: { sure: [0, 0], maybe: [0, 0], guess: [0, 0] }, relearn: [], hcLog: [], side: null, night: null, dayMs: {}, tested: [], today: { day: '', wrong: [] }, revDays: {}, ret: RETENTION, bonusDay: '', cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
     up: { extract: 0, belt: 0, machine: 0 }, research: [], agents: [], cases: [], solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, sig: [], rails: new Map(), railRev: 0, occ: new Map(), buckets: [], hour: [], ach: {}, eta: {}, playMs: 0, tick: 0, events: [], fx: [],
     pins: [],
@@ -629,8 +631,23 @@ export function newWorld(): World {
 }
 
 /** そのマスにあるもの。2×2 の装置は、どのマスを指しても本体を返す */
+/**
+ * 設備の地図。鍵は "x,y" の文字列（セーブや外の部品はこの形で使う）。同じ中身を、数の鍵でも引けるようにしてある（num）。
+ * 工場を進めるとき、1 歩に何万回もマスを調べる。そのたびに文字列をつなぎ、文字列で探すと、それだけで 1 歩の時間の 3 割を使う
+ */
+const NUM_OFF = 32768, NUM_W = 65536;
+const numKey = (x: number, y: number) => (x + NUM_OFF) * NUM_W + (y + NUM_OFF);
+const inNum = (x: number, y: number) => x >= -NUM_OFF && x < NUM_OFF && y >= -NUM_OFF && y < NUM_OFF && Number.isInteger(x) && Number.isInteger(y);
+export class EntMap extends Map<string, Ent> {
+  num = new Map<number, Ent>();
+  private static n(k: string): number { const c = k.indexOf(','), x = +k.slice(0, c), y = +k.slice(c + 1); return c > 0 && inNum(x, y) ? numKey(x, y) : -1; }
+  set(k: string, v: Ent): this { const n = EntMap.n(k); if (n >= 0) this.num.set(n, v); return super.set(k, v); }
+  delete(k: string): boolean { const n = EntMap.n(k); if (n >= 0) this.num.delete(n); return super.delete(k); }
+  clear(): void { this.num.clear(); super.clear(); }
+}
 export function at(w: World, x: number, y: number): Ent | undefined {
-  const e = w.ents.get(key(x, y));
+  const m = w.ents as EntMap;
+  const e = m.num && inNum(x, y) ? m.num.get(numKey(x, y)) : m.get(key(x, y));
   return e?.kind === 'part' ? w.ents.get(e.ref!) : e;
 }
 export const sizeOf = (e: Ent) => (e.big ? 2 : 1);
@@ -1680,9 +1697,16 @@ export function step(w: World, dt: number) {
       }
       case 'extractor': {
         // 出口がふさがっている間も採り続け、SOURCE_HOLD 個までためて、空いたときにまとめて出す
-        e.timer = Math.min((e.timer || 0) + dt, every * SOURCE_HOLD);
+        const cap = every * SOURCE_HOLD, full = (e.timer || 0) >= cap - 1e-9;
+        e.timer = Math.min((e.timer || 0) + dt, cap);
         const k = Math.floor(e.timer / every + 1e-9);
-        if (k >= 1 && push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, resourceAt(e.x, e.y), undefined, k)) { e.timer = Math.max(0, e.timer - k * every); e.n = (e.n || 0) + k; tally(w, resourceAt(e.x, e.y), 0, k); }
+        // いっぱいまでためて出口がふさがったままの採取機は、4 歩に 1 回だけ出口を確かめる（何千台も並ぶ畑で、毎歩すべての出口を調べない。場所でずらす）
+        if (k >= 1 && (!full || ((w.tick + e.x * 7 + e.y * 13) & 3) === 0)) {
+          // 採れる資源は場所で決まる。場所が変わるまで覚えておく
+          const at2 = e.x * 65536 + e.y;
+          if (e.resAt !== at2) { e.res = resourceAt(e.x, e.y); e.resAt = at2; }
+          if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, e.res!, undefined, k)) { e.timer = Math.max(0, e.timer - k * every); e.n = (e.n || 0) + k; tally(w, e.res!, 0, k); }
+        }
         // ためられる量がいっぱいになると、採れるのに出せない
         e.u = (e.u ?? 1) + ((e.timer < every * SOURCE_HOLD - 1e-9 ? 1 : 0) - (e.u ?? 1)) * kU;
         break;
@@ -1845,7 +1869,7 @@ export const FNAME_MAX = 20;
  * 整数でない数（進み具合・待ち時間・時計）は小数 3 桁まで（1 ミリ秒・0.1 % より細かい違いは、遊びに出ない）
  */
 const round3 = (v: number) => Math.round(v * 1000) / 1000;
-const slim = (_k: string, v: unknown) => (v === null || v === false ? undefined : typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? round3(v) : v);
+const slim = (k: string, v: unknown) => (v === null || v === false || k === 'res' || k === 'resAt' ? undefined : typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? round3(v) : v);
 /** 設備の一覧だけを、欄を整えながら 1 回で文字にする（配列の中の null は、場所を保つためにそのまま） */
 const entsJson = (list: Ent[]) => JSON.stringify(list, function (this: unknown, k, v) { return Array.isArray(this) ? (typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? round3(v) : v) : k === '' ? v : slim(k, v); });
 export function serialize(w: World): string {
@@ -1970,7 +1994,7 @@ export function deserialize(json: string): World | null {
     const d = JSON.parse(json);
     if (d.v !== SAVE_VERSION || !Array.isArray(d.ents)) return null;
     const w = newWorld();
-    w.ents = new Map();
+    w.ents = new EntMap();
     for (const o of d.ents as unknown[]) { const e = readEnt(o); if (e) restore(w, e); }
     if (Array.isArray(d.rails)) for (const row of d.rails) if (Array.isArray(row) && typeof row[0] === 'string' && Number.isInteger(row[1]) && row[1] > 0 && row[1] < 16) w.rails.set(row[0], row[1]);
     // 古いセーブ：駅ごとに持っていた線路を、地図の線路へ移す（形のおかしいもの、長すぎるものは移さない）

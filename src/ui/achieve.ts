@@ -36,10 +36,14 @@ function pop(list: Achievement[]) {
 const next = () => { const l = queue.shift(); if (l) window.setTimeout(() => pop(l), 250); };
 
 /** 工場を動かしている間、半秒に 1 回：指令の見込みを記録し、新しく得た実績を知らせる */
+let lastAch = -1e9;
 export function statsTick(w: World, now = performance.now()) {
   if (now - lastTick < 500) return;
   lastTick = now;
   noteEta(w);
+  // 実績の判定は、まだ得ていない実績ごとに全部の設備を数え直す。設備が多い工場では、そのぶん間をあける（1000 台ごとに半秒、最長 5 秒）
+  if (now - lastAch < Math.min(5000, 500 * Math.ceil(w.ents.size / 1000))) return;
+  lastAch = now;
   const got = checkAchievements(w);
   if (got.length) pop(got);
 }

@@ -177,7 +177,16 @@ function spotOf(gx: number, gy: number): ZoneSpot | null {
   return s;
 }
 
+/** マスごとの資源地の覚え書き。判定は重く（丸いにじみの計算）、採取機は 1 歩ごとに自分のマスを聞くので、覚えておく（覚えすぎたら忘れる） */
+const zoneMemo = new Map<number, Zone | null>();
 export function zoneAt(x: number, y: number): Zone | null {
+  if (!Number.isInteger(x) || !Number.isInteger(y) || x < -32768 || x >= 32768 || y < -32768 || y >= 32768) return zoneAtRaw(x, y);
+  const k = (x + 32768) * 65536 + (y + 32768);
+  let z = zoneMemo.get(k);
+  if (z === undefined) { if (zoneMemo.size > 400000) zoneMemo.clear(); z = zoneAtRaw(x, y); zoneMemo.set(k, z); }
+  return z;
+}
+function zoneAtRaw(x: number, y: number): Zone | null {
   if (x >= 0 && y >= 0 && x < MAP_W && y < MAP_H) {
     for (const z of BLOBS) { const [cx, cy, r] = ZONES[z].at; if (blob(x, y, cx, cy, r)) return z; }
     for (const s of INLETS) if (blob(x, y, s.cx, s.cy, s.r)) return s.zone;

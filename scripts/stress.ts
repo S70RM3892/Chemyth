@@ -43,3 +43,30 @@ export function denseWorld(): World {
   }
   return w;
 }
+
+/**
+ * 採取機の畑の工場：採取機 5800 台（半分はベルトへ出して廃棄口・タンク・納品所へ、半分は出口がふさがったまま）、
+ * 蒸留塔 200 台、荷で埋まったベルト 6000、いっぱいの駅 40 組。強化は高め。毎分数十万個が流れる大きな工場に近い形
+ */
+export function farmWorld(): World {
+  const w = newWorld();
+  w.up = { extract: 8, belt: 6, machine: 6 };
+  const put = (e: Record<string, unknown>) => w.ents.set(`${e.x},${e.y}` as never, e as never);
+  // 出口がふさがった採取機の畑（隣の採取機へ向いている）：2900 台
+  for (let i = 0; i < 2900; i++) put({ kind: 'extractor', x: -300 + (i % 58), y: 200 + Math.floor(i / 58), dir: 0 });
+  // ベルトへ出す採取機：横 1 列のベルトの上と下に並べる。ベルトの先は廃棄口か納品所行きの駅
+  for (let r = 0; r < 29; r++) {
+    const y = -300 + r * 3;
+    for (let x = 0; x < 50; x++) { put({ kind: 'extractor', x: -300 + x, y: y - 1, dir: 1 }); put({ kind: 'extractor', x: -300 + x, y: y + 1, dir: 3 }); put({ kind: 'belt', x: -300 + x, y, dir: 0 }); }
+    for (let x = 50; x < 150; x++) put({ kind: 'belt', x: -300 + x, y, dir: 0 });
+    if (r % 2) put({ kind: 'vent', x: -150, y, dir: 0 });
+    else { put({ kind: 'separator', x: -150, y, dir: 0, big: true }); const e = (w.ents as Map<string, any>).get(`-150,${y}`); configure(e, recipeById('air-distill') ?? recipeById('haber-bosch')!, (recipeById('air-distill')?.outputs ?? [['NH3', 1]]).map(([s]) => s)); }
+  }
+  for (let r = 0; r < 40; r++) {
+    const y = -200 + r * 4;
+    layRail(w, [[100, y], [249, y]]);
+    put({ kind: 'station', x: 98, y: y - 1, dir: 0, ch: (r % 8) + 1, role: 'in', big: true, buf: Array(1200).fill('N2') });
+    put({ kind: 'station', x: 250, y: y - 1, dir: 0, ch: (r % 8) + 1, role: 'out', big: true, buf: Array(600).fill('N2') });
+  }
+  return w;
+}

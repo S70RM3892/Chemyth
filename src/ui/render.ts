@@ -864,7 +864,13 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   /** 状態ごとに線の設定をしてから、その状態のベルトをまとめて描く */
   const pass = (style: (k: BK) => void) => { for (const k of KINDS) if (byKind[k].length) { style(k); strokeAll(byKind[k]); } };
   // 引いた視野では、細部（厚み・流れ線・影）を省く
-  const far = z < 15, veryFar = z < 11;
+  // 軽量スキンは、早めに簡単な絵に替える：1 マス 30 画素より引いたとき、または装置が画面に 500 台を超えて映るとき（採取機の畑など）。
+  // 装置は機種の色の四角と状態の点、荷は色の点。細かい絵（反応の様子・出口の矢じり）は、寄って台数が減ったときに描く
+  let visMachines = 0;
+  for (const e of vis) if (e.kind !== 'belt' && e.kind !== 'part') visMachines++;
+  // ほかのスキンでも、装置が画面に 1200 台を超えて映るときは簡単な絵にする（1 台ずつ細かく描くと、1 コマに何百ミリ秒もかかる）
+  const crowd = visMachines > (lite ? 300 : 1200);
+  const far = z < (lite ? 30 : 15) || crowd, veryFar = z < (lite ? 22 : 11) || crowd;
   // 厚み：ベルトと配管を地面から浮かせる。まず地面に落ちる影、次に手前の側面を描き、そのあと上面を描く
   const lift = z * 0.1;
   ctx.lineCap = 'round';
@@ -1047,6 +1053,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
    */
   const load = (x: number, y: number, s: string, n: number | undefined) => {
     const k = Math.min(9, n || 1);
+    // 軽量：山は描かず、1 つの絵と個数の札（2 個から）。山は 1 マスに 9 枚の絵を重ねるので、荷で埋まったベルトでは 1 コマに何千枚にもなる
+    if (lite) { token(ctx, P, x, y, z, s, true); if (!far && (n || 1) >= 2) stack(x, y, n, 2); return; }
     if (far || k <= 1) { token(ctx, P, x, y, z, s, far); if (!far) stack(x, y, n); return; }
     const spots = HEAP[k], zz = z * (k <= 4 ? 0.62 : 0.5);
     // 山の影
@@ -1055,8 +1063,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     for (const [dx, dy] of spots) token(ctx, P, x + dx * z, y + dy * z - z * 0.04, zz, s, true);
     if ((n || 1) >= 10) stack(x, y, n);
   };
-  const stack = (x: number, y: number, n: number | undefined) => {
-    if (!n || n < 10 || z < 22) return;
+  const stack = (x: number, y: number, n: number | undefined, from = 10) => {
+    if (!n || n < from || z < 22) return;
     const tx = `×${n}`, fs = Math.max(9, z * 0.21), wd = fs * (0.6 * tx.length + 0.5), bx = x + z * 0.2, by = y + z * 0.21;
     rr(ctx, bx - wd / 2, by - fs * 0.62, wd, fs * 1.24, fs * 0.35);
     ctx.fillStyle = punk ? '#0b0d10' : P.ink; ctx.fill();
@@ -1093,6 +1101,20 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   // ---- 装置 ----
   for (const e of vis) {
     if (e.kind === 'belt' || e.kind === 'bridge' || e.kind === 'tunnel' || e.kind === 'hub' || e.kind === 'part' || !(inView(e) || (e.big && inView({ ...e, x: e.x + 1, y: e.y + 1 })))) continue;
+    if (far && !three && !G) {
+      // 簡単な絵（引いた視野・軽量）：機種の色の四角と、状態の点だけ。置いたときの動きの計算もしない
+      const info = MACHINES[e.kind as keyof typeof MACHINES], szf = sizeOf(e), px0 = sx(e.x) + z * 0.08, py0 = sy(e.y) + z * 0.08, ps = szf * z - z * 0.16;
+      ctx.fillStyle = info.color; ctx.fillRect(px0, py0, ps, ps);
+      if (z >= 9) { ctx.strokeStyle = punk ? '#0b0d10' : P.ink; ctx.lineWidth = Math.max(1, z * 0.07); ctx.strokeRect(px0, py0, ps, ps); }
+      const needs = (isMachine(e.kind) && !e.recipe) || ((e.kind === 'analyzer' && !e.test) || (isSep(e.kind) && !sepReady(e.kind, e.test))) || ((e.kind === 'sampler' || e.kind === 'depot') && !e.sub);
+      const jam = (e.stuck || 0) > 2.5 || !!e.bad;
+      if (needs || jam || e.busy) {
+        ctx.fillStyle = needs || jam ? P.red : cvd ? CVD_GO : '#58e06a';
+        if (cvd && !(needs || jam)) { ctx.beginPath(); ctx.arc(px0 + ps / 2, py0 + ps / 2, ps * 0.22, 0, Math.PI * 2); ctx.fill(); } else ctx.fillRect(px0 + ps * 0.3, py0 + ps * 0.3, ps * 0.4, ps * 0.4);
+        if (cvd && jam) cross(ctx, px0 + ps / 2, py0 + ps / 2, ps * 0.14, '#ffffff', Math.max(1, ps * 0.07));
+      }
+      continue;
+    }
     if (!born.has(e)) born.set(e, t);
     const age = t - born.get(e)!;
     const pop = age < 0.24 ? 0.7 + 0.3 * (1 - Math.pow(1 - age / 0.24, 3)) + 0.1 * Math.sin((age / 0.24) * Math.PI) : 1;
@@ -1186,7 +1208,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       if (st === 0 && punk && !light) { ctx.globalAlpha = 0.35; ctx.beginPath(); ctx.arc(lx, ly, lr * 2.1, 0, Math.PI * 2); ctx.fillStyle = cvd ? CVD_GO : '#3fbf63'; ctx.fill(); ctx.globalAlpha = 1; }
     }
     // 採取機は、採れているあいだ、土ぼこりやしぶきを飛ばす
-    if (e.kind === 'extractor' && z >= 20 && (e.u ?? 0) > 0.3 && particles.length < 260 && Math.random() < dt * 2.2) {
+    if (!lite && e.kind === 'extractor' && z >= 20 && (e.u ?? 0) > 0.3 && particles.length < 260 && Math.random() < dt * 2.2) {
       const a = Math.random() * Math.PI * 2, wet = sub(resourceAt(e.x, e.y)).state !== 'solid';
       particles.push({ x: e.x + 0.5 + Math.cos(a) * 0.2, y: e.y + 0.5 + Math.sin(a) * 0.2, vx: Math.cos(a) * 0.5, vy: Math.sin(a) * 0.5 - 0.25, age: 0, life: 0.45 + Math.random() * 0.25, color: wet ? '#5aa9d6' : P.soft, r: 0.035 + Math.random() * 0.03 });
     }
@@ -2298,6 +2320,13 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
   switch (e.kind) {
     case 'extractor': {
       disc(cx, cy, u * 0.27); inked(info.color);
+      if (P.skin === 'lite') {
+        // 軽量：羽根は回さず、3 本の線で描く（1 回の線引き）
+        ctx.beginPath();
+        for (let i = 0; i < 3; i++) { const a = (i / 3) * Math.PI * 2 + 0.5; ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * u * 0.22, cy + Math.sin(a) * u * 0.22); }
+        ctx.strokeStyle = P.plate; ctx.lineWidth = line * 1.6; ctx.stroke();
+        break;
+      }
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(t * 3 + e.x);
