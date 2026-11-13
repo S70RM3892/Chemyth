@@ -33,7 +33,7 @@ import { setSound, setVolume, sfx, soundOn, unlockAudio } from './ui/sound';
 import { musicOn, musicTick, setMusic, setMusicVolume } from './ui/music';
 import { fmtDate, fmtTime, initTitle, skinButtons, slotName, store, themeButtons } from './ui/title';
 import { SLEEP_DEFAULT, duskOf, eveningWindow, hhmm, isClosed, minutesToBed, morningDue, nightDone, nightSetIds, windDown, type SleepCfg } from './engine/sleep';
-import { runOf, type SetRun } from './engine/study';
+import { endRun, keepRun, runOf, type SetRun } from './engine/study';
 import { capByExams, dayKey } from './engine/fsrs';
 import { buildQueue, partnerOf, quizFor } from './engine/quiz';
 import { addPlayTime, canTestOut } from './engine/pace';
@@ -799,15 +799,16 @@ function boot(data: HotData) {
   let dusk = prefs().dusk ? duskOf(new Date()) : 0;
   /**
    * 問いを順に出す（今夜・今朝の 10 問）。終わったら finish(正解数, 出した問い)。
-   * 途中で閉じたら、どこまで答えたかをセーブに残し、次に開いたときは続きから出す（答えた問いを、もう一度数えない）
+   * 途中で閉じたら、どこまで答えたかをセーブに残し、次に開いたときは続きから出す（答えた問いを、もう一度数えない）。
+   * 続きは今夜・今朝で別に残す（今朝の 10 問を途中で閉じたまま今夜の 10 問を始めても、今朝の続きは消えない）
    */
   const runSet = (title: string, lead: string, kind: SetRun['kind'], day: string, ids0: string[], finish: (right: number, ids: string[]) => void) => {
     const run = runOf(world.study, kind, day), ids = run ? run.ids : ids0;
     let right = run ? run.got : 0;
-    const mark = (i: number) => { world.study.run = { kind, day, ids, i, got: right }; };
+    const mark = (i: number) => keepRun(world.study, { kind, day, ids, i, got: right });
     const step = (i: number) => {
       const id = ids[i];
-      if (!id) { world.study.run = null; finish(right, ids); return; }
+      if (!id) { endRun(world.study, kind); finish(right, ids); return; }
       const q = quizFor(world, id);
       if (!q) { step(i + 1); return; }
       const body = h('div', { class: 'rv-body' });

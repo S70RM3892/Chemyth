@@ -3,7 +3,7 @@ import { RECIPES } from '../src/content/recipes';
 import { KNOWLEDGE } from '../src/content/knowledge';
 import { mulberry32 } from '../src/content/drills';
 import { practiceIds, setupMissed, snapAnswer, undoAnswer } from '../src/engine/learn';
-import { readStudy, runOf } from '../src/engine/study';
+import { endRun, keepRun, newStudy, readStudy, runOf } from '../src/engine/study';
 import { answer, deserialize, learn, newWorld, serialize } from '../src/engine/world';
 
 const T = new Date(2026, 10, 12, 15, 0).getTime();
@@ -99,19 +99,39 @@ describe('答えの取り消し', () => {
 describe('今夜・今朝の 10 問の続き', () => {
   it('途中まで答えた回は、セーブを通っても残る', () => {
     const w = newWorld();
-    w.study.run = { kind: 'morning', day: '2026-11-11', ids: ['k:a', 'k:b', 'k:c'], i: 2, got: 1 };
+    keepRun(w.study, { kind: 'morning', day: '2026-11-11', ids: ['k:a', 'k:b', 'k:c'], i: 2, got: 1 });
     const r = deserialize(serialize(w))!;
-    expect(r.study.run).toEqual({ kind: 'morning', day: '2026-11-11', ids: ['k:a', 'k:b', 'k:c'], i: 2, got: 1 });
+    expect(r.study.runs?.morning).toEqual({ kind: 'morning', day: '2026-11-11', ids: ['k:a', 'k:b', 'k:c'], i: 2, got: 1 });
     expect(runOf(r.study, 'morning', '2026-11-11')?.i).toBe(2);
     // ほかの回（今夜の 10 問、別の日）には続きを使わない
     expect(runOf(r.study, 'night', '2026-11-11')).toBeNull();
     expect(runOf(r.study, 'morning', '2026-11-12')).toBeNull();
   });
+  it('今朝の 10 問を途中で閉じたまま今夜の 10 問に答えても、今朝の続きは消えない', () => {
+    const w = newWorld();
+    const morning = { kind: 'morning' as const, day: '2026-11-11', ids: ['k:a', 'k:b', 'k:c', 'k:d'], i: 2, got: 2 };
+    keepRun(w.study, morning);
+    keepRun(w.study, { kind: 'night', day: '2026-11-12', ids: ['k:x', 'k:y'], i: 1, got: 0 });
+    const r = deserialize(serialize(w))!;
+    expect(runOf(r.study, 'morning', '2026-11-11')).toEqual(morning);
+    expect(runOf(r.study, 'night', '2026-11-12')?.i).toBe(1);
+    // 今夜の 10 問を終えても、今朝の続きは残る（逆も同じ）
+    endRun(r.study, 'night');
+    expect(runOf(r.study, 'night', '2026-11-12')).toBeNull();
+    expect(runOf(r.study, 'morning', '2026-11-11')?.i).toBe(2);
+    endRun(r.study, 'morning');
+    expect(runOf(r.study, 'morning', '2026-11-11')).toBeNull();
+    endRun(newStudy(), 'night');
+  });
   it('壊れた記録は読まない。数は範囲に収める', () => {
-    expect(readStudy({ run: { kind: 'x', day: 'd', ids: [], i: 0, got: 0 } }).run).toBeFalsy();
-    expect(readStudy({ run: { kind: 'night', day: 'd', ids: [1, 2], i: 0, got: 0 } }).run).toBeFalsy();
-    expect(readStudy({ run: null }).run).toBeFalsy();
-    expect(readStudy({}).run).toBeFalsy();
-    expect(readStudy({ run: { kind: 'night', day: 'd', ids: ['k:a'], i: 9, got: 9 } }).run).toEqual({ kind: 'night', day: 'd', ids: ['k:a'], i: 1, got: 1 });
+    expect(readStudy({ runs: { night: { kind: 'x', day: 'd', ids: [], i: 0, got: 0 } } }).runs).toBeFalsy();
+    expect(readStudy({ runs: { night: { kind: 'night', day: 'd', ids: [1, 2], i: 0, got: 0 } } }).runs).toBeFalsy();
+    // 置き場所と種類が食い違うものは読まない
+    expect(readStudy({ runs: { night: { kind: 'morning', day: 'd', ids: ['k:a'], i: 0, got: 0 } } }).runs).toBeFalsy();
+    expect(readStudy({ runs: null }).runs).toBeFalsy();
+    expect(readStudy({ runs: [] }).runs).toBeFalsy();
+    expect(readStudy({}).runs).toBeFalsy();
+    const s = readStudy({ runs: { night: { kind: 'night', day: 'd', ids: ['k:a'], i: 9, got: 9 }, morning: { kind: 'morning', day: 'e', ids: ['k:b', 'k:c'], i: -3, got: 4 } } });
+    expect(s.runs).toEqual({ night: { kind: 'night', day: 'd', ids: ['k:a'], i: 1, got: 1 }, morning: { kind: 'morning', day: 'e', ids: ['k:b', 'k:c'], i: 0, got: 0 } });
   });
 });
