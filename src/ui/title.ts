@@ -7,6 +7,7 @@ import { $, h } from './dom';
 import { setSound, sfx, soundOn } from './sound';
 import { emptyMore, nameOf, slotMore, slotThumb, type TitleUi } from './slots2';
 import { drawElement } from './token';
+import { bigDel } from './bigstore';
 import { applySkin, applyTheme, skinName, type Skin, type ThemeChoice } from './theme';
 
 export const SLOTS = 3;
@@ -42,7 +43,7 @@ export const store = {
     try { store.beforeWrite?.(n); } catch { /* 控えがとれなくても書く */ }
     try { localStorage.setItem(slotKey(n), json); if (!quiet) store.onWrite?.(n); return true; } catch { return false; }
   },
-  erase(n: number) { try { localStorage.removeItem(slotKey(n)); localStorage.removeItem(`chemyth-v2-album-${n}`); } catch { /* 同上 */ } },
+  erase(n: number) { try { localStorage.removeItem(slotKey(n)); } catch { /* 同上 */ } bigDel(`chemyth-v2-album-${n}`); },
   meta(): Meta { try { return JSON.parse(localStorage.getItem(META) || '{}'); } catch { return {}; } },
   setMeta(m: Meta) { try { localStorage.setItem(META, JSON.stringify({ ...store.meta(), ...m })); } catch { /* 同上 */ } },
 };

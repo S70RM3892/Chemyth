@@ -1796,9 +1796,15 @@ export const SAVE_VERSION = 2;
 /** 工場の名前の長さ（文字） */
 export const FNAME_MAX = 20;
 
+/**
+ * セーブを小さくする：設備の欄のうち、null と false は書かない（読むときは、ないのと同じに扱う）。
+ * 整数でない数（進み具合・待ち時間・時計）は小数 3 桁まで（1 ミリ秒・0.1 % より細かい違いは、遊びに出ない）
+ */
+const slim = (_k: string, v: unknown) => (v === null || v === false ? undefined : typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? Math.round(v * 1000) / 1000 : v);
+const slimEnt = (e: Ent) => JSON.parse(JSON.stringify(e, (k, v) => (k === '' ? v : Array.isArray(v) ? v.map((x) => (typeof x === 'number' && !Number.isInteger(x) ? Math.round(x * 1000) / 1000 : x)) : slim(k, v))));
 export function serialize(w: World): string {
   return JSON.stringify({
-    v: SAVE_VERSION, ents: [...w.ents.values()].filter((e) => e.kind !== 'part'), chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
+    v: SAVE_VERSION, ents: [...w.ents.values()].filter((e) => e.kind !== 'part').map(slimEnt), chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
     rails: [...w.rails], hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, exams: w.exams, calib: w.calib, relearn: w.relearn, hcLog: w.hcLog, side: w.side, night: w.night, dayMs: w.dayMs, tested: w.tested, today: w.today, revDays: w.revDays, ret: w.ret, bonusDay: w.bonusDay, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
     discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, research: w.research, agents: w.agents, cases: w.cases, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
     // 1 時間の流れは、1 分ごとの合計だけを [分, 納品, 指令, 廃棄口, あふれ, 作った] の数の並びで残す（60 行）

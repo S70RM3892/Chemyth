@@ -44,6 +44,7 @@ import { showReview, renderQuiz, calibLine, quizKey } from './ui/review';
 import { showWeek, todayExtras } from './ui/learn2';
 import { logNight } from './engine/learn';
 import { conflictSlots, flushAccount, initAccount, onAccountChange, slotErased, syncState } from './ui/account';
+import { bigGet, bigReady } from './ui/bigstore';
 import { applySkin, applyTheme, onThemeChange, skinName } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
 import { drawToken, elementIcon } from './ui/token';
@@ -2091,7 +2092,7 @@ function boot(data: HotData) {
   // ---- アルバム：指令を達成した瞬間の工場を、上から撮って残す（章ごとに最新の 1 枚と、最初の 1 枚）----
   interface Photo { k: string; cap: string; d: string; done: number; ms: number }
   const albumKey = () => `chemyth-v2-album-${slot}`;
-  const album = (): Photo[] => { try { return JSON.parse(localStorage.getItem(albumKey()) || '[]'); } catch { return []; } };
+  const album = (): Photo[] => { try { return JSON.parse(bigGet(albumKey()) || '[]'); } catch { return []; } };
   const snap = (key: string, cap: string) => {
     try {
       const W = 560, H = 350, cvs = document.createElement('canvas');
@@ -2512,4 +2513,6 @@ function boot(data: HotData) {
   } else { title.show(); autoOpen(); }
 }
 
-if (hot?.ready) hot.ready(boot); else boot(hot?.data ?? {});
+// 大きな保存領域（アルバムの写真・前日の控え）を読み込んでから始める（localStorage に残っていれば、ここで移す）
+const start = (d: HotData) => { void bigReady().catch(() => undefined).then(() => boot(d)); };
+if (hot?.ready) hot.ready(start); else start(hot?.data ?? {});

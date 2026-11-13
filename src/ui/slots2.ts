@@ -9,6 +9,7 @@
 import { TOTAL_GOALS } from '../content/goals';
 import { hubRect } from '../content/map';
 import { dailyOffer, dailyPlan, dropOldest, fmtBytes, parseDaily, storeUse, type Daily, type DailySum, type StoreItem } from '../engine/device';
+import { bigDel, bigEstimate, bigGet, bigItems, bigOn, bigPut, isBig } from './bigstore';
 import { dayKey } from '../engine/fsrs';
 import { pack, unpack } from '../engine/sync';
 import { FLOOR_DY, FNAME_MAX, deserialize, summarize } from '../engine/world';
@@ -20,8 +21,9 @@ import { SLOTS, fmtDate, fmtTime, slotName, store } from './title';
 const slotKey = (n: number) => `chemyth-v2-slot-${n}`;
 const albumKey = (n: number) => `chemyth-v2-album-${n}`;
 const dailyKey = (n: number) => `chemyth-v2-daily-${n}`;
-const get = (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } };
-const put = (k: string, v: string): boolean => { try { localStorage.setItem(k, v); return true; } catch { return false; } };
+// アルバムの写真と前日の控えは、大きな保存領域（IndexedDB。bigstore.ts）に置く。ほかは localStorage
+const get = (k: string): string | null => { if (isBig(k)) return bigGet(k); try { return localStorage.getItem(k); } catch { return null; } };
+const put = (k: string, v: string): boolean => { if (isBig(k)) return bigPut(k, v); try { localStorage.setItem(k, v); return true; } catch { return false; } };
 const sumOf = (json: string | null): DailySum | null => { const s = summarize(json); return s ? { done: s.done, points: s.points, playMs: s.playMs, savedAt: s.savedAt } : null; };
 
 // ---------------- 前日の控え ----------------
@@ -59,7 +61,7 @@ async function restoreDaily(n: number): Promise<string> {
   try {
     if (!store.write(n, json)) return '書き込めなかった（この端末の保存領域がいっぱい）。';
     if (data && sum) put(dailyKey(n), JSON.stringify({ day: dayKey(Date.now()), at: Date.now(), sum, data, undo: !d.undo }));
-    else try { localStorage.removeItem(dailyKey(n)); } catch { /* 消せなくてもよい */ }
+    else bigDel(dailyKey(n));
     dailyDay[n] = dayKey(Date.now());
   } finally { hold = false; }
   return '';
@@ -222,7 +224,7 @@ export async function shrinkAlbums(): Promise<number> {
   }
   return freed;
 }
-const del = (k: string): boolean => { try { if (localStorage.getItem(k) === null) return false; localStorage.removeItem(k); return true; } catch { return false; } };
+const del = (k: string): boolean => { if (isBig(k)) return bigDel(k); try { if (localStorage.getItem(k) === null) return false; localStorage.removeItem(k); return true; } catch { return false; } };
 /**
  * 保存領域を少し空ける（すぐに）。セーブを先に残すため、なくても遊べるものから 1 つ手放す：
  * 読み込む前の控え → 前日の控え（大きいものから）→ アルバムの古い写真（いちばん大きいアルバムから 1 枚）。
@@ -266,9 +268,11 @@ export function putAlbum(key: string, list: Photo[], told?: (msg: string) => voi
 // ---------------- 保存領域の使い方 ----------------
 
 /** このブラウザの保存領域のうち、Chemyth が使っている分。ほかのページの分（同じ場所に置いたページ）は others に */
-function measure(): { items: StoreItem[]; others: number } {
+function measure(): { items: StoreItem[]; others: number; big: number } {
   const items: StoreItem[] = [];
-  let others = 0;
+  let others = 0, big = 0;
+  // 大きな保存領域（IndexedDB）に置いた写真と控え。5 MB の枠には数えない
+  for (const it of bigItems()) { big += it.size; items.push({ key: it.key, size: it.size, photos: /^chemyth-v2-album-\d+$/.test(it.key) ? (it.value.match(/"d":"data:/g) ?? []).length : undefined }); }
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
@@ -278,19 +282,22 @@ function measure(): { items: StoreItem[]; others: number } {
       items.push({ key: k, size, photos: /^chemyth-v2-album-\d+$/.test(k) ? (v.match(/"d":"data:/g) ?? []).length : undefined });
     }
   } catch { /* 読めなければ空 */ }
-  return { items, others };
+  return { items, others, big };
 }
 /** 目安にする保存領域の大きさ（多くのブラウザで 1 つの場所に 5 MB ほど） */
 const QUOTA = 5 * 1024 * 1024;
 /** 保存領域の使い方の画面。show・close：窓を出す・閉じる。closeBtn：閉じるボタン */
 export function showStorage(show: (...n: (Node | string | null)[]) => void, closeBtn: () => HTMLElement, note = '') {
-  const { items, others } = measure(), u = storeUse(items, SLOTS), total = u.total + others;
+  const { items, others, big } = measure(), u = storeUse(items, SLOTS), total = u.total + others - big;
+  const bigLine = h('p', { class: 'muted', id: 'st-big' }, bigOn() ? `アルバムの写真と前日の控え（${fmtBytes(big)}）は、セーブとは別の大きな保存領域に置いている（5 MB の枠には入らない）。` : 'このブラウザでは大きな保存領域が使えないので、アルバムの写真と前日の控えも 5 MB の枠に置いている。');
+  if (bigOn()) void bigEstimate().then((e) => { if (e) bigLine.textContent += `　大きな保存領域：${fmtBytes(e.usage)} を使用、上限およそ ${fmtBytes(e.quota)}。`; });
   const bar = (b: number) => { const i = h('i', {}); i.style.width = `${Math.min(100, (b / QUOTA) * 100)}%`; return h('span', { class: 'meter' + (total > QUOTA * 0.85 ? ' bad' : total > QUOTA * 0.6 ? ' warn' : '') }, i); };
   const tr = (name: string, b: number, extra = '') => h('tr', {}, h('th', {}, name), h('td', {}, fmtBytes(b), extra ? h('span', { class: 'muted' }, `　${extra}`) : null));
   const msg = h('p', { class: 'feedback', id: 'st-note' }, note);
   show(h('header', {}, h('h2', {}, '保存領域の使い方'), closeBtn()),
     h('p', { class: 'muted' }, 'このブラウザの中に置いているデータの大きさ（およそ）。ブラウザがこのページに使わせる量は、多くの場合 5 MB ほど（ブラウザによって違う）。いっぱいになると、アルバムの古い写真から小さくしたり減らしたりして、セーブを先に残す。'),
-    h('div', { class: 'stack tight', id: 'st-total' }, h('b', {}, `合計 ${fmtBytes(total)}　（目安 ${fmtBytes(QUOTA)} のうち ${Math.round((total / QUOTA) * 100)} %）`), bar(total)),
+    h('div', { class: 'stack tight', id: 'st-total' }, h('b', {}, `セーブの枠 ${fmtBytes(total)}　（目安 ${fmtBytes(QUOTA)} のうち ${Math.round((total / QUOTA) * 100)} %）`), bar(total)),
+    bigLine,
     h('table', { class: 'keys', id: 'st-table' },
       ...u.slots.flatMap((s) => [
         h('tr', {}, h('th', { colSpan: 2 }, h('b', {}, slotName(s.n)))),
