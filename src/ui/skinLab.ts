@@ -224,7 +224,9 @@ const M = 0.3, TH = 0.14;
 const winOf = (sz: number) => (sz === 1 ? 0.31 : 0.34);
 interface Shell { under: HTMLCanvasElement; base: HTMLCanvasElement; over: HTMLCanvasElement }
 const shells = new Map<string, Shell>();
-onThemeChange(() => shells.clear());
+/** 殻の絵を捨てる（絵の分のメモリもすぐ返す。参照を外すだけでは GC まで残る） */
+const dropShell = (s: Shell) => { for (const c of [s.under, s.base, s.over]) c.width = c.height = 0; };
+onThemeChange(() => { for (const s of shells.values()) dropShell(s); shells.clear(); });
 /** 殻の細かさ（1 マスの画素数）。画面の大きさに合わせて、この中から選ぶ */
 const BUCKETS = [24, 48, 96, 160];
 const bucketOf = (need: number) => BUCKETS.find((b) => b >= need * 0.85) ?? BUCKETS[BUCKETS.length - 1];
@@ -313,7 +315,7 @@ function shellOf(P: Palette, kind: string, color: string, sz: number, px: number
   o.beginPath(); o.arc(b0 + R * 0.55, b0 + R * 0.55, 0.022, 0, TAU); o.fill();
   s = { under: U.c, base: B.c, over: O.c };
   shells.set(key, s);
-  if (shells.size > 96) shells.delete(shells.keys().next().value as string);
+  if (shells.size > 96) { const [k0, s0] = shells.entries().next().value!; shells.delete(k0); dropShell(s0); }
   return s;
 }
 

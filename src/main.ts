@@ -195,6 +195,8 @@ function boot(data: HotData) {
     // 立体表示では、WebGL の絵が下、#cv はその上の透明な層（縁の道しるべと花火）になる
     if (threeOn()) { if (cv.previousElementSibling !== glCv) cv.before(glCv); } else if (glCv.previousElementSibling !== cv) cv.after(glCv);
     app.classList.toggle('three', threeOn());
+    // 使わなくなった描き先は、すぐ捨てる（立体表示をやめたら立体の分を、標準にしたらすべてを。iPad では GPU のメモリが限られる）
+    if (post && !fxOn()) post.sleep(); else if (post && !threeOn()) post.drop3d();
   };
   const resize = () => {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -211,13 +213,20 @@ function boot(data: HotData) {
       glowSCv.width = Math.max(8, Math.round(cw * FX_SCALE)); glowSCv.height = Math.max(8, Math.round(ch * FX_SCALE));
     } else {
       for (const c of [glowCv, maskCv, heightCv]) { c.width = Math.max(8, Math.round(cw * FX_SCALE)); c.height = Math.max(8, Math.round(ch * FX_SCALE)); }
+      // 立体表示の層は使わないので、絵の分のメモリを返す（1180×820 の画面で、地面と天面は 1 枚 13 MB ほど）
+      for (const c of [gndCv, topCv, glowSCv]) c.width = c.height = 1;
+      gw = gh = 0;
     }
     fxK = FX_SCALE;
-    post?.resize(cv.width, cv.height);
+    if (fxOn()) post!.resize(cv.width, cv.height);
   };
   new ResizeObserver(resize).observe(cv);
   applyGfx();
   resize();
+  // WebGL の絵が失われたら（iPad が裏で GPU を取り上げたときなど）、#gl を隠して平らな絵で続ける。
+  // 戻ってきたら、合成段を作り直す（失われた段のシェーダーやテクスチャは、もう使えない）
+  glCv.addEventListener('webglcontextlost', () => { applyGfx(); resize(); });
+  glCv.addEventListener('webglcontextrestored', () => { post = null; applyGfx(); resize(); });
   const nearZoom = () => Math.max(40, Math.min(54, cw / 24));
   /** いま引ける限界。立体表示は、平らな表示ほど引けない */
   const zMin = () => (threeOn() ? Z_MIN_3D : Z_MIN);
@@ -2168,9 +2177,11 @@ function boot(data: HotData) {
       sinceSave += dt;
       if (sinceSave > 5) { sinceSave = 0; save(); saveCam(); paintSync(); }
       if (!warned && pf.breakMin && now - began > pf.breakMin * 60000) { warned = true; breakReminder(pf.breakMin); }
-      // 立体表示は、平らな表示ほど引けない。下限より引いていたら（立体表示に切り替えたときなど）、下限まで寄る
+      // 立体表示は、平らな表示ほど引けない。下限より引いていたら（立体表示に切り替えたときなど）、すぐ下限まで寄る。
+      // 寄りながら描くと、下限より引いた視野を立体で描くことになり、近くの絵の区画が何千枚も要って数秒止まる
       const zm = zMin();
-      if (camTo && camTo.z < zm) camTo.z = zm; else if (!camTo && cam.z < zm - 0.01) camTo = { x: cam.x, y: cam.y, z: zm };
+      if (camTo && camTo.z < zm) camTo.z = zm;
+      if (cam.z < zm) cam.z = zm;
       if (camTo && pf.calm) { cam.x = camTo.x; cam.y = camTo.y; cam.z = camTo.z; camTo = null; }
       if (camTo) {
         const k = 1 - Math.exp(-dt * 7);
