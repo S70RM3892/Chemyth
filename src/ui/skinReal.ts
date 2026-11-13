@@ -240,71 +240,236 @@ const mod = (a: number, n: number) => ((a % n) + n) % n;
 // 装置：1 度描いた絵を覚えて貼る
 // ---------------------------------------------------------------------
 const bodyCache = new Map<string, HTMLCanvasElement>();
-/** 装置の筐体の絵（影・基礎・鋼の箱・塗装の帯・ボルト・通気口・安全表示・窓の枠）。大きさ・色・昼夜・大小ごとに 1 枚 */
-function bodySprite(P: Palette, u: number, color: string, big: boolean): { cv: HTMLCanvasElement; size: number } {
-  const U = Math.max(10, Math.round(u)), key = `${P.key}|${U}|${color}|${big}`, size = Math.ceil(U * 1.3);
+/** 機種ごとの形 */
+type Shape = 'vessel' | 'column' | 'cells' | 'battery' | 'tank' | 'clarifier' | 'pump' | 'stack' | 'box';
+const SHAPE: Record<string, Shape> = { reactor: 'vessel', separator: 'column', electrolyzer: 'cells', battery: 'battery', tank: 'tank', settler: 'clarifier', collector: 'tank', extractor: 'pump', vent: 'stack' };
+/**
+ * 装置の絵。機種ごとに、本物のプラントの設備を真上から見た形にする：
+ *  - 反応器：鏡板（丸くふくらんだふた）の槽。まわりにフランジとボルト、ノズル、かくはん機のモーター
+ *  - 蒸留塔：塔の頂。まわりに格子の点検台と黄色い手すり、はしごのかご、塔頂から出る太い管
+ *  - 電解槽：樹脂の槽に、銅のブスバーと、交互に並ぶ電極のつかみ
+ *  - 電池：ひだのあるセルの箱に、赤と青の端子
+ *  - タンク・捕集装置：放射状の溶接線のある屋根と、縁をまわる階段
+ *  - 沈殿槽：コンクリートの円い池と、越流の溝、駆動部
+ *  - 採取機：鋼の架台の上のポンプ（渦巻きのケーシング）と、ひだのあるモーター。廃棄口：煙突の口
+ * どれも、真ん中に窓（中の絵の地）を残す。大きさ・色・昼夜・形ごとに 1 枚だけ描いて覚える
+ */
+function bodySprite(P: Palette, u: number, color: string, big: boolean, kind: string): { cv: HTMLCanvasElement; size: number } {
+  const U = Math.max(10, Math.round(u)), shape: Shape = SHAPE[kind] ?? 'box', key = `${P.key}|${U}|${color}|${big}|${shape}`, size = Math.ceil(U * 1.3);
   let cv = bodyCache.get(key);
   if (!cv) {
-    if (bodyCache.size > 160) bodyCache.clear();
+    if (bodyCache.size > 200) bodyCache.clear();
     cv = document.createElement('canvas'); cv.width = cv.height = size;
     const g = cv.getContext('2d')!, night = P.name !== 'light', c = size / 2, h = U * 0.44, lw = Math.max(1, U * 0.012);
-    // 地面に落ちる影：右下へ、やわらかく
-    for (let i = 0; i < 5; i++) { g.fillStyle = `rgba(0,0,0,${night ? 0.1 : 0.075})`; rr(g, c - h + U * 0.03 + i * U * 0.012, c - h + U * 0.05 + i * U * 0.016, h * 2, h * 2, U * 0.06 + i * U * 0.01); g.fill(); }
-    // コンクリートの基礎：角の面取りに光
-    rr(g, c - h - U * 0.02, c - h - U * 0.02, h * 2 + U * 0.04, h * 2 + U * 0.04, U * 0.05); g.fillStyle = pat(g, concrete(night), 0, 0, 0.5); g.fill();
-    g.strokeStyle = night ? 'rgba(0,0,0,0.7)' : 'rgba(40,36,30,0.6)'; g.lineWidth = lw; g.stroke();
-    // 鋼の筐体：ヘアラインのきめ → 左上からの光 → 縁の面取り
-    const bh = h * 0.93;
-    rr(g, c - bh, c - bh, bh * 2, bh * 2, U * 0.05); g.fillStyle = pat(g, steel(night), 0, 0, Math.max(0.35, U / 300)); g.fill();
-    const lg = g.createLinearGradient(c - bh, c - bh, c + bh, c + bh);
-    lg.addColorStop(0, `rgba(255,255,255,${night ? 0.16 : 0.42})`); lg.addColorStop(0.35, 'rgba(255,255,255,0.02)'); lg.addColorStop(0.7, 'rgba(0,0,0,0.12)'); lg.addColorStop(1, `rgba(0,0,0,${night ? 0.55 : 0.4})`);
-    g.fillStyle = lg; g.fill();
-    g.save(); rr(g, c - bh, c - bh, bh * 2, bh * 2, U * 0.05); g.clip();
-    // 面取り：上と左は明るい線、下と右は暗い線
-    g.lineWidth = Math.max(1.5, U * 0.022);
-    g.strokeStyle = `rgba(255,255,255,${night ? 0.3 : 0.75})`; g.beginPath(); g.moveTo(c - bh, c + bh); g.lineTo(c - bh, c - bh); g.lineTo(c + bh, c - bh); g.stroke();
-    g.strokeStyle = `rgba(0,0,0,${night ? 0.7 : 0.45})`; g.beginPath(); g.moveTo(c + bh, c - bh); g.lineTo(c + bh, c + bh); g.lineTo(c - bh, c + bh); g.stroke();
-    // 塗装の帯（機種の色）：上の辺。つやと、端の欠け・さび
-    const band = U * 0.1, paint = mix(color, night ? '#20242a' : '#f0f0ee', night ? 0.35 : 0.12);
-    const pg = g.createLinearGradient(0, c - bh, 0, c - bh + band); pg.addColorStop(0, mix(paint, '#ffffff', 0.35)); pg.addColorStop(0.3, paint); pg.addColorStop(1, mix(paint, '#000000', 0.3));
-    g.fillStyle = pg; g.fillRect(c - bh, c - bh, bh * 2, band);
-    for (let i = 0; i < 14; i++) { const x = c - bh + rnd(i, U, 3) * bh * 2, y = c - bh + band - rnd(i, U, 5) * band * 0.5, r = U * (0.004 + rnd(i, U, 7) * 0.012); g.fillStyle = i % 3 ? 'rgba(120,60,24,0.75)' : 'rgba(200,205,210,0.8)'; g.beginPath(); g.ellipse(x, y, r * 1.6, r, 0, 0, TAU); g.fill(); }
-    g.fillStyle = 'rgba(0,0,0,0.3)'; g.fillRect(c - bh, c - bh + band, bh * 2, Math.max(1, U * 0.006));
-    // 安全表示：下の辺に黄と黒の斜めじま
-    const hz = U * 0.045;
-    g.save(); g.beginPath(); g.rect(c - bh, c + bh - hz, bh * 2, hz); g.clip();
-    g.fillStyle = night ? '#9a7a10' : '#f2c21a'; g.fillRect(c - bh, c + bh - hz, bh * 2, hz);
-    g.fillStyle = '#16181a'; for (let x = -bh; x < bh * 2; x += hz * 1.6) { g.beginPath(); g.moveTo(c + x, c + bh); g.lineTo(c + x + hz * 0.8, c + bh); g.lineTo(c + x + hz * 1.8, c + bh - hz); g.lineTo(c + x + hz, c + bh - hz); g.closePath(); g.fill(); }
-    g.restore();
-    // 通気口：左右に細い溝（溝の下の縁に光）
-    if (U >= 40) for (const sd of [-1, 1]) for (let i = 0; i < 6; i++) { const x = c + sd * bh * 0.86 - U * 0.022, y = c - bh * 0.4 + i * U * 0.05; g.fillStyle = 'rgba(0,0,0,0.7)'; g.fillRect(x, y, U * 0.044, U * 0.014); g.fillStyle = `rgba(255,255,255,${night ? 0.15 : 0.45})`; g.fillRect(x, y + U * 0.014, U * 0.044, Math.max(1, U * 0.005)); }
-    // 溶接の継ぎ目：かすかな縦の線
-    g.strokeStyle = 'rgba(0,0,0,0.12)'; g.lineWidth = 1; g.beginPath(); g.moveTo(c - bh * 0.62, c - bh + band); g.lineTo(c - bh * 0.62, c + bh - hz); g.moveTo(c + bh * 0.62, c - bh + band); g.lineTo(c + bh * 0.62, c + bh - hz); g.stroke();
-    g.restore();
-    rr(g, c - bh, c - bh, bh * 2, bh * 2, U * 0.05); g.strokeStyle = night ? '#05070a' : '#22262a'; g.lineWidth = lw * 1.2; g.stroke();
-    // ボルト：頭の丸みと、右下の影
-    if (U >= 30) for (const [bx, by] of [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]] as [number, number][]) {
-      if (!big && bx * by === 0) continue;
-      const x = c + bx * bh * 0.88, y = c + by * bh * (by < 0 ? 0.7 : 0.86) + (by < 0 ? band * 0.2 : -hz * 0.4), r = Math.max(1.4, U * 0.017);
+    const dark = night ? '#05070a' : '#22262a', hiA = night ? 0.3 : 0.75, loA = night ? 0.7 : 0.45;
+    const paint = mix(color, night ? '#20242a' : '#f0f0ee', night ? 0.35 : 0.12), stScale = Math.max(0.35, U / 300);
+    const round = shape === 'vessel' || shape === 'column' || shape === 'tank' || shape === 'clarifier' || shape === 'stack';
+    /** ボルト：頭の丸みと、右下の影 */
+    const bolt = (x: number, y: number, r: number) => {
       g.fillStyle = 'rgba(0,0,0,0.45)'; g.beginPath(); g.arc(x + r * 0.4, y + r * 0.5, r * 1.1, 0, TAU); g.fill();
       const bg = g.createRadialGradient(x - r * 0.4, y - r * 0.4, r * 0.1, x, y, r); bg.addColorStop(0, night ? '#aab2ba' : '#ffffff'); bg.addColorStop(0.6, night ? '#4a525a' : '#9aa2aa'); bg.addColorStop(1, '#22262a');
       g.fillStyle = bg; g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill();
+    };
+    /** いまの形を鋼で塗る：ヘアライン → 左上からの光 */
+    const steelFill = (x0: number, y0: number, x1: number, y1: number, k = 1) => {
+      g.fillStyle = pat(g, steel(night), 0, 0, stScale); g.fill();
+      const lg = g.createLinearGradient(x0, y0, x1, y1);
+      lg.addColorStop(0, `rgba(255,255,255,${(night ? 0.16 : 0.42) * k})`); lg.addColorStop(0.35, 'rgba(255,255,255,0.02)'); lg.addColorStop(0.7, 'rgba(0,0,0,0.12)'); lg.addColorStop(1, `rgba(0,0,0,${(night ? 0.55 : 0.4) * k})`);
+      g.fillStyle = lg; g.fill();
+    };
+    /** 丸くふくらんだ面：左上に光の点、縁へ向かって暗く（球のように） */
+    const dome = (x: number, y: number, r: number, k = 1) => {
+      g.beginPath(); g.arc(x, y, r, 0, TAU); g.fillStyle = pat(g, steel(night), 0, 0, stScale); g.fill();
+      const dg = g.createRadialGradient(x - r * 0.38, y - r * 0.4, r * 0.05, x, y, r * 1.02);
+      dg.addColorStop(0, `rgba(255,255,255,${(night ? 0.3 : 0.7) * k})`); dg.addColorStop(0.3, `rgba(255,255,255,${0.08 * k})`); dg.addColorStop(0.75, `rgba(0,0,0,${0.2 * k})`); dg.addColorStop(1, `rgba(0,0,0,${(night ? 0.7 : 0.55) * k})`);
+      g.fillStyle = dg; g.fill();
+    };
+    /** 短い管（ノズル）：上から見た口。フランジの輪と、暗い穴 */
+    const nozzle = (x: number, y: number, r: number) => { g.fillStyle = 'rgba(0,0,0,0.4)'; g.beginPath(); g.arc(x + r * 0.3, y + r * 0.4, r * 1.15, 0, TAU); g.fill(); dome(x, y, r * 1.1, 0.8); g.strokeStyle = dark; g.lineWidth = lw * 0.8; g.stroke(); g.beginPath(); g.arc(x, y, r * 0.55, 0, TAU); g.fillStyle = '#0c0e10'; g.fill(); g.beginPath(); g.arc(x, y, r * 0.55, Math.PI * 0.9, Math.PI * 1.6); g.strokeStyle = `rgba(255,255,255,${night ? 0.2 : 0.5})`; g.lineWidth = Math.max(0.6, r * 0.12); g.stroke(); };
+    /** 黄と黒の安全じま（いまの切り抜きの中に） */
+    const hazard = (x: number, y: number, w: number, hh: number) => { g.save(); g.beginPath(); g.rect(x, y, w, hh); g.clip(); g.fillStyle = night ? '#9a7a10' : '#f2c21a'; g.fillRect(x, y, w, hh); g.fillStyle = '#16181a'; for (let q = -hh; q < w + hh; q += hh * 1.6) { g.beginPath(); g.moveTo(x + q, y + hh); g.lineTo(x + q + hh * 0.8, y + hh); g.lineTo(x + q + hh * 1.8, y); g.lineTo(x + q + hh, y); g.closePath(); g.fill(); } g.restore(); };
+    // ---- 影（右下へ、やわらかく）と、コンクリートの基礎 ----
+    for (let i = 0; i < 5; i++) { g.fillStyle = `rgba(0,0,0,${night ? 0.1 : 0.075})`; if (round) { g.beginPath(); g.arc(c + U * 0.035 + i * U * 0.012, c + U * 0.055 + i * U * 0.016, h * 1.0 + i * U * 0.004, 0, TAU); } else rr(g, c - h + U * 0.03 + i * U * 0.012, c - h + U * 0.05 + i * U * 0.016, h * 2, h * 2, U * 0.06 + i * U * 0.01); g.fill(); }
+    rr(g, c - h - U * 0.02, c - h - U * 0.02, h * 2 + U * 0.04, h * 2 + U * 0.04, U * 0.05); g.fillStyle = pat(g, concrete(night), 0, 0, 0.5); g.fill();
+    g.strokeStyle = night ? 'rgba(0,0,0,0.7)' : 'rgba(40,36,30,0.6)'; g.lineWidth = lw; g.stroke();
+    // 基礎の上の、古い水のしみ
+    g.fillStyle = 'rgba(0,0,0,0.1)'; for (let i = 0; i < 4; i++) { g.beginPath(); g.ellipse(c + (rnd(i, U, 201) - 0.5) * h * 1.7, c + (rnd(i, U, 203) - 0.5) * h * 1.7, U * 0.07, U * 0.04, rnd(i, U, 205) * 3, 0, TAU); g.fill(); }
+    let wr = U * 0.3, wRound = false;   // 窓の半分の大きさと、丸いかどうか
+    if (shape === 'vessel') {
+      // 反応器：胴のフランジ（ボルトの輪）→ 鏡板 → 塗装の輪 → ノズル 3 つ → かくはん機のモーター
+      const R = h * 0.97;
+      dome(c, c, R, 0.7); g.strokeStyle = dark; g.lineWidth = lw * 1.2; g.stroke();
+      if (U >= 30) for (let i = 0; i < 20; i++) { const a = (i / 20) * TAU; bolt(c + Math.cos(a) * R * 0.93, c + Math.sin(a) * R * 0.93, Math.max(1.1, U * 0.012)); }
+      dome(c, c, R * 0.86); g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = lw; g.stroke();
+      // 塗装の輪（機種の色）：つやと、欠け
+      g.beginPath(); g.arc(c, c, R * 0.8, 0, TAU); g.strokeStyle = mix(paint, '#000000', 0.25); g.lineWidth = U * 0.05; g.stroke();
+      g.beginPath(); g.arc(c, c, R * 0.8, Math.PI * 0.95, Math.PI * 1.7); g.strokeStyle = mix(paint, '#ffffff', 0.35); g.lineWidth = U * 0.04; g.stroke();
+      g.beginPath(); g.arc(c, c, R * 0.8, Math.PI * 1.7, Math.PI * 2.95); g.strokeStyle = paint; g.lineWidth = U * 0.04; g.stroke();
+      for (let i = 0; i < 9; i++) { const a = rnd(i, U, 211) * TAU; g.fillStyle = i % 2 ? 'rgba(120,60,24,0.7)' : 'rgba(205,210,215,0.8)'; g.beginPath(); g.arc(c + Math.cos(a) * R * 0.8, c + Math.sin(a) * R * 0.8, U * 0.008, 0, TAU); g.fill(); }
+      // 溶接線：鏡板を 4 つに割る、かすかな線
+      g.strokeStyle = 'rgba(0,0,0,0.14)'; g.lineWidth = 1; g.beginPath(); for (let i = 0; i < 4; i++) { const a = (i / 4) * TAU + 0.4; g.moveTo(c + Math.cos(a) * U * 0.33, c + Math.sin(a) * U * 0.33); g.lineTo(c + Math.cos(a) * R * 0.76, c + Math.sin(a) * R * 0.76); } g.stroke();
+      nozzle(c - R * 0.52, c + R * 0.52, U * 0.045); nozzle(c + R * 0.52, c + R * 0.52, U * 0.036); nozzle(c - R * 0.52, c - R * 0.52, U * 0.03);
+      // モーター：ひだのある青い箱と、軸の受け
+      { const mx = c + R * 0.5, my = c - R * 0.56, mw = U * 0.15, mh = U * 0.1; g.fillStyle = 'rgba(0,0,0,0.4)'; rr(g, mx - mw / 2 + U * 0.012, my - mh / 2 + U * 0.016, mw, mh, U * 0.015); g.fill();
+        rr(g, mx - mw / 2, my - mh / 2, mw, mh, U * 0.015); const mg = g.createLinearGradient(0, my - mh / 2, 0, my + mh / 2); mg.addColorStop(0, night ? '#3a5a7a' : '#5a8ab8'); mg.addColorStop(1, night ? '#12202e' : '#27455c'); g.fillStyle = mg; g.fill(); g.strokeStyle = dark; g.lineWidth = lw * 0.8; g.stroke();
+        g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = Math.max(0.6, U * 0.006); g.beginPath(); for (let q = 1; q < 7; q++) { g.moveTo(mx - mw / 2 + (mw * q) / 7, my - mh / 2); g.lineTo(mx - mw / 2 + (mw * q) / 7, my + mh / 2); } g.stroke(); }
+      wr = U * 0.3; wRound = true;
+    } else if (shape === 'column') {
+      // 蒸留塔：格子の点検台 → 黄色い手すり → 塔の頂 → はしごのかご → 塔頂の管
+      const R = h * 0.98;
+      g.save(); g.beginPath(); g.arc(c, c, R, 0, TAU); g.clip();
+      g.fillStyle = night ? '#1e2226' : '#5a6268'; g.fillRect(c - R, c - R, R * 2, R * 2);
+      // 格子（グレーチング）：細かい斜めの網目。下の地面がうっすら見える
+      g.strokeStyle = night ? 'rgba(150,160,170,0.35)' : 'rgba(225,230,235,0.6)'; g.lineWidth = Math.max(0.6, U * 0.006); g.beginPath();
+      const st = Math.max(2.5, U * 0.028); for (let q = -R * 2; q < R * 2; q += st) { g.moveTo(c + q - R, c - R); g.lineTo(c + q + R, c + R); g.moveTo(c + q + R, c - R); g.lineTo(c + q - R, c + R); } g.stroke();
+      const sg = g.createLinearGradient(c - R, c - R, c + R, c + R); sg.addColorStop(0, `rgba(255,255,255,${night ? 0.08 : 0.2})`); sg.addColorStop(1, `rgba(0,0,0,${night ? 0.5 : 0.35})`); g.fillStyle = sg; g.fillRect(c - R, c - R, R * 2, R * 2);
+      g.restore();
+      // 手すり：黄色い輪（支柱の点つき）
+      g.beginPath(); g.arc(c, c, R * 0.97, 0, TAU); g.strokeStyle = dark; g.lineWidth = U * 0.03; g.stroke(); g.strokeStyle = night ? '#9a7a10' : '#f2c21a'; g.lineWidth = U * 0.018; g.stroke();
+      if (U >= 30) for (let i = 0; i < 12; i++) { const a = (i / 12) * TAU; g.fillStyle = dark; g.beginPath(); g.arc(c + Math.cos(a) * R * 0.97, c + Math.sin(a) * R * 0.97, Math.max(1, U * 0.012), 0, TAU); g.fill(); }
+      // 塔の影（点検台の上に落ちる）と、塔の頂
+      g.fillStyle = 'rgba(0,0,0,0.35)'; g.beginPath(); g.arc(c + U * 0.03, c + U * 0.045, R * 0.76, 0, TAU); g.fill();
+      dome(c, c, R * 0.76); g.strokeStyle = dark; g.lineWidth = lw * 1.2; g.stroke();
+      g.beginPath(); g.arc(c, c, R * 0.68, 0, TAU); g.strokeStyle = mix(paint, '#000000', 0.2); g.lineWidth = U * 0.035; g.stroke(); g.beginPath(); g.arc(c, c, R * 0.68, Math.PI * 0.95, Math.PI * 1.75); g.strokeStyle = mix(paint, '#ffffff', 0.4); g.lineWidth = U * 0.028; g.stroke();
+      // はしごのかご：右下。輪が 3 つ重なる
+      { const lx = c + R * 0.66, ly = c + R * 0.5; for (let q = 0; q < 3; q++) { g.beginPath(); g.arc(lx, ly, U * (0.05 - q * 0.008), 0, TAU); g.strokeStyle = q % 2 ? (night ? '#9a7a10' : '#f2c21a') : dark; g.lineWidth = Math.max(1, U * 0.012); g.stroke(); } g.fillStyle = '#0c0e10'; g.beginPath(); g.arc(lx, ly, U * 0.022, 0, TAU); g.fill(); }
+      // 塔頂の管：頂から左上の角へのびる太い管（円筒の陰影）と、曲がりのフランジ
+      { const ax = c - R * 0.3, ay = c - R * 0.52, bx = c - R * 0.86, by = c - R * 0.86, wd = U * 0.07; g.lineCap = 'round';
+        g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = wd; g.beginPath(); g.moveTo(ax + U * 0.02, ay + U * 0.03); g.lineTo(bx + U * 0.02, by + U * 0.03); g.stroke();
+        g.strokeStyle = dark; g.lineWidth = wd + lw * 2; g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke();
+        g.strokeStyle = night ? '#5a626a' : '#b8c0c8'; g.lineWidth = wd; g.stroke();
+        g.strokeStyle = `rgba(255,255,255,${night ? 0.3 : 0.7})`; g.lineWidth = wd * 0.25; g.beginPath(); g.moveTo(ax - wd * 0.12, ay - wd * 0.2); g.lineTo(bx - wd * 0.12, by - wd * 0.2); g.stroke();
+        nozzle(ax, ay, U * 0.045); }
+      wr = U * 0.28; wRound = true;
+    } else if (shape === 'tank') {
+      // タンク：円い屋根（ゆるい円すい。放射の溶接線）→ 縁の輪 → 縁をまわる階段 → 屋根の通気口
+      const R = h * 0.98;
+      dome(c, c, R, 0.75); g.strokeStyle = dark; g.lineWidth = lw * 1.2; g.stroke();
+      g.strokeStyle = 'rgba(0,0,0,0.16)'; g.lineWidth = 1; g.beginPath(); for (let i = 0; i < 12; i++) { const a = (i / 12) * TAU + 0.13; g.moveTo(c + Math.cos(a) * U * 0.33, c + Math.sin(a) * U * 0.33); g.lineTo(c + Math.cos(a) * R * 0.97, c + Math.sin(a) * R * 0.97); } g.stroke();
+      g.strokeStyle = `rgba(255,255,255,${night ? 0.1 : 0.25})`; g.beginPath(); for (let i = 0; i < 12; i++) { const a = (i / 12) * TAU + 0.15; g.moveTo(c + Math.cos(a) * U * 0.33, c + Math.sin(a) * U * 0.33); g.lineTo(c + Math.cos(a) * R * 0.97, c + Math.sin(a) * R * 0.97); } g.stroke();
+      // 塗装の帯（縁）と、さびの筋
+      g.beginPath(); g.arc(c, c, R * 0.93, 0, TAU); g.strokeStyle = mix(paint, '#000000', 0.2); g.lineWidth = U * 0.05; g.stroke(); g.beginPath(); g.arc(c, c, R * 0.93, Math.PI * 0.9, Math.PI * 1.8); g.strokeStyle = mix(paint, '#ffffff', 0.35); g.lineWidth = U * 0.04; g.stroke();
+      for (let i = 0; i < 7; i++) { const a = rnd(i, U, 221) * TAU, r0 = R * 0.9, L = R * (0.1 + rnd(i, U, 223) * 0.25), rg = g.createLinearGradient(c + Math.cos(a) * r0, c + Math.sin(a) * r0, c + Math.cos(a) * (r0 - L), c + Math.sin(a) * (r0 - L)); rg.addColorStop(0, 'rgba(130,70,30,0.45)'); rg.addColorStop(1, 'rgba(130,70,30,0)'); g.strokeStyle = rg; g.lineWidth = U * 0.012; g.beginPath(); g.moveTo(c + Math.cos(a) * r0, c + Math.sin(a) * r0); g.lineTo(c + Math.cos(a) * (r0 - L), c + Math.sin(a) * (r0 - L)); g.stroke(); }
+      // 階段：右下の縁に沿って、段が並ぶ
+      if (U >= 30) for (let i = 0; i < 9; i++) { const a = 0.15 + i * 0.13, x = c + Math.cos(a) * R * 1.0, y = c + Math.sin(a) * R * 1.0; g.save(); g.translate(x, y); g.rotate(a); g.fillStyle = 'rgba(0,0,0,0.4)'; g.fillRect(-U * 0.02, -U * 0.012 + 1.5, U * 0.06, U * 0.022); g.fillStyle = night ? '#6a727a' : '#c8d0d8'; g.fillRect(-U * 0.025, -U * 0.012, U * 0.06, U * 0.02); g.restore(); }
+      nozzle(c - R * 0.55, c - R * 0.55, U * 0.035);
+      wr = U * 0.3; wRound = true;
+    } else if (shape === 'clarifier') {
+      // 沈殿槽：コンクリートの円い壁 → 越流の溝（暗い水の輪）→ 内側の縁 → 駆動部と、縁までの歩廊
+      const R = h * 0.98;
+      g.beginPath(); g.arc(c, c, R, 0, TAU); g.fillStyle = pat(g, concrete(night), U * 0.3, U * 0.2, 0.4); g.fill();
+      const cg = g.createLinearGradient(c - R, c - R, c + R, c + R); cg.addColorStop(0, `rgba(255,255,255,${night ? 0.1 : 0.3})`); cg.addColorStop(1, `rgba(0,0,0,${night ? 0.5 : 0.3})`); g.fillStyle = cg; g.fill(); g.strokeStyle = dark; g.lineWidth = lw * 1.2; g.stroke();
+      g.beginPath(); g.arc(c, c, R * 0.86, 0, TAU); g.strokeStyle = night ? '#0c1620' : '#2f4a5c'; g.lineWidth = U * 0.05; g.stroke();
+      g.beginPath(); g.arc(c, c, R * 0.86, Math.PI * 1.0, Math.PI * 1.6); g.strokeStyle = `rgba(255,255,255,${night ? 0.12 : 0.4})`; g.lineWidth = U * 0.012; g.stroke();
+      // 越流のせきの歯（細かい刻み）
+      g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = Math.max(0.6, U * 0.006); g.beginPath(); for (let i = 0; i < 48; i++) { const a = (i / 48) * TAU; g.moveTo(c + Math.cos(a) * R * 0.8, c + Math.sin(a) * R * 0.8); g.lineTo(c + Math.cos(a) * R * 0.83, c + Math.sin(a) * R * 0.83); } g.stroke();
+      // 歩廊：右上の縁から窓の手前まで。格子の床と、黄色い手すり
+      g.save(); g.translate(c, c); g.rotate(-Math.PI / 4);
+      g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(U * 0.33, -U * 0.03 + U * 0.02, R - U * 0.33, U * 0.07);
+      g.fillStyle = night ? '#3a4048' : '#8a929a'; g.fillRect(U * 0.33, -U * 0.035, R - U * 0.33, U * 0.07);
+      g.strokeStyle = night ? '#9a7a10' : '#f2c21a'; g.lineWidth = Math.max(1, U * 0.01); g.strokeRect(U * 0.33, -U * 0.035, R - U * 0.33, U * 0.07);
+      g.strokeStyle = 'rgba(0,0,0,0.3)'; g.lineWidth = Math.max(0.5, U * 0.005); g.beginPath(); for (let x = U * 0.34; x < R; x += Math.max(2.5, U * 0.02)) { g.moveTo(x, -U * 0.035); g.lineTo(x, U * 0.035); } g.stroke();
+      g.restore();
+      wr = U * 0.3; wRound = true;
+    } else if (shape === 'stack') {
+      // 廃棄口：煙突の口。厚い縁の輪、内側の暗い穴、すすの汚れ
+      const R = h * 0.8;
+      dome(c, c, R, 0.8); g.strokeStyle = dark; g.lineWidth = lw * 1.2; g.stroke();
+      g.beginPath(); g.arc(c, c, R * 0.72, 0, TAU); const hg = g.createRadialGradient(c + R * 0.2, c + R * 0.25, R * 0.1, c, c, R * 0.72); hg.addColorStop(0, '#0a0b0c'); hg.addColorStop(1, '#26282a'); g.fillStyle = hg; g.fill(); g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = lw; g.stroke();
+      g.beginPath(); g.arc(c, c, R * 0.72, Math.PI * 0.2, Math.PI * 0.8); g.strokeStyle = `rgba(255,255,255,${night ? 0.1 : 0.3})`; g.lineWidth = Math.max(0.8, U * 0.012); g.stroke();
+      const so = g.createRadialGradient(c, c, R * 0.6, c, c, R * 1.1); so.addColorStop(0, 'rgba(10,10,10,0.5)'); so.addColorStop(1, 'rgba(10,10,10,0)'); g.fillStyle = so; g.beginPath(); g.arc(c, c, R * 1.1, 0, TAU); g.fill();
+      for (let i = 0; i < 4; i++) { const a = (i / 4) * TAU + 0.78; bolt(c + Math.cos(a) * R * 0.87, c + Math.sin(a) * R * 0.87, Math.max(1, U * 0.02)); }
+      wr = 0;
+    } else if (shape === 'pump') {
+      // 採取機：鋼の架台 → 渦巻きのケーシング（真ん中が窓）→ 吐き出しの口 → ひだのあるモーター
+      rr(g, c - h * 0.95, c - h * 0.95, h * 1.9, h * 1.9, U * 0.04); steelFill(c - h, c - h, c + h, c + h, 0.8); g.strokeStyle = dark; g.lineWidth = lw; g.stroke();
+      // 架台の溝形鋼：2 本の暗い筋
+      g.fillStyle = 'rgba(0,0,0,0.3)'; g.fillRect(c - h * 0.95, c - h * 0.62, h * 1.9, U * 0.03); g.fillRect(c - h * 0.95, c + h * 0.56, h * 1.9, U * 0.03);
+      hazard(c - h * 0.95, c + h * 0.95 - U * 0.05, h * 1.9, U * 0.05);
+      // モーター（左）：ひだのある円筒を横から。上が明るく、下が暗い
+      { const mw = h * 0.5, mh = h * 0.9, mx = c - h * 0.92, my = c - mh / 2; g.fillStyle = 'rgba(0,0,0,0.35)'; rr(g, mx + U * 0.02, my + U * 0.03, mw, mh, U * 0.03); g.fill();
+        rr(g, mx, my, mw, mh, U * 0.03); const mg = g.createLinearGradient(0, my, 0, my + mh); mg.addColorStop(0, mix(paint, '#ffffff', 0.45)); mg.addColorStop(0.3, paint); mg.addColorStop(1, mix(paint, '#000000', 0.6)); g.fillStyle = mg; g.fill(); g.strokeStyle = dark; g.lineWidth = lw * 0.8; g.stroke();
+        g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = Math.max(0.6, U * 0.012); g.beginPath(); for (let q = 1; q < 6; q++) { g.moveTo(mx + (mw * q) / 6, my + 1); g.lineTo(mx + (mw * q) / 6, my + mh - 1); } g.stroke(); }
+      // ケーシング：丸い鋳物（塗装）。ボルトの輪
+      { const R = h * 0.66, px = c + h * 0.12; g.fillStyle = 'rgba(0,0,0,0.35)'; g.beginPath(); g.arc(px + U * 0.02, c + U * 0.03, R, 0, TAU); g.fill();
+        g.beginPath(); g.arc(px, c, R, 0, TAU); const pg = g.createRadialGradient(px - R * 0.4, c - R * 0.4, R * 0.05, px, c, R); pg.addColorStop(0, mix(paint, '#ffffff', 0.55)); pg.addColorStop(0.4, paint); pg.addColorStop(1, mix(paint, '#000000', 0.6)); g.fillStyle = pg; g.fill(); g.strokeStyle = dark; g.lineWidth = lw; g.stroke();
+        if (U >= 26) for (let i = 0; i < 8; i++) { const a = (i / 8) * TAU + 0.39; bolt(px + Math.cos(a) * R * 0.86, c + Math.sin(a) * R * 0.86, Math.max(1, U * 0.022)); }
+        // 窓（羽根の見える所）：暗い枠の中に、板
+        g.beginPath(); g.arc(c, c, U * 0.3, 0, TAU); g.fillStyle = '#101214'; g.fill(); g.beginPath(); g.arc(c, c, U * 0.275, 0, TAU); g.fillStyle = P.plate; g.fill(); }
+      wr = 0;
+    } else if (shape === 'cells') {
+      // 電解槽：樹脂の槽（灰緑）→ 上下に銅のブスバー → 交互に並ぶ電極のつかみ（赤と青）
+      const bh = h * 0.95;
+      rr(g, c - bh, c - bh, bh * 2, bh * 2, U * 0.04); const tg = g.createLinearGradient(c - bh, c - bh, c + bh, c + bh); tg.addColorStop(0, night ? '#4a5a52' : '#b8c8bc'); tg.addColorStop(0.5, night ? '#2a3630' : '#7f948a'); tg.addColorStop(1, night ? '#0e1512' : '#44564e'); g.fillStyle = tg; g.fill(); g.strokeStyle = dark; g.lineWidth = lw * 1.2; g.stroke();
+      // 槽の縁（厚み）：内側に一段下がる
+      rr(g, c - bh * 0.9, c - bh * 0.9, bh * 1.8, bh * 1.8, U * 0.03); g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = U * 0.018; g.stroke(); g.strokeStyle = `rgba(255,255,255,${night ? 0.1 : 0.3})`; g.lineWidth = Math.max(0.6, U * 0.006); g.stroke();
+      for (const sd of [-1, 1]) {
+        // ブスバー：銅。上が明るく、下が暗い。ところどころ緑青
+        const y = c + sd * bh * 0.72 - U * 0.035, bg = g.createLinearGradient(0, y, 0, y + U * 0.07); bg.addColorStop(0, night ? '#c88a5a' : '#ffd0a0'); bg.addColorStop(0.4, night ? '#8a4a22' : '#c8743a'); bg.addColorStop(1, night ? '#3a1a08' : '#6a3212');
+        g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(c - bh * 0.92 + U * 0.012, y + U * 0.018, bh * 1.84, U * 0.07); g.fillStyle = bg; g.fillRect(c - bh * 0.92, y, bh * 1.84, U * 0.07);
+        for (let i = 0; i < 6; i++) { g.fillStyle = 'rgba(90,170,140,0.45)'; g.beginPath(); g.ellipse(c - bh * 0.9 + rnd(i, sd + 3, 231) * bh * 1.8, y + U * 0.05, U * 0.02, U * 0.008, 0, 0, TAU); g.fill(); }
+        // つかみ：赤（陽極）と青（陰極）が交互
+        const n = big ? 8 : 4; for (let i = 0; i < n; i++) { const x = c - bh * 0.8 + (i / (n - 1)) * bh * 1.6, col = (i + (sd > 0 ? 1 : 0)) % 2 ? '#c8321e' : '#2a6ad8'; g.fillStyle = 'rgba(0,0,0,0.4)'; g.fillRect(x - U * 0.02 + 1.5, y - U * 0.012 + 2, U * 0.04, U * 0.094); const kg = g.createLinearGradient(x - U * 0.02, 0, x + U * 0.02, 0); kg.addColorStop(0, mix(col, '#ffffff', 0.45)); kg.addColorStop(1, mix(col, '#000000', 0.45)); g.fillStyle = kg; g.fillRect(x - U * 0.02, y - U * 0.012, U * 0.04, U * 0.094); }
+      }
+      // 塗装の銘板（左上）
+      g.fillStyle = paint; g.fillRect(c - bh * 0.88, c - bh * 0.46, U * 0.06, U * 0.14); g.strokeStyle = dark; g.lineWidth = lw * 0.6; g.strokeRect(c - bh * 0.88, c - bh * 0.46, U * 0.06, U * 0.14);
+      wr = U * 0.3;
+    } else if (shape === 'battery') {
+      // 電池：黒い樹脂のセルの箱（ひだ）→ 上の辺に大きな端子（赤＋・青−）と、太い電線 → 塗装の帯
+      const bh = h * 0.95;
+      rr(g, c - bh, c - bh, bh * 2, bh * 2, U * 0.05); const tg = g.createLinearGradient(c - bh, c - bh, c + bh, c + bh); tg.addColorStop(0, night ? '#3a3e44' : '#6a7078'); tg.addColorStop(0.5, night ? '#1a1c20' : '#33373c'); tg.addColorStop(1, '#0a0b0c'); g.fillStyle = tg; g.fill(); g.strokeStyle = dark; g.lineWidth = lw * 1.2; g.stroke();
+      // ひだ：左右に縦の筋（山に光、谷に影）
+      for (const sd of [-1, 1]) for (let i = 0; i < 5; i++) { const x = c + sd * (bh * 0.9 - i * U * 0.022); g.fillStyle = 'rgba(0,0,0,0.5)'; g.fillRect(x, c - bh * 0.6, Math.max(1, U * 0.008), bh * 1.4); g.fillStyle = `rgba(255,255,255,${night ? 0.1 : 0.22})`; g.fillRect(x - Math.max(1, U * 0.006), c - bh * 0.6, Math.max(1, U * 0.005), bh * 1.4); }
+      // 塗装の帯（下の辺）
+      const pg = g.createLinearGradient(0, c + bh * 0.72, 0, c + bh * 0.92); pg.addColorStop(0, mix(paint, '#ffffff', 0.3)); pg.addColorStop(1, mix(paint, '#000000', 0.35)); g.fillStyle = pg; g.fillRect(c - bh * 0.8, c + bh * 0.72, bh * 1.6, bh * 0.2);
+      // 端子と電線
+      for (const [sd, col] of [[-1, '#c8321e'], [1, '#2a6ad8']] as [number, string][]) {
+        const x = c + sd * bh * 0.56, y = c - bh * 0.76, r = U * 0.05;
+        g.strokeStyle = 'rgba(0,0,0,0.4)'; g.lineWidth = U * 0.035; g.lineCap = 'round'; g.beginPath(); g.moveTo(x + 2, y + 3); g.quadraticCurveTo(x + sd * U * 0.08, y - U * 0.02, x + sd * bh * 0.42, y - U * 0.04); g.stroke();
+        g.strokeStyle = mix(col, '#000000', 0.35); g.lineWidth = U * 0.03; g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(x + sd * U * 0.08, y - U * 0.05, x + sd * bh * 0.42, y - U * 0.06); g.stroke();
+        g.strokeStyle = mix(col, '#ffffff', 0.4); g.lineWidth = U * 0.008; g.beginPath(); g.moveTo(x, y - U * 0.008); g.quadraticCurveTo(x + sd * U * 0.08, y - U * 0.058, x + sd * bh * 0.42, y - U * 0.068); g.stroke();
+        g.fillStyle = 'rgba(0,0,0,0.4)'; g.beginPath(); g.arc(x + r * 0.3, y + r * 0.4, r * 1.1, 0, TAU); g.fill();
+        const kg = g.createRadialGradient(x - r * 0.4, y - r * 0.4, r * 0.1, x, y, r); kg.addColorStop(0, mix(col, '#ffffff', 0.7)); kg.addColorStop(0.5, col); kg.addColorStop(1, mix(col, '#000000', 0.6)); g.fillStyle = kg; g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill();
+        bolt(x, y, r * 0.42);
+      }
+      wr = U * 0.3;
+    } else {
+      // そのほか：鋼の箱（塗装の帯・安全じま・通気口・溶接線・ボルト）
+      const bh = h * 0.93;
+      rr(g, c - bh, c - bh, bh * 2, bh * 2, U * 0.05); steelFill(c - bh, c - bh, c + bh, c + bh);
+      g.save(); rr(g, c - bh, c - bh, bh * 2, bh * 2, U * 0.05); g.clip();
+      g.lineWidth = Math.max(1.5, U * 0.022);
+      g.strokeStyle = `rgba(255,255,255,${hiA})`; g.beginPath(); g.moveTo(c - bh, c + bh); g.lineTo(c - bh, c - bh); g.lineTo(c + bh, c - bh); g.stroke();
+      g.strokeStyle = `rgba(0,0,0,${loA})`; g.beginPath(); g.moveTo(c + bh, c - bh); g.lineTo(c + bh, c + bh); g.lineTo(c - bh, c + bh); g.stroke();
+      const band = U * 0.1, pg = g.createLinearGradient(0, c - bh, 0, c - bh + band); pg.addColorStop(0, mix(paint, '#ffffff', 0.35)); pg.addColorStop(0.3, paint); pg.addColorStop(1, mix(paint, '#000000', 0.3));
+      g.fillStyle = pg; g.fillRect(c - bh, c - bh, bh * 2, band);
+      for (let i = 0; i < 14; i++) { const x = c - bh + rnd(i, U, 3) * bh * 2, y = c - bh + band - rnd(i, U, 5) * band * 0.5, r = U * (0.004 + rnd(i, U, 7) * 0.012); g.fillStyle = i % 3 ? 'rgba(120,60,24,0.75)' : 'rgba(200,205,210,0.8)'; g.beginPath(); g.ellipse(x, y, r * 1.6, r, 0, 0, TAU); g.fill(); }
+      g.fillStyle = 'rgba(0,0,0,0.3)'; g.fillRect(c - bh, c - bh + band, bh * 2, Math.max(1, U * 0.006));
+      hazard(c - bh, c + bh - U * 0.045, bh * 2, U * 0.045);
+      if (U >= 40) for (const sd of [-1, 1]) for (let i = 0; i < 6; i++) { const x = c + sd * bh * 0.86 - U * 0.022, y = c - bh * 0.4 + i * U * 0.05; g.fillStyle = 'rgba(0,0,0,0.7)'; g.fillRect(x, y, U * 0.044, U * 0.014); g.fillStyle = `rgba(255,255,255,${night ? 0.15 : 0.45})`; g.fillRect(x, y + U * 0.014, U * 0.044, Math.max(1, U * 0.005)); }
+      g.restore();
+      rr(g, c - bh, c - bh, bh * 2, bh * 2, U * 0.05); g.strokeStyle = dark; g.lineWidth = lw * 1.2; g.stroke();
+      if (U >= 30) for (const [bx, by] of [[-1, -1], [1, -1], [1, 1], [-1, 1]] as [number, number][]) bolt(c + bx * bh * 0.88, c + by * bh * (by < 0 ? 0.7 : 0.84), Math.max(1.4, U * 0.017));
+      wr = U * 0.3;
     }
-    // 窓の枠：黒いゴムのパッキン → 奥まった縁の影 → 板（中の絵の地）
-    const wh = U * 0.3;
-    rr(g, c - wh - U * 0.022, c - wh - U * 0.022, (wh + U * 0.022) * 2, (wh + U * 0.022) * 2, U * 0.05); g.fillStyle = '#101214'; g.fill();
-    rr(g, c - wh, c - wh, wh * 2, wh * 2, U * 0.035); g.fillStyle = P.plate; g.fill();
-    g.save(); rr(g, c - wh, c - wh, wh * 2, wh * 2, U * 0.035); g.clip();
-    const ig = g.createLinearGradient(c - wh, c - wh, c - wh + U * 0.07, c - wh + U * 0.07); ig.addColorStop(0, 'rgba(0,0,0,0.35)'); ig.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = ig; g.fillRect(c - wh, c - wh, wh * 2, wh * 2);
-    g.restore();
+    // ---- 窓：黒いゴムのパッキン → 板（中の絵の地）→ 奥まった縁の影。丸い設備は丸いのぞき窓（まわりにボルト）----
+    if (wr > 0) {
+      const frame = () => { if (wRound) { g.beginPath(); g.arc(c, c, wr, 0, TAU); } else rr(g, c - wr, c - wr, wr * 2, wr * 2, U * 0.035); };
+      if (wRound) { g.beginPath(); g.arc(c, c, wr + U * 0.04, 0, TAU); g.fillStyle = pat(g, steel(night), 0, 0, stScale); g.fill(); g.strokeStyle = dark; g.lineWidth = lw; g.stroke(); if (U >= 40) for (let i = 0; i < 12; i++) { const a = (i / 12) * TAU; bolt(c + Math.cos(a) * (wr + U * 0.022), c + Math.sin(a) * (wr + U * 0.022), Math.max(1, U * 0.009)); } g.beginPath(); g.arc(c, c, wr + U * 0.008, 0, TAU); g.fillStyle = '#101214'; g.fill(); }
+      else { rr(g, c - wr - U * 0.022, c - wr - U * 0.022, (wr + U * 0.022) * 2, (wr + U * 0.022) * 2, U * 0.05); g.fillStyle = '#101214'; g.fill(); }
+      frame(); g.fillStyle = P.plate; g.fill();
+      g.save(); frame(); g.clip();
+      const ig = g.createLinearGradient(c - wr, c - wr, c - wr + U * 0.08, c - wr + U * 0.08); ig.addColorStop(0, 'rgba(0,0,0,0.35)'); ig.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = ig; g.fillRect(c - wr, c - wr, wr * 2, wr * 2);
+      g.restore();
+    }
     bodyCache.set(key, cv);
   }
   return { cv, size };
 }
 /** 装置の台：覚えた絵を貼り、動いているあいだだけ、表示灯を灯す */
 export function bodyReal(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, z: number, e: Ent, t: number, color: string) {
-  const big = Math.round(u / z) >= 2, s = bodySprite(P, u, color, big), k = u / Math.max(10, Math.round(u)), d = s.size * k;
+  const big = Math.round(u / z) >= 2, s = bodySprite(P, u, color, big, e.kind), k = u / Math.max(10, Math.round(u)), d = s.size * k;
   ctx.drawImage(s.cv, cx - d / 2, cy - d / 2, d, d);
   if (z < 18) return;
   // 表示灯：右上。動いていれば緑、止まっていれば橙（消えかけ）。まわりに光
