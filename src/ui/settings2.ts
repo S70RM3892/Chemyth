@@ -314,7 +314,8 @@ export function initSettings2(ctx: Ctx2) {
 /**
  * 画面の枠を測って、#app の CSS 変数にする（上と下に出す札を、指令の札・上の帯・下の道具の段に重ねないため）。
  * --goal-b・--goal-r：指令の札の下と右の端。--top-b：指令の札・上の帯（集中表示では「表示を戻す」）の、下の端のいちばん低い所。
- * --band-b：範囲選択の帯・コピー中の帯の下の端（出ていなければ 0）。--dock-h：下の道具の段（説明と棚）の上の端から、画面の下までの高さ。
+ * --band-b：範囲選択の帯・コピー中の帯の下の端（出ていなければ 0）。--dock-h：下の道具の段（説明と棚）の上の端から、画面の下までの高さ（説明が消えても、一度出た説明の高さは残す）。
+ * --rv-top：復習の札の背の上限に使う --top-b（札が出ているあいだは、操作したときだけ合わせる）。
  * 拡大・縮小のボタン（片手で使う）は、手の側の端の空いた所の真ん中に置く（--z2-l・--z2-r。入らない側は z2-l-full・z2-r-full）
  */
 function watchLayout() {
@@ -339,6 +340,10 @@ function watchLayout() {
       app.classList.toggle(left ? 'z2-l-full' : 'z2-r-full', lo - hi < zh);
     }
   };
+  // 道具の説明は、選んだ直後とベルトを引くあいだだけ出て、じきに消える。出た高さを覚えておき、消えても下の札を下げない
+  // （消えるたびに下げると、復習の札の答えを押そうとした指の下で札が動き、ひとつ上の答えを押してしまう）。
+  // 説明の折り返しが変わるとき（画面の幅・スキン・文字やボタンの大きさを変えたとき）だけ、覚えた高さを捨てて測り直す
+  let tipKey = '', tipH = 0, rvKey = '';
   let raf = 0;
   const measure = () => {
     raf = 0;
@@ -347,11 +352,20 @@ function watchLayout() {
     px('--goal-b', gb);
     px('--goal-r', g.width ? g.right - a.left : 0);
     const fx = box('focus-exit');
-    px('--top-b', Math.max(gb, t.height ? t.bottom - a.top : 0, fx ? fx.bottom - a.top : 0));
+    const topB = Math.max(gb, t.height ? t.bottom - a.top : 0, fx ? fx.bottom - a.top : 0);
+    px('--top-b', topB);
     px('--band-b', Math.max(0, ...['area-act', 'clone-bar'].map((id) => { const r = box(id); return r ? r.bottom - a.top : 0; })));
     // 道具の説明は、スキンによっては段の外（段の上）に浮かせているので、別に測る
+    const root = document.documentElement;
+    const key = [Math.round(a.width), root.dataset.skin ?? '', ...['big-text', 'huge-text', 'big-btn'].map((c) => root.classList.contains(c))].join(' ');
+    if (key !== tipKey) { tipKey = key; tipH = 0; }
     const tip = box('tip');
-    px('--dock-h', d.height ? a.bottom - Math.min(d.top, tip ? tip.top : d.top) : 0);
+    if (tip) tipH = Math.max(tipH, a.bottom - tip.top);
+    px('--dock-h', d.height ? Math.max(a.bottom - d.top, tipH) : 0);
+    // 復習の札の背の上限は、--rv-top（上の札の下の端）で決める。札が出ているあいだは、指令の札の高さ（納品の速さの行は、1 秒に 2 回書き換わる）や
+    // 上の帯が変わっても合わせない（合わせると札の上の端が動き、中の答えも動く）。札が出ていないとき、指令をたたむ・開く、集中表示、画面や設定を変えたときに合わせる
+    const rk = `${key} ${Math.round(a.height)} ${goal.classList.contains('folded')} ${app.classList.contains('focus')}`;
+    if (!box('rvcard') || rk !== rvKey) { rvKey = rk; px('--rv-top', topB); }
     placeZoom(app.getBoundingClientRect());
   };
   // 測った値で上の帯の幅が変わり、また測る…が同じ描画のうちに回らないよう、次の描画の前にまとめて測る
@@ -361,6 +375,8 @@ function watchLayout() {
     const ro = new ResizeObserver(later);
     for (const id of ['goal', 'topbtns', 'dock', 'tip', 'rvcard', 'minimap', 'marks', 'zoom2', 'focus-exit', 'area-act', 'clone-bar']) { const e = document.getElementById(id); if (e) ro.observe(e); }
   }
+  // 説明は少し下から浮かんで出てくるので、出終わってから、もう一度測る（出始めに測ると、高さが少し足りない）
+  $('tip').addEventListener('animationend', later);
   // 手の側・復習の札の側・小地図の大きさ（html の class）、小地図を隠したときの場所のボタンの位置（#app の class）でも変わる
   // （同じ class を書き直しただけのときは測らない。小地図を出さない間は、毎秒なんども書き直している）
   const mo = new MutationObserver((recs) => { if (recs.some((r) => r.oldValue !== (r.target as Element).getAttribute(r.attributeName!))) later(); });
