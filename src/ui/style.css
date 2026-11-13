@@ -1454,3 +1454,7 @@ html.hc[data-skin="punk"][data-theme="dark"] { --key-edge: var(--panel-soft) !im
 @media (max-width: 440px) { #act button { min-width: 44px; padding: 0 10px; } html.big-btn #act button { min-width: 48px; } }
 /* 窓を開いたときは窓そのものへフォーカスを移す。窓には枠を出さない（中のボタンには出る） */
 #sheet:focus { outline: none; }
+
+/* ===== fix:move-2 ===== */
+/* 行き先を待っている間は、⇲ の帯を小地図や復習の札より手前に出す（道具の帯の上に留めたとき、隠れないように） */
+#app.arming #act { z-index: 4; }

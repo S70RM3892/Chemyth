@@ -459,8 +459,15 @@ function boot(data: HotData) {
     toast,
     stamp,
     rotate: (e: Ent) => { group = null; doTurn(e, ((e.dir + 1) % 4) as Dir); },
-    // 中に物をためた装置は、確かめてから消す
-    erase: (e: Ent) => b2.askErase(e, () => { group = null; if (doErase(e.x, e.y)) sfx.erase(); group = null; }),
+    // 中に物をためた装置は、確かめてから消す。長押しでずらしている途中なら、ずらすのはやめる（確かめている間に、離した所へ動かさないように）
+    erase: (e: Ent) => {
+      stopMove();
+      b2.askErase(e, () => {
+        // 確かめている間に、ずらしたり消したりしていたら、元のマスにある別のものは消さない
+        if (at(world, e.x, e.y) !== e) { toast('もうそこにはない（ずらしたか、消えている）。', 1400); return; }
+        group = null; if (doErase(e.x, e.y)) sfx.erase(); group = null;
+      });
+    },
     memo: (e: Ent) => b2.memoRow(e),
   };
   const panel = (): PanelCtx => ({ w: world, show: showSheet, close: closeModal, toast, sheet, actions: sheetActions });
@@ -1373,7 +1380,7 @@ function boot(data: HotData) {
   };
 
   // ---- 選んだものの上に出る操作 ----
-  const act = $('act');
+  const act = $('act'), dock = $('dock');
   const actOpen = $<HTMLButtonElement>('act-open'), actTurn = $<HTMLButtonElement>('act-turn'), actErase = $<HTMLButtonElement>('act-erase'), actCopy = $<HTMLButtonElement>('act-copy');
   const copyable = (e: Ent) => !!(e.recipe || e.test || ((e.kind === 'sampler' || e.kind === 'depot') && e.sub));
   actCopy.onclick = () => {
@@ -1434,7 +1441,9 @@ function boot(data: HotData) {
     const scr = threeOn() ? camera3(cam, cw, ch).project(wx, wy, heightOf(selected)) : [(wx - cam.x) * cam.z + cw / 2, (wy - cam.y) * cam.z + ch / 2];
     const ax = scr[0];
     // 稼働率の札を出しているときは、札の上に出す
-    const ay = scr[1] - 14 - (overlay && !hub ? 26 : 0);
+    let ay = scr[1] - 14 - (overlay && !hub ? 26 : 0);
+    // 「ずらす」の行き先を待っている間は、やめるための ⇲ が画面の下へ出ていかないよう、道具の帯の上に留める（地図を動かして行き先を探しても、見えるように）
+    if (moveArm === selected) ay = Math.min(ay, (dock.offsetHeight ? dock.offsetTop : ch) - 8);
     // 帯の幅は、選んだものと「ボタンを大きく」で変わる（隣に・‖・⇄ も入る）。測った幅で、両端が画面の内に入るように寄せる
     const inX = (el: HTMLElement) => { const half = el.offsetWidth / 2 + 8; return Math.round(Math.min(Math.max(half, ax), Math.max(cw / 2, cw - half))); };
     const ah = act.offsetHeight, by = Math.round(Math.max(64, ah + 8, ay));
@@ -1835,15 +1844,15 @@ function boot(data: HotData) {
     sfx.ok();
     paintArea();
   };
-  // 30 個以上か、中に物をためた装置があれば、確かめてから消す
-  $('area-del').onclick = () => b2.bulkErase(inArea(), () => {
+  // 30 個以上か、中に物をためた装置があれば、確かめてから消す（囲んだものをずらしている途中なら、ずらすのはやめる）
+  $('area-del').onclick = () => { stopMove(); b2.bulkErase(inArea(), () => {
     group = null;
     for (const e of inArea()) doErase(e.x, e.y);
     group = null;
     areaA = areaB = null;
     sfx.erase();
     paintArea();
-  });
+  }); };
   /** 時計回りに 90° 回す。2×2 の装置は、回したあとの左上のマスを新しい位置にする */
   $('area-rot').onclick = () => {
     if (!blueprint) return;
