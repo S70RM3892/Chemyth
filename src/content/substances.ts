@@ -349,7 +349,8 @@ export function sub(id: string): Substance {
   if (!s) throw new Error(`未定義の物質: ${id}`);
   return s;
 }
-export const hasSub = (id: string) => byId.has(id) || ionMix(id) !== null;
+/** 物質の id か。文字でないもの（読み込んだセーブの壊れた値など）は物質ではない */
+export const hasSub = (id: string) => typeof id === 'string' && (byId.has(id) || ionMix(id) !== null);
 
 /** 入力された化学式から物質を引く。知らない式なら null */
 export function subByFormula(raw: string): Substance | null {

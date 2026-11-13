@@ -35,7 +35,8 @@ const int = (v: unknown, lo: number, hi: number): v is number => typeof v === 'n
  * 1 個ぶんを確かめる。種類・位置・向きがおかしければ null。知らない反応や物質、その設備では選べない設定は外して、設備だけ残す。
  * span：左上からの広さの上限（受け取った文字列は BP_SPAN まで。自分で囲んだ範囲には上限がない）
  */
-export function cleanStamp(o: Partial<Record<keyof Stamp, unknown>>, span = Infinity): Stamp | null {
+export function cleanStamp(o: Partial<Record<keyof Stamp, unknown>> | null | undefined, span = Infinity): Stamp | null {
+  if (!o || typeof o !== 'object') return null;
   const { kind, dx, dy, dir, recipe, outOrder, outSlot, test, sub, ch, role } = o;
   if (!isPlaceable(kind) || !int(dx, 0, span) || !int(dy, 0, span) || !int(dir, 0, 3)) return null;
   const b: Stamp = { kind, dx, dy, dir: dir as Dir };
