@@ -9,8 +9,7 @@ import { BRASS, BRASS_DARK, mix, onThemeChange, palette, type Palette } from './
 import { drawElement, sprite } from './token';
 import { buildChunkLab, hubLab, labAmbient, labBelts, labFrame, labHubGlow, labSelect, labZoneLabel, machineLab } from './skinLab';
 import { districtsOf, type District } from '../engine/districts';
-import { equationOf, hexOf, reactionLookById } from '../content/looks';
-import { collectCaption, dHCaption } from '../content/captions';
+import { equationOf, hexOf, LOOKS, plumeOf, reactionLookById } from '../content/looks';
 import { drawScene } from './scene';
 import { planScene } from '../content/sceneplan';
 import type { Recipe } from '../content/recipes';
@@ -21,6 +20,10 @@ import { AMINO_ORDER, aminoOf, phOf, poleAt, type AminoKey } from '../content/ph
 import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/sep';
 import { drawFar, farBegin, farEnd } from './far';
 import { drawGlints, hubMeter, mapStats, noteFx } from './mapfx';
+import { newPlume, plumePaint, plumeRadius, plumeReact, PLUME_CAP, stepPlume, type Plume } from './plumephys';
+import { emissionOf, exhaustOf, plateNotes, plumeable } from './matterfx';
+import { BURNER } from '../content/looks';
+import { G as glowOfT, blackbodyHex, whiteHotHex } from '../content/spectra';
 
 export interface Camera { x: number; y: number; z: number }
 /** WebGL の合成段に渡す層。glow：光っている所（黒地に加算で描く）、mask：効果をかける所（赤＝熱のゆらぎ、青＝水面）。どちらも画面と同じ座標で描ける */
@@ -478,6 +481,13 @@ const motes: Mote[] = Array.from({ length: 46 }, (_, i) => ({ x: hash(i, 3), y: 
 
 interface Particle { x: number; y: number; vx: number; vy: number; age: number; life: number; color: string; text?: string; r: number; tint?: string }
 const particles: Particle[] = [];
+/** 廃棄口と稼働中の装置から出る気体（plumephys.ts の決まりで動く）。描き方の段（標準・高・最高）で数の上限が変わる */
+const plumes: Plume[] = [];
+let plumeFrame = 0, plumeCap: number = PLUME_CAP[1];
+const pushPlume = (sid: string, x: number, y: number, hot: boolean) => {
+  if (calm || plumes.length >= plumeCap) return;
+  plumes.push(newPlume(sid, x, y, hot, Math.random));
+};
 /** 動きを減らす設定のときは、土ぼこりを出さない */
 let calm = false;
 export const setCalm = (v: boolean) => { calm = v; };
@@ -520,8 +530,10 @@ function spawn(w: World, P: Palette) {
     if (f.type === 'deliver') {
       particles.push({ x: f.x + 0.5, y: f.y + 0.2, vx: 0, vy: -0.9, age: 0, life: 0.9, color: P.red, text: '+1', r: 0 });
     } else if (f.type === 'vent') {
-      // 廃棄口は煙突：捨てた物質の色の煙を吐く
-      particles.push({ x: f.x + 0.5 + (Math.random() - 0.5) * 0.2, y: f.y + 0.3, vx: 0.2 + Math.random() * 0.15, vy: -0.6 - Math.random() * 0.3, age: 0, life: 1.6 + Math.random() * 0.8, color: 'smoke', r: 0.13 + Math.random() * 0.07, tint: mix(sub(f.s).color, '#3a3d42', 0.45) });
+      // 廃棄口は煙突。気体は、その気体の本当の見え方で出す（無色は輪、色のある気体はその色、重い気体は低くたまる、軽い気体は昇る）。
+      // 気体でないものは、色のない土ぼこりだけ（物質の札の色で煙を描かない）
+      if (plumeable(f.s)) pushPlume(f.s, f.x + 0.5, f.y + 0.3, false);
+      else particles.push({ x: f.x + 0.5 + (Math.random() - 0.5) * 0.2, y: f.y + 0.3, vx: (Math.random() - 0.5) * 0.3, vy: -0.25 - Math.random() * 0.2, age: 0, life: 0.8 + Math.random() * 0.4, color: 'smoke', r: 0.08 + Math.random() * 0.05 });
     } else if (f.type === 'spill') {
       particles.push({ x: f.x + 0.5, y: f.y + 0.5, vx: (Math.random() - 0.5) * 0.8, vy: 0.5, age: 0, life: 0.5, color: P.red, r: 0.06 });
     } else {
@@ -1112,17 +1124,17 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       }
     }
     if (G) {
-      // 動いている装置は光をこぼす。色は、その反応で生じる気体や液の色（なければスキンの光の色）。熱する反応は橙に光り、上の空気がゆらぐ
+      // 動いている装置は作業灯の光をこぼす（中立の色。物質の色は光にしない）。炎・熱で光る物・バーナーは、その光の色で光り、上の空気がゆらぐ
       const mcx = sx(e.x + sz / 2), mcy = sy(e.y + sz / 2);
       // 装置の中身（液や沈殿の色）は覚える対象なので、光で色が変わらないように守る（効果の層の緑）
       if (M && sz > 1) { M.fillStyle = 'rgb(0,255,0)'; M.beginPath(); M.arc(mcx, mcy, z * sz * 0.4, 0, Math.PI * 2); M.fill(); }
       if (e.busy) {
         glow(mcx, mcy, z * sz * 1.3, glowOf(e, P), 0.3 + 0.05 * Math.sin(t * 5 + e.x));
-        if (reactionLookById(e.recipe)?.heat) { glow(mcx, mcy + z * sz * 0.38, z * sz * 0.75, '255,130,40', 0.38); heat(mcx, mcy - z * sz * 0.55, z * sz * 0.85, 0.85); }
+        const em = emissionOf(e.recipe);
+        if (em) { if (em.a > 0) glow(mcx, mcy + z * sz * 0.2, z * sz * 0.75, em.rgb, em.a); heat(mcx, mcy - z * sz * 0.55, z * sz * 0.85, em.shimmer); }
       }
-      if (e.kind === 'vent') { glow(mcx, mcy - z * 0.05, z * 0.5, '255,120,50', 0.22); heat(mcx, mcy - z * 0.7, z * 0.6, 0.5); }
-      else if (e.kind === 'sensor' && (SIG[e.ch || 1] || 0) > 0) glow(mcx, mcy, z * 0.8, hexRgb(lineColor(e.ch || 1)), 0.7);
-      else if (e.kind === 'tank' && (e.cnt || 0) + (e.rcn || 0) > 0 && e.sub) glow(mcx, mcy, z * 0.9, hexRgb(hexOf(e.sub)), 0.22);
+      // 廃棄口とタンクは光らない（中の物質の色を光にしない）。信号のランプは画面の色で光る
+      if (e.kind === 'sensor' && (SIG[e.ch || 1] || 0) > 0) glow(mcx, mcy, z * 0.8, hexRgb(lineColor(e.ch || 1)), 0.7);
     }
     // 習熟メッキ：その反応を、間隔を空けた復習で覚えているほど、縁が銅 → 銀 → 金になる。まちがえると剥がれる
     const plate = isMachine(e.kind) && !e.sealed ? platingOf(w.srs, e.recipe) : 0;
@@ -1164,10 +1176,15 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       particles.push({ x: e.x + 0.5 + Math.cos(a) * 0.2, y: e.y + 0.5 + Math.sin(a) * 0.2, vx: Math.cos(a) * 0.5, vy: Math.sin(a) * 0.5 - 0.25, age: 0, life: 0.45 + Math.random() * 0.25, color: wet ? '#5aa9d6' : P.soft, r: 0.035 + Math.random() * 0.03 });
     }
     // 稼働中の装置は、蒸気や火花を出す
-    if (e.busy && z >= 20 && particles.length < 260 && Math.random() < dt * (e.kind === 'electrolyzer' || e.kind === 'battery' ? 5 : 3)) {
+    if (e.busy && z >= 20 && particles.length < 260 && Math.random() < dt * (e.kind === 'electrolyzer' || e.kind === 'battery' ? 5 : 1.6)) {
       const r1 = Math.random(), r2 = Math.random();
       if (e.kind === 'electrolyzer' || e.kind === 'battery') particles.push({ x: e.x + sz / 2 + (r1 - 0.5) * 0.9, y: e.y + sz / 2 + (r2 - 0.5) * 0.5, vx: (r2 - 0.5) * 1.6, vy: -0.6 - r1 * 0.9, age: 0, life: 0.28 + r1 * 0.2, color: 'spark', r: 0.05 });
-      else particles.push({ x: e.x + sz * 0.3 + r1 * sz * 0.4, y: e.y + 0.25, vx: 0.1 + r2 * 0.14, vy: -0.42 - r1 * 0.25, age: 0, life: 1.3 + r2 * 0.7, color: 'smoke', r: 0.1 + r1 * 0.07, tint: smokeTint(e.recipe) });
+      else {
+        // 気体が生じる反応だけ、その気体を出す（見え方は廃棄口と同じ決まり）。熱する・燃える・発熱の大きい反応の出口は熱いので、はじめは昇る。
+        // 発熱の大きい反応（CaO と水など）は湯気。気体の生じない反応は何も出さない（色のついた煙を飾りで出さない）
+        const gas = exhaustOf(e.recipe);
+        if (gas) pushPlume(gas.id, e.x + sz * 0.3 + r1 * sz * 0.4, e.y + 0.1, gas.hot);
+      }
     }
   }
 
@@ -1542,8 +1559,9 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       const r = recipeById(e.recipe);
       if (!r || e.sealed) return;
       const sz = sizeOf(e), eq = equationOf(r), cond = r.accept[0] && r.accept[0] !== 'なし' ? r.accept[0] : '';
-      // 選んだ装置には、もう 1 行：状態つきの式と ΔH（熱化学の表にある反応）、捕集装置なら集め方のわけ。文と出典は captions.ts
-      const note = more ? (dHCaption(r.id) ?? collectCaption(r.id))?.text ?? '' : '';
+      // 選んだ装置には、あと 2 行まで（文と出典は captions.ts）：絵に見えているもののわけ（指示薬・燃える炎・熱で光る温度・青いバーナー・集め方）と、
+      // 状態つきの式と ΔH（熱化学の表にある反応）
+      const notes = more ? plateNotes(r.id) : [];
       const fs = Math.max(11, Math.min(15, z * 0.3));
       ctx.font = `700 ${fs}px ${FONT_MONO}`;
       let w1 = ctx.measureText(eq).width;
@@ -1552,8 +1570,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       ctx.font = `600 ${fs * 0.8}px ${FONT_UI}`;
       const w2 = cond ? Math.min(max, ctx.measureText(cond).width) : 0;
       ctx.font = `500 ${fs * 0.74}px ${FONT_UI}`;
-      const w3 = note ? Math.min(max, ctx.measureText(note).width) : 0;
-      const wd = Math.max(w1, w2, w3) + 18, hh = fs * (cond ? 2.7 : 1.7) + (note ? fs * 1.05 : 0);
+      const w3 = notes.reduce((m, n) => Math.max(m, Math.min(max, ctx.measureText(n).width)), 0);
+      const wd = Math.max(w1, w2, w3) + 18, hh = fs * (cond ? 2.7 : 1.7) + notes.length * fs * 1.05;
       const px = Math.max(4, Math.min(cw - wd - 4, sx(e.x + sz / 2) - wd / 2)), py = sy(e.y + sz) + z * 0.16;
       ctx.fillStyle = punk ? '#0b0d10' : P.plate;
       rr(ctx, px, py, wd, hh, punk ? 0 : 5); ctx.fill();
@@ -1563,7 +1581,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       ctx.font = `700 ${fs * k}px ${FONT_MONO}`;
       ctx.fillText(eq, px + wd / 2, py + fs * 0.9);
       if (cond) { ctx.font = `600 ${fs * 0.8}px ${FONT_UI}`; ctx.fillStyle = punk ? P.hi : P.red; ctx.fillText(cond, px + wd / 2, py + fs * 2.0, max); }
-      if (note) { ctx.font = `500 ${fs * 0.74}px ${FONT_UI}`; ctx.fillStyle = punk ? '#c9ccc4' : P.soft; ctx.fillText(note, px + wd / 2, py + fs * (cond ? 3.05 : 2.0), max); }
+      notes.forEach((n, i) => { ctx.font = `500 ${fs * 0.74}px ${FONT_UI}`; ctx.fillStyle = punk ? '#c9ccc4' : P.soft; ctx.fillText(n, px + wd / 2, py + fs * ((cond ? 3.05 : 2.0) + i * 1.05), max); });
       ctx.textBaseline = 'alphabetic';
     };
     if (z >= (view.allPlates ? 34 : 70)) { for (const e of w.ents.values()) if (e.recipe && e !== view.selected && inView(e) && floorOf(e.y) === (view.floor || 0)) plate(e); }
@@ -1646,6 +1664,34 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     }
   }
   ctx.globalAlpha = 1;
+  // ---- 気体（廃棄口と稼働中の装置の出口）：無色は輪、色のある気体はその色、白煙・霧は白。重い気体は低くたまり、軽い気体は昇る ----
+  plumeCap = PLUME_CAP[G ? 1 : 0];
+  if (!view.still) {
+    for (let i = plumes.length - 1; i >= 0; i--) if (!stepPlume(plumes[i], dt, calm)) plumes.splice(i, 1);
+    // 空気の中の反応：NH₃ と HCl が出会うと白煙（NH₄Cl）
+    for (const q of plumeReact(plumes, ++plumeFrame, Math.random)) if (plumes.length < plumeCap) plumes.push(q);
+  }
+  if (plumes.length) {
+    const ringCol = light ? P.ink : P.soft, ringW = Math.max(1, z * 0.02);
+    for (const p of plumes) {
+      const fade = Math.min(1, (p.life - p.age) / 0.6) * Math.min(1, p.age / 0.15), rad = plumeRadius(p) * z, px = sx(p.x), py = sy(p.y);
+      if (rad < 0.5 || px < -rad || py < -rad || px > cw + rad || py > ch + rad) continue;
+      const paint = plumePaint(p);
+      if (paint.ring) {
+        ctx.globalAlpha = 0.35 * fade * (1 - paint.k);
+        ctx.strokeStyle = ringCol; ctx.lineWidth = ringW;
+        ctx.beginPath(); ctx.arc(px, py, rad, 0, Math.PI * 2); ctx.stroke();
+      }
+      if (paint.fill && paint.k > 0) {
+        // 色のある気体は光をさえぎる（光らない）。白煙・霧は濃く、色のある気体は薄く。白い煙は白い紙の上でも見えるよう、淡い縁を引く
+        ctx.globalAlpha = (p.white ? 0.75 : 0.5) * fade * paint.k;
+        ctx.fillStyle = paint.fill;
+        ctx.beginPath(); ctx.arc(px, py, rad, 0, Math.PI * 2); ctx.fill();
+        if (p.white) { ctx.globalAlpha = 0.28 * fade * paint.k; ctx.strokeStyle = ringCol; ctx.lineWidth = ringW; ctx.stroke(); }
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
   // ---- 光の効果（納品の光の尾・反応の光・列車の到着・指令の光の柱） ----
   if (!view.still) drawGlints(ctx, G, P, sx, sy, z, dt, cw, ch, three ? { screen: three.screen, sh: three.sh, project: three.project } : null);
 
@@ -2485,20 +2531,15 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
 }
 
 /** 装置の煙の色：色のついた気体が生じる反応なら、その色（NO₂ なら赤褐色、Cl₂ なら黄緑色） */
-function smokeTint(recipe: string | undefined): string | undefined {
-  const L = reactionLookById(recipe);
-  if (!L) return undefined;
-  const c = L.gasPhase ? L.after : L.gases.find((g) => g !== '#e4ecf1');
-  return c && c !== '#e4ecf1' ? c : undefined;
-}
 /** '#rrggbb' を '255,200,80' の形に */
 const hexRgb = (hex: string) => `${parseInt(hex.slice(1, 3), 16)},${parseInt(hex.slice(3, 5), 16)},${parseInt(hex.slice(5, 7), 16)}`;
-/** 動いている装置がこぼす光の色：色のついた気体が生じる反応ならその色、電気を使う装置は青白、ほかはスキンの光の色 */
+/**
+ * 動いている装置の作業灯の色。光るのは自分で光るものだけ（SPEC2 D6）：物質の色（気体や液の色）を光にしない。
+ * 電気を使う装置は青白、ほかは中立の灯りの色（工業・研究所・魔術は、その画面の灯りの色）
+ */
 function glowOf(e: Ent, P: Palette): string {
-  const tint = smokeTint(e.recipe);
-  if (tint) return hexRgb(tint);
   if (e.kind === 'electrolyzer' || e.kind === 'battery' || e.kind === 'phoresis') return '150,210,255';
-  return P.skin === 'note' ? '255,225,120' : P.glow;
+  return P.skin === 'note' ? '255,214,140' : P.glow;
 }
 /** 水面のマスか（海・入り江）。マスごとの判定は重いので、覚えておく */
 const waterMemo = new Map<number, boolean>();
@@ -2527,20 +2568,29 @@ function reactionGlyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: nu
   const busy = !!e.busy, prog = busy ? Math.min(1, e.prog || 0) : 0, ph = e.x * 0.7 + e.y * 1.3;
   const disc = (x: number, y: number, rad: number) => { ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); };
   const ink = P.ink, body = mix(L.before, L.after, prog);
-  const bubbles = (x0: number, x1: number, yb: number, yt: number, col: string, n: number, size: number) => {
+  // 泡：色のある気体はその色、無色の気体は輪（白く塗らない）
+  const bubbles = (x0: number, x1: number, yb: number, yt: number, col: string | null, n: number, size: number) => {
     for (let i = 0; i < n; i++) {
       const k = cyc(t, i + ph, 0.9 + (i % 3) * 0.25), bx = x0 + (x1 - x0) * ((i * 0.618 + ph) % 1) + Math.sin(t * 4 + i * 2) * size * 0.6;
       disc(bx, yb + (yt - yb) * k, size * (0.7 + 0.5 * k));
-      ctx.fillStyle = col; ctx.globalAlpha = 0.9 * (1 - k * 0.5); ctx.fill(); ctx.globalAlpha = 1;
-      ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.6, line * 0.35); ctx.stroke();
+      if (col) { ctx.fillStyle = col; ctx.globalAlpha = 0.9 * (1 - k * 0.5); ctx.fill(); }
+      else { ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.globalAlpha = 1 - k * 0.4; ctx.fill(); }
+      ctx.globalAlpha = col ? 1 : 0.75;
+      ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.6, line * 0.35); ctx.stroke(); ctx.globalAlpha = 1;
     }
   };
-  const flame = (x: number, y: number, s: number) => {
-    const f = busy ? 1 + 0.25 * Math.sin(t * 13 + x) : 0.45;
+  // 生じる気体（容器の泡）。色は気体の色、無色は null
+  const gasOuts = r.outputs.filter(([s2]) => s2 !== 'e' && (() => { try { return sub(s2).state === 'gas'; } catch { return false; } })()).map(([s2, n]) => ({ id: s2, n, hex: plumeOf(s2).hex }));
+  /** 舌の形の炎（中が明るい）。outer は外炎、inner は内炎の色 */
+  const tongue = (x: number, y: number, s: number, outer: string, inner: string | null, aOuter = 1) => {
+    const f = busy ? 1 + 0.22 * Math.sin(t * 13 + x) : 0.45;
     ctx.beginPath(); ctx.moveTo(x - s * 0.5, y); ctx.quadraticCurveTo(x - s * 0.55, y - s * 0.7 * f, x, y - s * 1.5 * f); ctx.quadraticCurveTo(x + s * 0.55, y - s * 0.7 * f, x + s * 0.5, y); ctx.closePath();
-    ctx.fillStyle = busy ? '#f08a24' : mix('#f08a24', P.plate, 0.6); ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.8, line * 0.5); ctx.stroke();
-    if (busy) { ctx.beginPath(); ctx.moveTo(x - s * 0.22, y); ctx.quadraticCurveTo(x, y - s * 0.9 * f, x + s * 0.22, y); ctx.closePath(); ctx.fillStyle = '#ffe07a'; ctx.fill(); }
+    ctx.globalAlpha = busy ? aOuter : aOuter * 0.5; ctx.fillStyle = outer; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.6, line * 0.4); ctx.stroke();
+    if (inner && busy) { ctx.beginPath(); ctx.moveTo(x - s * 0.24, y); ctx.quadraticCurveTo(x, y - s * 0.95 * f, x + s * 0.24, y); ctx.closePath(); ctx.fillStyle = inner; ctx.fill(); }
   };
+  // 加熱のバーナー：空気を調節した青い炎（外炎は淡い青、内炎の円錐は青）。赤っぽい炎は不完全燃焼なので描かない
+  const flame = (x: number, y: number, s: number) => tongue(x, y, s, BURNER.outer, BURNER.inner, 0.75);
   const tag = (text: string, y: number) => {
     if (!text || u < 84) return;
     ctx.font = `700 ${Math.max(8, u * 0.075)}px ${FONT_UI}`;
@@ -2554,11 +2604,59 @@ function reactionGlyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: nu
   switch (e.kind) {
     case 'reactor': {
       const R = u * 0.27, vy = cy - u * 0.03;
-      if (L.heat) for (const dx of [-0.5, 0, 0.5]) flame(cx + dx * R * 0.8, vy + R + u * 0.075, u * 0.055);
+      // 熱で光る温度（約 525 ℃より上）の反応は、バーナーではなく、容器の中が黒体の色で光る。燃える反応は、燃えている物の上に炎（下にバーナーは置かない）
+      const g = L.T !== undefined ? glowOfT(L.T) : 0, incand = !L.burn && g > 0;
+      if (L.heat && !L.burn && !incand) for (const dx of [-0.5, 0, 0.5]) flame(cx + dx * R * 0.8, vy + R + u * 0.075, u * 0.055);
       disc(cx, vy, R); ctx.fillStyle = P.plate; ctx.fill();
       ctx.save();
       disc(cx, vy, R - line * 0.3); ctx.clip();
-      if (L.gasPhase) {
+      const ind = L.indicator;
+      if (L.burn) {
+        // 燃える反応：炎は燃えている物の上に立つ
+        const b = L.burn, bed = vy + R * 0.55;
+        ctx.fillStyle = mix(P.plate, '#000000', 0.1); ctx.fillRect(cx - R, vy - R, R * 2, R * 2);
+        if (b.fuel === 'C') {
+          // 炭・コークス：背の高い炎は立てず、赤熱した層（約 900 ℃）
+          ctx.fillStyle = '#1e1a18'; ctx.fillRect(cx - R, bed, R * 2, R);
+          for (let i = 0; i < 9; i++) { const lx = cx - R + ((i * 0.37 + ph * 0.1) % 1) * R * 2, ly = bed + ((i * 0.53) % 1) * R * 0.35; disc(lx, ly, R * 0.13); ctx.fillStyle = '#2a2420'; ctx.fill(); }
+          const gl = ctx.createLinearGradient(0, vy + R, 0, bed - R * 0.1);
+          gl.addColorStop(0, `rgba(${hexRgb(b.flame)},${busy ? 0.95 : 0.35})`); gl.addColorStop(1, `rgba(${hexRgb(b.flame)},0)`);
+          ctx.fillStyle = gl; ctx.fillRect(cx - R, bed - R * 0.1, R * 2, R * 1.2);
+        } else if (b.fuel === 'CO') {
+          // CO：気体の流れの中、出口の側で青い炎
+          ctx.fillStyle = mix(P.plate, '#d9e2ea', 0.5); ctx.fillRect(cx - R, vy - R, R * 2, R * 2);
+          tongue(cx + R * 0.25, vy + R * 0.35, R * 0.55, b.flame, mix(b.flame, '#ffffff', 0.45), 0.8);
+        } else {
+          // 硫黄は青い炎、黄リンは明るい炎と白煙。燃えている物の粒の上に炎
+          const fuel = b.fuel === 'S' ? LOOKS.S?.hex ?? '#e8d44a' : LOOKS.P4?.hex ?? '#f4f0d0';
+          ctx.fillStyle = fuel; ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.6, line * 0.4);
+          ctx.beginPath(); ctx.ellipse(cx, bed + R * 0.12, R * 0.42, R * 0.16, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+          tongue(cx - R * 0.18, bed + R * 0.02, R * 0.42, b.flame, mix(b.flame, '#ffffff', 0.5), 0.85);
+          tongue(cx + R * 0.16, bed + R * 0.04, R * 0.34, b.flame, mix(b.flame, '#ffffff', 0.5), 0.85);
+          if (b.smoke && busy) for (let i = 0; i < 4; i++) { const k = cyc(t, i + ph, 0.45); disc(cx + Math.sin(t + i * 2) * R * 0.3, bed - R * 0.4 - k * R * 0.9, R * (0.14 + 0.18 * k)); ctx.globalAlpha = 0.7 * (1 - k); ctx.fillStyle = b.smoke; ctx.fill(); ctx.globalAlpha = 1; }
+        }
+      } else if (incand) {
+        // 熱で光る：暗い炉の中で、運転温度の黒体の色（約 525 ℃から赤、熱いほど橙から白）。光の強さは温度で決まる
+        const T = L.T!, hot = whiteHotHex(T), a = busy ? 0.35 + 0.65 * g : 0.15 + 0.3 * g;
+        ctx.fillStyle = '#2a1a14'; ctx.fillRect(cx - R, vy - R, R * 2, R * 2);
+        if (L.gasPhase) {
+          // 気体どうしの反応（白金網・熱分解）：気体の色の上で、触媒の網や管が赤く光る
+          ctx.fillStyle = mix('#2a1a14', body, 0.35); ctx.fillRect(cx - R, vy - R, R * 2, R * 2);
+          ctx.strokeStyle = hot; ctx.globalAlpha = a; ctx.lineWidth = Math.max(1, R * 0.06);
+          for (let i = -2; i <= 2; i++) { ctx.beginPath(); ctx.moveTo(cx - R, vy + i * R * 0.18); ctx.lineTo(cx + R, vy + i * R * 0.18); ctx.stroke(); }
+          for (let i = -3; i <= 3; i++) { ctx.beginPath(); ctx.moveTo(cx + i * R * 0.22, vy - R * 0.4); ctx.lineTo(cx + i * R * 0.22, vy + R * 0.4); ctx.stroke(); }
+          ctx.globalAlpha = 1;
+        } else {
+          // 融けた物・熱した固体の層。真ん中ほど熱い
+          const top = vy - R * 0.1;
+          ctx.globalAlpha = a; ctx.fillStyle = blackbodyHex(T); ctx.fillRect(cx - R, top, R * 2, R * 2);
+          const core = ctx.createRadialGradient(cx, vy + R * 0.35, 0, cx, vy + R * 0.35, R * 0.8);
+          core.addColorStop(0, hot); core.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = core; ctx.fillRect(cx - R, top, R * 2, R * 2); ctx.globalAlpha = 1;
+          ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.6, line * 0.4); ctx.beginPath(); ctx.moveTo(cx - R, top); ctx.lineTo(cx + R, top); ctx.stroke();
+        }
+        if (gasOuts.length && busy) bubbles(cx - R * 0.5, cx + R * 0.5, vy + R * 0.6, vy - R * 0.9, gasOuts[gasOuts.length - 1].hex, 3, R * 0.08);
+      } else if (L.gasPhase) {
         // 気体どうしの反応：容器いっぱいの気体の色が変わっていく
         ctx.fillStyle = body; ctx.fillRect(cx - R, vy - R, R * 2, R * 2);
         for (let i = 0; i < 7; i++) {
@@ -2572,12 +2670,14 @@ function reactionGlyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: nu
         ctx.fillStyle = body;
         ctx.beginPath(); ctx.moveTo(cx - R, vy + R); ctx.lineTo(cx - R, vy + R * 0.25); ctx.quadraticCurveTo(cx - R * 0.3, vy - R * 0.2, cx + R * 0.1, vy + R * 0.1); ctx.quadraticCurveTo(cx + R * 0.6, vy + R * 0.35, cx + R, vy + R * 0.2); ctx.lineTo(cx + R, vy + R); ctx.closePath(); ctx.fill();
         ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.8, line * 0.5); ctx.stroke();
-        if (busy && L.heat) { const g = ctx.createLinearGradient(0, vy + R, 0, vy); g.addColorStop(0, 'rgba(255,120,30,0.75)'); g.addColorStop(1, 'rgba(255,120,30,0)'); ctx.fillStyle = g; ctx.fillRect(cx - R, vy, R * 2, R); }
-        if (L.gases.length) bubbles(cx - R * 0.5, cx + R * 0.5, vy + R * 0.1, vy - R * 0.95, L.gases[L.gases.length - 1], busy ? 4 : 0, R * 0.09);
+        // 熱で光るほど熱くない固体の反応は、下のバーナーで熱しているだけ（固体を赤く光らせない）
+        if (gasOuts.length) bubbles(cx - R * 0.5, cx + R * 0.5, vy + R * 0.1, vy - R * 0.95, gasOuts[gasOuts.length - 1].hex, busy ? 4 : 0, R * 0.09);
       } else {
         // 水溶液の反応：液の色が変わり、気体は泡になって上がり、溶けない固体は底にたまる
         const top = vy - R * 0.28 + Math.sin(t * 2.2 + ph) * R * 0.03;
-        ctx.fillStyle = body; ctx.fillRect(cx - R, top, R * 2, R * 2);
+        // 指示薬を加えてある反応は、液の色が指示薬の色で変わる（フェノールフタレインは無色から淡赤色、メチルオレンジは赤から黄）
+        const liquid = ind ? (ind.from ? mix(ind.from, ind.to, prog) : mix(body, ind.to, prog)) : body;
+        ctx.fillStyle = liquid; ctx.fillRect(cx - R, top, R * 2, R * 2);
         ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.8, line * 0.45);
         ctx.beginPath(); ctx.moveTo(cx - R, top); ctx.quadraticCurveTo(cx - R * 0.5, top - R * 0.07, cx, top); ctx.quadraticCurveTo(cx + R * 0.5, top + R * 0.07, cx + R, top); ctx.stroke();
         if (L.solids.length) {
@@ -2586,7 +2686,7 @@ function reactionGlyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: nu
           ctx.strokeStyle = ink; ctx.beginPath(); ctx.moveTo(cx - R, vy + R - h0); ctx.lineTo(cx + R, vy + R - h0); ctx.stroke();
           if (busy) for (let i = 0; i < 6; i++) { const k = cyc(t, i + ph, 0.7); ctx.fillStyle = col; ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.5, line * 0.3); ctx.beginPath(); ctx.rect(cx - R * 0.7 + ((i * 0.31 + ph) % 1) * R * 1.4, top + (vy + R - h0 - top) * k, R * 0.1, R * 0.1); ctx.fill(); ctx.stroke(); }
         }
-        if (busy) for (const g of L.gases) bubbles(cx - R * 0.6, cx + R * 0.6, vy + R * 0.8, top, g, 3, R * 0.08);
+        if (busy) for (const go of gasOuts) bubbles(cx - R * 0.6, cx + R * 0.6, vy + R * 0.8, top, go.hex, 3, R * 0.08);
         if (busy) { ctx.save(); ctx.translate(cx, vy + R * 0.35); ctx.rotate(t * 5); ctx.strokeStyle = ink; ctx.lineWidth = line * 0.7; ctx.beginPath(); ctx.moveTo(-R * 0.3, 0); ctx.lineTo(R * 0.3, 0); ctx.stroke(); ctx.restore(); }
       }
       if (L.light) { ctx.fillStyle = 'rgba(255,225,77,0.35)'; ctx.fillRect(cx - R, vy - R, R * 2, R * 2); }
@@ -2595,7 +2695,8 @@ function reactionGlyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: nu
       disc(cx, vy, R); ctx.strokeStyle = ink; ctx.lineWidth = line; ctx.stroke();
       // 反応の進み具合：容器のまわりの輪
       if (busy) { ctx.beginPath(); ctx.arc(cx, vy, R + line * 1.3, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * prog); ctx.strokeStyle = P.hi; ctx.lineWidth = line * 1.5; ctx.lineCap = 'butt'; ctx.stroke(); ctx.lineCap = 'round'; }
-      tag(L.light ? '光' : L.tag, vy + R + u * (L.heat ? 0.2 : 0.12));
+      // 指示薬は略号で（PP：フェノールフタレイン、MO：メチルオレンジ。名前は反応の札の説明に出る）
+      tag(L.light ? '光' : ind ? `${ind.id.toUpperCase()} 指示薬` : L.tag, vy + R + u * (L.heat && !incand && !L.burn ? 0.2 : 0.12));
       return true;
     }
     case 'separator': {
@@ -2620,12 +2721,18 @@ function reactionGlyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: nu
       const x0 = cx - u * 0.3, y0 = cy - u * 0.1, wd = u * 0.6, hh = u * 0.4, ex = [cx - u * 0.15, cx + u * 0.15];
       rr(ctx, x0, y0, wd, hh, u * 0.06); ctx.fillStyle = P.plate; ctx.fill();
       ctx.save(); rr(ctx, x0, y0, wd, hh, u * 0.06); ctx.clip();
-      ctx.fillStyle = L.dry ? mix('#f08a24', body, 0.55) : body; ctx.fillRect(x0, y0 + hh * 0.18, wd, hh);
-      const outs = r.outputs.map(([s2], i) => ({ s: s2, pole: poleOf(r, i) }));
+      // 融解塩の電解（NaCl 801 ℃、氷晶石 960 ℃）は、融けた塩が熱で光る（黒体の色。融けた NaCl そのものは無色）
+      const g = L.T !== undefined ? glowOfT(L.T) : 0;
+      if (g > 0) {
+        ctx.fillStyle = '#2a1a14'; ctx.fillRect(x0, y0 + hh * 0.18, wd, hh);
+        ctx.globalAlpha = busy ? 0.35 + 0.65 * g : 0.15 + 0.3 * g; ctx.fillStyle = blackbodyHex(L.T!); ctx.fillRect(x0, y0 + hh * 0.18, wd, hh); ctx.globalAlpha = 1;
+      } else { ctx.fillStyle = body; ctx.fillRect(x0, y0 + hh * 0.18, wd, hh); }
+      const outs = r.outputs.map(([s2, n], i) => ({ s: s2, n, pole: poleOf(r, i) }));
       outs.forEach((o) => {
         if (o.pole === 'x' || o.s === 'e') return;
         const x = ex[o.pole === 'c' ? 0 : 1], st = sub(o.s).state;
-        if (st === 'gas') { if (busy) bubbles(x - u * 0.07, x + u * 0.07, y0 + hh * 0.95, y0 + hh * 0.2, hexOf(o.s), 3, u * 0.022); }
+        // 泡の数は気体の係数に比べる（同じ温度・圧力なら体積の比。水の電気分解は H₂ : O₂ = 2 : 1）。無色の気体は輪
+        if (st === 'gas') { if (busy) bubbles(x - u * 0.07, x + u * 0.07, y0 + hh * 0.95, y0 + hh * 0.2, plumeOf(o.s).hex, Math.min(6, 2 * o.n), u * 0.022); }
         else if (st === 'solid') { ctx.fillStyle = hexOf(o.s); ctx.fillRect(x - u * 0.06, y0 + hh * (0.95 - 0.5 * (busy ? 0.4 + 0.6 * prog : 0.6)), u * 0.12, hh); }
       });
       ctx.restore();
