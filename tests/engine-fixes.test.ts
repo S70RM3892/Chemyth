@@ -7,8 +7,8 @@ import { CHAPTERS } from '../src/content/goals';
 import { MACHINES } from '../src/content/machines';
 import { RECIPES } from '../src/content/recipes';
 import { HUB_TILES, resourceAt } from '../src/content/map';
-import { addRail, at, configure, currentGoal, deserialize, DX, DY, flowStats, flowTrace, goalCount, layRail, machineState, moveEnts, moveRails, multiOf, newWorld, place, railRoute, requiredOf, serialize, setChapter, setRailMask, setStationRole, slotPort, step, outPort, type World } from '../src/engine/world';
-import { mirrorFixed, relocate, xEnts, xRails } from '../src/engine/shape';
+import { addRail, at, configure, currentGoal, deserialize, DX, DY, flowStats, flowTrace, goalCount, layRail, liftPartner, machineState, moveEnts, moveRails, multiOf, newWorld, place, railRoute, requiredOf, serialize, setChapter, setRailMask, setStationRole, slotPort, step, outPort, type Ent, type World } from '../src/engine/world';
+import { mirrorFixed, moveSpec, relocate, xEnts, xRails, type MoveSpec, type Rect, type Xform } from '../src/engine/shape';
 import { bottlenecks, machineTypes, stopReasons } from '../src/engine/flow';
 import { findRoute } from '../src/engine/route';
 import { decodeBlueprint, encodeBlueprint } from '../src/engine/blueprint';
@@ -39,14 +39,14 @@ describe('ずらす・回すを元に戻す：いまの中身のまま戻り、�
     expect(vented).toBeGreaterThan(0);
     // しまっておいた動かす前の設備は、動かした時点の中身のまま（これを戻すと、流れ出た分が増える）
     expect(r.removed[0].cnt).toBe(500);
-    const back = relocate(w, r.added, r.removed.map((e) => [e.x, e.y]));
+    const back = relocate(w, moveSpec(r.removed, r.added));
     expect(back.ok).toBe(true);
     const home = at(w, 60, 40)!;
     expect(home).toBe(back.added[0]);
     expect(at(w, 60, 39)?.kind === 'tank' && at(w, 60, 39) !== home).toBe(false);
     expect((home.cnt || 0) + vented).toBe(500);
     // やり直す：もう一度上へ
-    const again = relocate(w, back.added, back.removed.map((e) => [e.x, e.y]));
+    const again = relocate(w, moveSpec(back.removed, back.added, undefined, false));
     expect(again.ok).toBe(true);
     expect(at(w, 60, 39)).toBe(again.added[0]);
     expect((again.added[0].cnt || 0) + (w.vented.NaCl || 0)).toBe(500);
@@ -66,7 +66,7 @@ describe('ずらす・回すを元に戻す：いまの中身のまま戻り、�
     expect(at(w, 70, 70)!.item).toBeNull();
     expect(w.vented.H2O).toBe(1);
     expect(res.removed[0].item).not.toBeNull();   // しまっておいた設備には、荷が残っている
-    const back = relocate(w, res.added, res.removed.map((e) => [e.x, e.y]), 'rot', true);
+    const back = relocate(w, moveSpec(res.removed, res.added, 'rot'));
     expect(back.ok).toBe(true);
     expect(at(w, 70, 70)).toMatchObject({ dir: 0, item: null });
 
@@ -85,7 +85,7 @@ describe('ずらす・回すを元に戻す：いまの中身のまま戻り、�
       const xr = xEnts(w2, [at(w2, 60, 60)!, at(w2, 61, 60)!], how, box);
       expect(xr.ok).toBe(true);
       if (!xr.ok) return;
-      const bk = relocate(w2, xr.added, xr.removed.map((e) => [e.x, e.y]), how, true);
+      const bk = relocate(w2, moveSpec(xr.removed, xr.added, how));
       expect(bk.ok).toBe(true);
       expect(at(w2, 60, 60)!.items).toEqual(before.items);
       expect(at(w2, 61, 60)).toMatchObject({ dir: before.dir, outSlot: before.outSlot });
@@ -98,9 +98,141 @@ describe('ずらす・回すを元に戻す：いまの中身のまま戻り、�
     const r = moveEnts(w, [at(w, 80, 80)!], 1, 0);
     if (!r.ok) throw new Error(r.why);
     place(w, 'vent', 80, 80, 0);
-    const back = relocate(w, r.added, r.removed.map((e) => [e.x, e.y]));
+    const back = relocate(w, moveSpec(r.removed, r.added));
     expect(back.ok).toBe(false);
     expect(at(w, 81, 80)).toBe(r.added[0]);
+  });
+});
+
+/**
+ * main.ts の「元に戻す」と同じ手順：ずらす・回すは 1 回ごとに 1 組（move と、範囲の線路の控え）。
+ * 組を逆からたどって打ち消し、打ち消した手を逆にした組を、やり直す側へ積む
+ */
+type Op = { t: 'move'; m: MoveSpec } | { t: 'rails'; snap: [string, number | undefined][] };
+function undoBook(w: World) {
+  const undo: Op[][] = [], redo: Op[][] = [];
+  const apply = (g: Op[]): Op[] => {
+    const inv: Op[] = [];
+    for (const op of [...g].reverse()) {
+      if (op.t === 'move') {
+        const r = relocate(w, op.m);
+        if (r.ok && r.added.length) inv.push({ t: 'move', m: moveSpec(r.removed, r.added, op.m.how, !op.m.back) });
+      } else {
+        inv.push({ t: 'rails', snap: op.snap.map(([k]) => [k, w.rails.get(k)] as [string, number | undefined]) });
+        for (const [k, m] of op.snap) setRailMask(w, k, m);
+      }
+    }
+    return inv;
+  };
+  return {
+    /** Shift + 矢印・範囲の ↑↓←→ と同じ。rect があれば、その中の線路も一緒に */
+    move(es: Ent[], dx: number, dy: number, rect?: Rect) {
+      const r = moveEnts(w, es, dx, dy);
+      if (!r.ok) throw new Error(r.why);
+      const g: Op[] = [{ t: 'move', m: moveSpec(r.removed, r.added) }];
+      if (rect) { const snap = moveRails(w, rect, dx, dy); if (snap.length) g.push({ t: 'rails', snap }); }
+      undo.push(g); redo.length = 0;
+      return r.added;
+    },
+    /** 範囲の ↻・⇋・⇅ と同じ */
+    xform(es: Ent[], how: Xform, rect: Rect) {
+      const r = xEnts(w, es, how, rect);
+      if (!r.ok) throw new Error(r.why);
+      const g: Op[] = [{ t: 'move', m: moveSpec(r.removed, r.added, how) }];
+      if (r.snap.length) g.push({ t: 'rails', snap: r.snap });
+      undo.push(g); redo.length = 0;
+      return r;
+    },
+    undo() { const g = undo.pop(); if (g) redo.push(apply(g)); },
+    redo() { const g = redo.pop(); if (g) undo.push(apply(g)); },
+    get left() { return undo.length; },
+  };
+}
+const spots = (w: World, kind: string) => [...w.ents.values()].filter((e) => e.kind === kind).map((e) => `${e.x},${e.y},${e.dir}`).sort();
+
+describe('続けてずらす・回すと、続けて元に戻せる（1 手ずつ、きちんと戻る）', () => {
+  it('タンクを 2 回ずらして 2 回戻すと、元の場所に戻る。2 回やり直すと、ずらした先に戻る', () => {
+    const w = newWorld(), book = undoBook(w);
+    expect(place(w, 'tank', 60, 40, 0)).toBeNull();
+    at(w, 60, 40)!.sub = 'NaCl'; at(w, 60, 40)!.cnt = 50;
+    let es = book.move([at(w, 60, 40)!], 0, -1);
+    es = book.move(es, 0, -1);
+    expect(spots(w, 'tank')).toEqual(['60,38,0']);
+    book.undo();
+    expect(spots(w, 'tank')).toEqual(['60,39,0']);
+    book.undo();
+    expect(spots(w, 'tank')).toEqual(['60,40,0']);
+    expect(at(w, 60, 40)).toMatchObject({ kind: 'tank', cnt: 50 });
+    expect(at(w, 61, 41)?.kind).toBe('tank');   // 2×2 の残りのマスも、元の場所
+    expect(book.left).toBe(0);
+    book.redo(); book.redo();
+    expect(spots(w, 'tank')).toEqual(['60,38,0']);
+    expect(at(w, 60, 40)).toBeUndefined();
+    // やり直したあとも、また 2 回戻せる
+    book.undo(); book.undo();
+    expect(spots(w, 'tank')).toEqual(['60,40,0']);
+  });
+
+  it('範囲を 2 回回して 2 回戻すと、場所も向きも元どおり。回して鏡に映したあとも同じ', () => {
+    const w = newWorld(), book = undoBook(w);
+    place(w, 'belt', 70, 70, 0); place(w, 'belt', 71, 70, 0); place(w, 'reactor', 72, 70, 1);
+    configure(at(w, 72, 70)!, rec('haber-bosch'), ['NH3']);
+    at(w, 72, 70)!.outSlot = [3];
+    const start = { belt: spots(w, 'belt'), reactor: spots(w, 'reactor'), outSlot: [3] };
+    let rect: Rect = [70, 70, 73, 71];
+    let r = book.xform([at(w, 70, 70)!, at(w, 71, 70)!, at(w, 72, 70)!], 'rot', rect);
+    rect = r.box;
+    r = book.xform(r.added, 'rot', rect);
+    const mid = { belt: spots(w, 'belt'), reactor: spots(w, 'reactor') };
+    r = book.xform(r.added, 'flipX', r.box);
+    const end = { belt: spots(w, 'belt'), reactor: spots(w, 'reactor'), outSlot: r.added.find((e) => e.kind === 'reactor')!.outSlot };
+    expect(end.belt).not.toEqual(start.belt);
+    book.undo();
+    expect({ belt: spots(w, 'belt'), reactor: spots(w, 'reactor') }).toEqual(mid);
+    book.undo(); book.undo();
+    expect(spots(w, 'belt')).toEqual(start.belt);
+    expect(spots(w, 'reactor')).toEqual(start.reactor);
+    expect(at(w, 72, 70)!.outSlot).toEqual(start.outSlot);
+    // やり直すと、3 手とも同じ形に戻る
+    book.redo(); book.redo(); book.redo();
+    expect(spots(w, 'belt')).toEqual(end.belt);
+    expect(spots(w, 'reactor')).toEqual(end.reactor);
+    expect([...w.ents.values()].find((e) => e.kind === 'reactor')!.outSlot).toEqual(end.outSlot);
+  });
+
+  it('線路を含む範囲を 2 回ずらして 2 回戻すと、設備も線路もそろって元の場所に戻る', () => {
+    const w = newWorld(), book = undoBook(w);
+    layRail(w, [[50, 50], [60, 50]]);
+    place(w, 'belt', 55, 49, 0);
+    const rails0 = new Map(w.rails);
+    let es = book.move([at(w, 55, 49)!], 0, 1, [54, 49, 56, 51]);
+    es = book.move(es, 0, 1, [54, 50, 56, 52]);
+    expect(spots(w, 'belt')).toEqual(['55,51,0']);
+    expect(w.rails.get('55,52')).toBeTruthy();
+    book.undo();
+    expect(spots(w, 'belt')).toEqual(['55,50,0']);
+    expect(w.rails.get('55,51')).toBeTruthy();
+    book.undo();
+    expect(spots(w, 'belt')).toEqual(['55,49,0']);
+    expect(new Map(w.rails)).toEqual(rails0);
+    expect(symmetric(w)).toBe(true);
+    book.redo(); book.redo();
+    expect(spots(w, 'belt')).toEqual(['55,51,0']);
+    expect(w.rails.get('55,52')).toBeTruthy();
+    expect(w.rails.get('55,50')).toBeUndefined();
+  });
+
+  it('昇降機は、相方と一緒に何度でも行き来する', () => {
+    const w = newWorld(), book = undoBook(w);
+    expect(place(w, 'lift', 40, 40, 0)).toBeNull();
+    const lifts = () => spots(w, 'lift');
+    const start = lifts();
+    expect(start.length).toBe(2);
+    let es = book.move([at(w, 40, 40)!], 1, 0);
+    es = book.move(es.filter((e) => e.y === 40), 1, 0);
+    book.undo(); book.undo();
+    expect(lifts()).toEqual(start);
+    expect(liftPartner(w, at(w, 40, 40)!)).toBeTruthy();
   });
 });
 
