@@ -903,6 +903,7 @@ export function bodyMyth(ctx: CanvasRenderingContext2D, P: Palette, cx: number, 
   else if (z >= 16 && e.kind === 'separator') pelicanHead(ctx, P, cx, cy, u, half, line, busy, tt, ph);
   else if (z >= 16 && e.kind === 'electrolyzer') twinSerpent(ctx, P, cx, cy, u, half, color, line, busy, pulse, tt, ph);
   else if (z >= 16 && e.kind === 'settler') slime(ctx, P, cx, cy, u, half, color, line, busy, tt, ph);
+  else if (z >= 16 && e.kind === 'battery') thunderBeast(ctx, P, cx, cy, u, half, line, busy, pulse, tt, ph);
   // 巡る光の粒
   if (busy && z >= 26 && !calm) {
     for (let i = 0; i < 3; i++) {
@@ -1112,6 +1113,7 @@ let shootIn = 2;
 export function mythAmbient(ctx: CanvasRenderingContext2D, P: Palette, cw: number, ch: number, t: number, dt: number) {
   const light = P.name === 'light', big = Math.max(cw, ch), tt = calm ? 0 : t;
   mythSky(ctx, P, cw, ch, t);
+  mythSkyDragon(ctx, P, cw, ch, t, dt);
   ctx.save();
   if (light) {
     // 金の光の帯
@@ -1399,4 +1401,238 @@ export function mythSky(ctx: CanvasRenderingContext2D, P: Palette, cw: number, c
     }
   }
   ctx.restore();
+}
+
+// =====================================================================
+// 生き物（その 3）：資源地の主、列車のムカデ竜、空を渡る竜、電池の雷獣
+// =====================================================================
+/** 資源地の主の種類 */
+const GUARD: Record<string, 'kraken' | 'golem' | 'tar' | 'wisp' | 'treant' | 'ram'> = {
+  sea: 'kraken', bay: 'kraken', sulfur: 'golem', limestone: 'golem', iron: 'golem', bauxite: 'golem', copper: 'golem', zinc: 'golem', lead: 'golem', phosphate: 'golem', sand: 'golem', fluorite: 'golem',
+  coal: 'tar', oil: 'tar', gas: 'wisp', farm: 'treant', grove: 'treant', rubber: 'treant', forest: 'treant', ranch: 'ram',
+};
+/**
+ * 資源地の主：名札の上に、その土地の生き物が 1 体。海にはクラーケン、鉱床には結晶のゴーレム（結晶は資源地の色）、
+ * 炭田と油田には黒い泥の獣、ガス田には青い炎の精、畑と森には木の精、牧場には翼のある羊。ゆっくり息をし、ときどきまばたきする
+ */
+export function mythGuardian(ctx: CanvasRenderingContext2D, P: Palette, zone: string, x: number, y: number, z: number, t: number, tint: string) {
+  const kind = GUARD[zone];
+  if (!kind || z < 12) return;
+  const light = P.name === 'light', edge = light ? '#2a1a04' : '#05030f', S = Math.max(14, z * 0.95), lw = Math.max(0.8, S * 0.03), tt = calm ? 0 : t;
+  const ph = hash(x * 0.01 + zone.length, y * 0.01), breath = Math.sin(tt * 1.4 + ph * 6) * S * 0.02, blink = !calm && (tt * 0.31 + ph) % 1 > 0.94;
+  const cx = x, cy = y - S * 1.55 + breath;
+  const eyes = (ex: number, ey: number, gap: number, r: number, iris: string) => { for (const sd of [-1, 1]) { if (blink) { ctx.beginPath(); ctx.moveTo(ex + sd * gap - r, ey); ctx.lineTo(ex + sd * gap + r, ey); ctx.strokeStyle = edge; ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.stroke(); } else eyeGem(ctx, ex + sd * gap, ey, r, r * 0.8, 0, iris, edge, 0); } };
+  ctx.save();
+  // 足もとの影
+  ctx.beginPath(); ctx.ellipse(cx, y - S * 0.95, S * 0.6, S * 0.1, 0, 0, TAU); ctx.fillStyle = P.shadow; ctx.fill();
+  if (kind === 'kraken') {
+    // 触手 6 本：根もとは太く、先は巻く。吸盤の点。体は、頭の明るい紫から下の深い藍へ
+    const col = mix(tint, '#8a5ad8', 0.55);
+    for (let i = 0; i < 6; i++) {
+      const sd = i < 3 ? -1 : 1, k = (i % 3) / 2, a0 = Math.sin(tt * 1.6 + i * 1.3) * 0.25;
+      const bx = cx + sd * S * (0.12 + k * 0.14), by = cy + S * 0.25, mx = bx + sd * S * (0.3 + k * 0.2), my = by + S * (0.35 - k * 0.1) + a0 * S * 0.2, ex = mx + sd * S * 0.18 * Math.cos(a0 * 3), ey = my - S * (0.22 + 0.1 * Math.sin(tt * 2 + i));
+      for (const [wd, c] of [[S * 0.13 + lw * 2, edge], [S * 0.13, col]] as [number, string][]) { ctx.strokeStyle = c; ctx.lineWidth = wd; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo(mx, my + S * 0.15, ex, ey); ctx.stroke(); }
+      ctx.strokeStyle = 'rgba(255,220,240,0.55)'; ctx.lineWidth = S * 0.035; ctx.setLineDash([S * 0.02, S * 0.07]); ctx.beginPath(); ctx.moveTo(bx, by + S * 0.03); ctx.quadraticCurveTo(mx, my + S * 0.18, ex, ey + S * 0.02); ctx.stroke(); ctx.setLineDash([]);
+    }
+    ctx.beginPath(); ctx.moveTo(cx - S * 0.36, cy + S * 0.3); ctx.bezierCurveTo(cx - S * 0.5, cy - S * 0.2, cx - S * 0.3, cy - S * 0.75, cx, cy - S * 0.75); ctx.bezierCurveTo(cx + S * 0.3, cy - S * 0.75, cx + S * 0.5, cy - S * 0.2, cx + S * 0.36, cy + S * 0.3); ctx.quadraticCurveTo(cx, cy + S * 0.42, cx - S * 0.36, cy + S * 0.3); ctx.closePath();
+    const g = ctx.createRadialGradient(cx - S * 0.15, cy - S * 0.45, S * 0.05, cx, cy - S * 0.1, S * 0.7); g.addColorStop(0, mix(col, '#ffffff', 0.6)); g.addColorStop(0.5, col); g.addColorStop(1, mix(col, '#0a0a3a', 0.65));
+    ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 1.2; ctx.stroke();
+    // 頭の斑点と、つや
+    for (let i = 0; i < 7; i++) { ctx.beginPath(); ctx.arc(cx + (hash(i, 1.1) - 0.5) * S * 0.5, cy - S * (0.3 + hash(i, 2.2) * 0.35), S * (0.02 + hash(i, 3.3) * 0.03), 0, TAU); ctx.fillStyle = 'rgba(255,230,250,0.45)'; ctx.fill(); }
+    ctx.beginPath(); ctx.ellipse(cx - S * 0.14, cy - S * 0.52, S * 0.1, S * 0.05, -0.5, 0, TAU); ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fill();
+    eyes(cx, cy + S * 0.02, S * 0.15, S * 0.085, '#ffd84a');
+  } else if (kind === 'golem') {
+    // 岩の体（面ごとに明暗の違う多角形）に、背から資源地の色の結晶が生える。胸に光る核
+    const rock = light ? '#b8a890' : '#5a5270', cr = mix(tint, '#ffffff', 0.25);
+    for (let i = 0; i < 5; i++) {
+      const a = -Math.PI / 2 + (i - 2) * 0.42, L = S * (0.62 - Math.abs(i - 2) * 0.1), bx = cx + (i - 2) * S * 0.13, by = cy - S * 0.25, wd = S * 0.09, tx = bx + Math.cos(a) * L, ty = by + Math.sin(a) * L;
+      ctx.beginPath(); ctx.moveTo(bx - wd, by); ctx.lineTo(tx - wd * 0.3, ty + wd); ctx.lineTo(tx, ty); ctx.lineTo(tx + wd * 0.5, ty + wd * 1.2); ctx.lineTo(bx + wd, by); ctx.closePath();
+      const g = ctx.createLinearGradient(bx - wd, by, bx + wd, ty); g.addColorStop(0, mix(cr, '#ffffff', 0.6)); g.addColorStop(0.5, cr); g.addColorStop(1, mix(cr, '#1a0a3a', 0.5));
+      ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 0.8; ctx.lineJoin = 'round'; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(tx, ty); ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = lw * 0.5; ctx.stroke();
+    }
+    const body: [number, number][] = [[-0.45, -0.2], [-0.2, -0.42], [0.22, -0.42], [0.46, -0.18], [0.5, 0.25], [0.2, 0.55], [-0.22, 0.55], [-0.5, 0.25]];
+    ctx.beginPath(); body.forEach(([px, py], i) => (i ? ctx.lineTo(cx + px * S, cy + py * S) : ctx.moveTo(cx + px * S, cy + py * S))); ctx.closePath();
+    const g = ctx.createLinearGradient(cx - S * 0.5, cy - S * 0.4, cx + S * 0.5, cy + S * 0.55); g.addColorStop(0, mix(rock, '#ffffff', 0.45)); g.addColorStop(0.5, rock); g.addColorStop(1, mix(rock, '#000010', 0.55));
+    ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 1.2; ctx.lineJoin = 'round'; ctx.stroke();
+    // 面の稜線（割れ目）と、苔のような金の筋
+    ctx.beginPath(); for (const [a, b] of [[0, 4], [1, 5], [2, 6], [3, 7]] as [number, number][]) { ctx.moveTo(cx + body[a][0] * S, cy + body[a][1] * S); ctx.lineTo(cx + (body[a][0] + body[b][0]) * S * 0.5 + S * 0.04, cy + (body[a][1] + body[b][1]) * S * 0.5); }
+    ctx.strokeStyle = light ? 'rgba(60,40,10,0.35)' : 'rgba(0,0,0,0.45)'; ctx.lineWidth = lw * 0.6; ctx.stroke();
+    // 腕（岩のこぶし）
+    for (const sd of [-1, 1]) { ctx.beginPath(); ctx.ellipse(cx + sd * S * 0.56, cy + S * 0.3 - breath, S * 0.14, S * 0.18, sd * 0.3, 0, TAU); const ag = ctx.createRadialGradient(cx + sd * S * 0.52, cy + S * 0.22, S * 0.02, cx + sd * S * 0.56, cy + S * 0.3, S * 0.18); ag.addColorStop(0, mix(rock, '#ffffff', 0.4)); ag.addColorStop(1, mix(rock, '#000010', 0.5)); ctx.fillStyle = ag; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw; ctx.stroke(); }
+    // 胸の核：資源地の色に光る
+    const pulse = 0.6 + 0.4 * Math.sin(tt * 2 + ph * 6), cg = ctx.createRadialGradient(cx, cy + S * 0.22, 0, cx, cy + S * 0.22, S * 0.2); cg.addColorStop(0, '#ffffff'); cg.addColorStop(0.35, cr); cg.addColorStop(1, `rgba(${rgbOf(cr)},0)`);
+    ctx.globalAlpha = pulse; ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(cx, cy + S * 0.22, S * 0.2, 0, TAU); ctx.fill(); ctx.globalAlpha = 1;
+    ctx.beginPath(); ctx.moveTo(cx, cy + S * 0.12); ctx.lineTo(cx + S * 0.07, cy + S * 0.22); ctx.lineTo(cx, cy + S * 0.32); ctx.lineTo(cx - S * 0.07, cy + S * 0.22); ctx.closePath(); ctx.fillStyle = goldGrad(ctx, cx - S * 0.07, cy + S * 0.12, cx + S * 0.07, cy + S * 0.32); ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 0.6; ctx.stroke();
+    eyes(cx, cy - S * 0.12, S * 0.15, S * 0.07, cr);
+  } else if (kind === 'tar') {
+    // 黒い泥の獣：ゆれる山形の体に、虹色の油膜のつや。したたる雫。金の目
+    ctx.beginPath(); ctx.moveTo(cx - S * 0.55, cy + S * 0.55);
+    for (let i = 0; i <= 10; i++) { const k = i / 10, xx = cx - S * 0.55 + k * S * 1.1, hh = Math.sin(k * Math.PI) * S * (0.95 + 0.06 * Math.sin(tt * 2 + i)) + Math.sin(k * 9 + tt * 1.5) * S * 0.04; ctx.lineTo(xx, cy + S * 0.55 - hh); }
+    ctx.lineTo(cx + S * 0.55, cy + S * 0.55); ctx.quadraticCurveTo(cx, cy + S * 0.68, cx - S * 0.55, cy + S * 0.55); ctx.closePath();
+    const g = ctx.createLinearGradient(cx - S * 0.4, cy - S * 0.4, cx + S * 0.4, cy + S * 0.6); g.addColorStop(0, '#4a4458'); g.addColorStop(0.4, '#16121e'); g.addColorStop(1, '#020106');
+    ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 1.2; ctx.lineJoin = 'round'; ctx.stroke();
+    ctx.save(); ctx.clip();
+    // 油膜：斜めに流れる虹
+    for (let i = 0; i < 5; i++) { ctx.strokeStyle = hue(t * 0.5, i / 5, 90, 65, 0.35); ctx.lineWidth = S * 0.05; ctx.beginPath(); ctx.moveTo(cx - S * 0.6, cy - S * 0.1 + i * S * 0.12 + Math.sin(tt + i) * S * 0.03); ctx.bezierCurveTo(cx - S * 0.2, cy - S * 0.3 + i * S * 0.12, cx + S * 0.2, cy + S * 0.1 + i * S * 0.12, cx + S * 0.6, cy - S * 0.15 + i * S * 0.12); ctx.stroke(); }
+    ctx.restore();
+    ctx.beginPath(); ctx.ellipse(cx - S * 0.16, cy - S * 0.2, S * 0.1, S * 0.04, -0.6, 0, TAU); ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fill();
+    for (let i = 0; i < 3; i++) { const k = calm ? 0.3 : (tt * 0.5 + i * 0.37) % 1, dx = cx + (i - 1) * S * 0.3; ctx.beginPath(); ctx.ellipse(dx, cy + S * 0.5 + k * S * 0.2, S * 0.03, S * 0.05 * (1 - k * 0.5), 0, 0, TAU); ctx.fillStyle = `rgba(10,6,16,${1 - k})`; ctx.fill(); }
+    eyes(cx, cy + S * 0.05, S * 0.16, S * 0.08, '#ffb347');
+  } else if (kind === 'wisp') {
+    // 青い炎の精（メタンの炎は青い）：外の青 → 中の水色 → 芯の白。ゆらめく 3 重の炎に、小さな顔
+    for (const [k, c0, c1] of [[1, 'rgba(60,120,255,0.75)', 'rgba(60,120,255,0)'], [0.7, 'rgba(120,210,255,0.9)', 'rgba(120,210,255,0.1)'], [0.4, 'rgba(255,255,255,0.95)', 'rgba(200,240,255,0.3)']] as [number, string, string][]) {
+      const w2 = S * 0.42 * k, h2 = S * 1.1 * k, wv = Math.sin(tt * 5 + k * 5) * S * 0.06, by = cy + S * 0.5;
+      ctx.beginPath(); ctx.moveTo(cx - w2, by - h2 * 0.25); ctx.bezierCurveTo(cx - w2 * 1.1, by - h2 * 0.7, cx - w2 * 0.2 + wv, by - h2 * 0.8, cx + wv, by - h2); ctx.bezierCurveTo(cx + w2 * 0.3 + wv, by - h2 * 0.75, cx + w2 * 1.1, by - h2 * 0.7, cx + w2, by - h2 * 0.25); ctx.bezierCurveTo(cx + w2, by + h2 * 0.05, cx - w2, by + h2 * 0.05, cx - w2, by - h2 * 0.25); ctx.closePath();
+      const g = ctx.createLinearGradient(cx, by, cx, by - h2); g.addColorStop(0, c0); g.addColorStop(1, c1); ctx.fillStyle = g; ctx.fill();
+    }
+    eyes(cx, cy + S * 0.22, S * 0.1, S * 0.05, '#2a5ad8');
+    if (G) { const gr = G.createRadialGradient(cx, cy, 0, cx, cy, S); gr.addColorStop(0, 'rgba(90,160,255,0.4)'); gr.addColorStop(1, 'rgba(90,160,255,0)'); G.fillStyle = gr; G.fillRect(cx - S, cy - S, S * 2, S * 2); }
+  } else if (kind === 'treant') {
+    // 木の精：木目の幹（縦の筋）、枝の腕、葉の冠は 3 色の葉を重ね、実（資源地の色）がなる
+    const bark0 = light ? '#b08050' : '#6a4a38';
+    ctx.beginPath(); ctx.moveTo(cx - S * 0.22, cy + S * 0.55); ctx.quadraticCurveTo(cx - S * 0.3, cy, cx - S * 0.18, cy - S * 0.2); ctx.lineTo(cx + S * 0.18, cy - S * 0.2); ctx.quadraticCurveTo(cx + S * 0.3, cy, cx + S * 0.22, cy + S * 0.55); ctx.quadraticCurveTo(cx + S * 0.34, cy + S * 0.62, cx + S * 0.4, cy + S * 0.6); ctx.lineTo(cx - S * 0.4, cy + S * 0.6); ctx.quadraticCurveTo(cx - S * 0.34, cy + S * 0.62, cx - S * 0.22, cy + S * 0.55); ctx.closePath();
+    const g = ctx.createLinearGradient(cx - S * 0.3, cy, cx + S * 0.3, cy); g.addColorStop(0, mix(bark0, '#ffe0b0', 0.5)); g.addColorStop(0.5, bark0); g.addColorStop(1, mix(bark0, '#1a0a00', 0.6));
+    ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 1.2; ctx.lineJoin = 'round'; ctx.stroke();
+    ctx.beginPath(); for (let i = -2; i <= 2; i++) { ctx.moveTo(cx + i * S * 0.08, cy - S * 0.15); ctx.quadraticCurveTo(cx + i * S * 0.1 + Math.sin(i * 2.1) * S * 0.03, cy + S * 0.2, cx + i * S * 0.09, cy + S * 0.52); } ctx.strokeStyle = light ? 'rgba(70,40,10,0.4)' : 'rgba(0,0,0,0.4)'; ctx.lineWidth = lw * 0.5; ctx.stroke();
+    for (const sd of [-1, 1]) { ctx.strokeStyle = edge; ctx.lineWidth = S * 0.07 + lw * 2; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(cx + sd * S * 0.2, cy + S * 0.05); ctx.quadraticCurveTo(cx + sd * S * 0.45, cy + S * 0.05, cx + sd * S * 0.5, cy - S * 0.2 + breath * 2); ctx.stroke(); ctx.strokeStyle = bark0; ctx.lineWidth = S * 0.07; ctx.stroke(); }
+    for (let i = 0; i < 22; i++) {
+      const a = hash(i, 1.3) * TAU, r = S * (0.12 + hash(i, 2.7) * 0.34), lx = cx + Math.cos(a) * r, ly = cy - S * 0.5 + Math.sin(a) * r * 0.75 + breath, la = a + Math.sin(tt * 1.5 + i) * 0.15, ll = S * 0.2;
+      const c = ['#2f9a4a', '#6fd86a', '#bfe86a'][i % 3];
+      feather(ctx, lx, ly, lx + Math.cos(la) * ll, ly + Math.sin(la) * ll, S * 0.14, mix(c, '#0a3a1a', 0.5), c, mix(c, '#fff6b0', 0.6), edge, lw * 0.5);
+    }
+    for (let i = 0; i < 4; i++) { const a = hash(i, 8.8) * TAU, fx = cx + Math.cos(a) * S * 0.3, fy = cy - S * 0.5 + Math.sin(a) * S * 0.22 + breath, fg = ctx.createRadialGradient(fx - S * 0.02, fy - S * 0.02, 0, fx, fy, S * 0.06); fg.addColorStop(0, '#ffffff'); fg.addColorStop(0.4, mix(tint, '#ffb0a0', 0.5)); fg.addColorStop(1, mix(tint, '#3a0a00', 0.4)); ctx.beginPath(); ctx.arc(fx, fy, S * 0.06, 0, TAU); ctx.fillStyle = fg; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 0.5; ctx.stroke(); }
+    eyes(cx, cy + S * 0.05, S * 0.1, S * 0.055, '#7fd87a');
+    ctx.beginPath(); ctx.arc(cx, cy + S * 0.22, S * 0.07, 0.15 * Math.PI, 0.85 * Math.PI); ctx.strokeStyle = edge; ctx.lineWidth = lw; ctx.stroke();
+  } else {
+    // 翼のある羊：もこもこの毛（丸を重ね、1 つずつ陰影）、巻いた金の角、小さな羽根の翼
+    for (const sd of [-1, 1]) for (let i = 3; i >= 0; i--) { const a = -0.9 + i * 0.35 + Math.sin(tt * 2 + ph) * 0.08, bx = cx + sd * S * 0.3, by = cy - S * 0.05; feather(ctx, bx, by, bx + sd * Math.cos(a) * S * 0.55, by + Math.sin(a) * S * 0.55, S * 0.14, '#ffffff', light ? '#fde8f0' : '#e6dcfa', '#ffd9a8', edge, lw * 0.5); }
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * TAU, r = S * (i % 2 ? 0.34 : 0.26), px = cx + Math.cos(a) * r, py = cy + S * 0.12 + Math.sin(a) * r * 0.8, rr2 = S * 0.17;
+      const g = ctx.createRadialGradient(px - rr2 * 0.3, py - rr2 * 0.35, rr2 * 0.1, px, py, rr2); g.addColorStop(0, '#ffffff'); g.addColorStop(0.7, light ? '#f6eef2' : '#e2daf4'); g.addColorStop(1, light ? '#d8c4d0' : '#a89ad0');
+      ctx.beginPath(); ctx.arc(px, py, rr2, 0, TAU); ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 0.6; ctx.stroke();
+    }
+    ctx.beginPath(); ctx.arc(cx, cy + S * 0.12, S * 0.28, 0, TAU); ctx.fillStyle = light ? '#fbf6f8' : '#eee8fa'; ctx.fill();
+    // 顔（桃色がかったクリーム色）と、巻いた角
+    const fg = ctx.createRadialGradient(cx - S * 0.05, cy + S * 0.05, S * 0.02, cx, cy + S * 0.12, S * 0.22); fg.addColorStop(0, '#fff2e6'); fg.addColorStop(1, '#e8c4b0');
+    ctx.beginPath(); ctx.ellipse(cx, cy + S * 0.14, S * 0.17, S * 0.2, 0, 0, TAU); ctx.fillStyle = fg; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw; ctx.stroke();
+    for (const sd of [-1, 1]) { ctx.strokeStyle = edge; ctx.lineWidth = S * 0.075 + lw * 2; ctx.lineCap = 'round'; ctx.beginPath(); ctx.arc(cx + sd * S * 0.24, cy + S * 0.02, S * 0.11, sd > 0 ? Math.PI * 1.1 : Math.PI * 1.9, sd > 0 ? Math.PI * 2.7 : Math.PI * 0.3, sd < 0); ctx.stroke(); ctx.strokeStyle = goldGrad(ctx, cx + sd * S * 0.13, cy - S * 0.1, cx + sd * S * 0.35, cy + S * 0.14); ctx.lineWidth = S * 0.075; ctx.stroke(); }
+    eyes(cx, cy + S * 0.1, S * 0.075, S * 0.04, '#7a5a3a');
+    ctx.beginPath(); ctx.ellipse(cx, cy + S * 0.22, S * 0.035, S * 0.022, 0, 0, TAU); ctx.fillStyle = '#e88aa0'; ctx.fill();
+  }
+  ctx.restore();
+}
+
+/**
+ * 列車はムカデ竜：鱗の胴が 4 節（節ごとに少しうねる）、節ごとに金の背びれと、歩く足。先頭に角のある頭。
+ * 積んでいるときは背の宝玉が番線の色に光る。前の列車を待っているときは、目が赤い。
+ * 進む向きが +x になるよう回した座標で呼ぶ（L：長さ、Wd：幅）
+ */
+export function mythTrain(ctx: CanvasRenderingContext2D, P: Palette, L: number, Wd: number, col: string, loaded: boolean, held: boolean, moving: boolean, t: number) {
+  const light = P.name === 'light', edge = light ? '#2a1404' : '#05030f', lw = Math.max(0.7, Wd * 0.07), n = 4, seg = (L * 1.25) / n, sr = Math.max(3, Wd * 0.13), tt = calm || !moving ? 0 : t;
+  // 影
+  ctx.fillStyle = P.shadow; ctx.beginPath(); ctx.ellipse(-L * 0.1, Wd * 0.35, L * 0.75, Wd * 0.45, 0, 0, TAU); ctx.fill();
+  for (let i = n - 1; i >= 0; i--) {
+    const x = L * 0.45 - (i + 0.5) * seg, y = Math.sin(tt * 9 - i * 1.1) * Wd * 0.1, r = Wd * (0.52 - i * 0.05);
+    // 足：節の両わきに 1 対。交互に前後へ
+    for (const sd of [-1, 1]) { const sw = Math.sin(tt * 14 + i * 1.6 + (sd > 0 ? 0 : Math.PI)) * seg * 0.3; ctx.strokeStyle = edge; ctx.lineWidth = lw * 2.2; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x, y + sd * r * 0.7); ctx.lineTo(x + sw * 0.4, y + sd * r * 1.25); ctx.lineTo(x + sw, y + sd * r * 1.55); ctx.stroke(); ctx.strokeStyle = mix(col, '#ffe9a0', 0.5); ctx.lineWidth = lw; ctx.stroke(); }
+    ctx.beginPath(); ctx.ellipse(x, y, seg * 0.62, r, 0, 0, TAU);
+    skinFill(ctx, col, light, x - seg * 0.6, y - r, x + seg * 0.6, y + r, sr, edge, lw);
+    // 背びれ（金のひし形）と、積み荷の宝玉
+    ctx.beginPath(); ctx.moveTo(x - seg * 0.28, y); ctx.lineTo(x, y - r * 0.32); ctx.lineTo(x + seg * 0.28, y); ctx.lineTo(x, y + r * 0.32); ctx.closePath(); ctx.fillStyle = goldGrad(ctx, x - seg * 0.28, y - r * 0.3, x + seg * 0.28, y + r * 0.3); ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 0.5; ctx.stroke();
+    if (loaded && i > 0) { const g = ctx.createRadialGradient(x - r * 0.08, y - r * 0.08, 0, x, y, r * 0.22); g.addColorStop(0, '#ffffff'); g.addColorStop(0.5, mix(col, '#ffffff', 0.4)); g.addColorStop(1, mix(col, '#000010', 0.4)); ctx.beginPath(); ctx.arc(x, y, r * 0.2, 0, TAU); ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 0.4; ctx.stroke(); }
+  }
+  // 頭
+  const hx = L * 0.5, hy = Math.sin(tt * 9 + 0.6) * Wd * 0.08, S = Wd * 0.62;
+  for (const sd of [-1, 1]) horn(ctx, [[hx - S * 0.3, hy + sd * S * 0.3], [hx - S * 0.7, hy + sd * S * 0.5], [hx - S * 1.1, hy + sd * S * 0.95], [hx - S * 0.5, hy + sd * S * 0.75], [hx - S * 0.05, hy + sd * S * 0.5]], edge, lw * 0.7);
+  ctx.beginPath(); ctx.moveTo(hx - S * 0.5, hy - S * 0.55); ctx.bezierCurveTo(hx + S * 0.2, hy - S * 0.7, hx + S * 0.9, hy - S * 0.3, hx + S * 0.95, hy); ctx.bezierCurveTo(hx + S * 0.9, hy + S * 0.3, hx + S * 0.2, hy + S * 0.7, hx - S * 0.5, hy + S * 0.55); ctx.quadraticCurveTo(hx - S * 0.7, hy, hx - S * 0.5, hy - S * 0.55); ctx.closePath();
+  skinFill(ctx, col, light, hx - S * 0.5, hy - S * 0.6, hx + S, hy + S * 0.6, sr, edge, lw * 1.1);
+  // ひげ（先がゆれる）
+  for (const sd of [-1, 1]) { ctx.strokeStyle = goldGrad(ctx, hx + S * 0.8, hy, hx + S * 1.6, hy + sd * S * 0.6); ctx.lineWidth = lw * 0.9; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(hx + S * 0.85, hy + sd * S * 0.15); ctx.quadraticCurveTo(hx + S * 1.3, hy + sd * S * 0.2, hx + S * 1.5, hy + sd * S * (0.55 + 0.15 * Math.sin(tt * 7 + sd))); ctx.stroke(); }
+  for (const sd of [-1, 1]) eyeGem(ctx, hx + S * 0.25, hy + sd * S * 0.3, S * 0.17, S * 0.12, sd * 0.3, held ? '#ff3a3a' : '#f6c644', edge, held ? 1 : 0);
+}
+
+/**
+ * 空を渡る竜：ときどき、画面の端から端へ、長い竜が身をくねらせて渡る（遠くを飛ぶ影。星の海では月明かりの青白い縁、天空の庭では雲の色）。
+ * 胴は、背から腹へのグラデーションの帯。背びれ、2 対の翼、たなびくひげ
+ */
+let skyDragon: { x: number; y: number; dir: number; age: number; next: number } = { x: 0, y: 0, dir: 1, age: -1, next: 8 };
+export function mythSkyDragon(ctx: CanvasRenderingContext2D, P: Palette, cw: number, ch: number, t: number, dt: number) {
+  if (calm) return;
+  const d = skyDragon;
+  if (d.age < 0) { d.next -= dt; if (d.next > 0) return; d.age = 0; d.dir = Math.random() < 0.5 ? 1 : -1; d.y = ch * (0.12 + Math.random() * 0.3); d.x = d.dir > 0 ? -cw * 0.35 : cw * 1.35; }
+  d.age += dt; d.x += d.dir * cw * 0.085 * dt;
+  if (d.x < -cw * 0.4 || d.x > cw * 1.4) { d.age = -1; d.next = 18 + Math.random() * 25; return; }
+  const light = P.name === 'light', S = Math.max(cw, ch) * 0.022, n = 34, pts: [number, number, number][] = [];
+  for (let i = 0; i < n; i++) { const k = i / (n - 1); pts.push([d.x - d.dir * k * S * 16, d.y + Math.sin(t * 2.2 - k * 7) * S * (0.9 + k * 0.8) + Math.sin(t * 0.7) * S, S * (0.55 * Math.sin(Math.min(1, k * 4) * Math.PI * 0.5) * (1 - k * 0.85) + 0.05)]); }
+  ctx.save();
+  ctx.globalAlpha = light ? 0.5 : 0.72;
+  const c0 = light ? '#ffffff' : '#bfd0ff', c1 = light ? '#e8c8f0' : '#3a3a8a', rim = light ? 'rgba(255,190,220,0.9)' : 'rgba(190,220,255,0.9)';
+  // 翼 2 対（胴の 2 か所から、上へ。羽ばたく）
+  for (const wi of [5, 13]) {
+    const p = pts[wi], fl = Math.sin(t * 3.2 + wi) * 0.5, L = S * (wi === 5 ? 5.2 : 3.6);
+    for (const up of [-1, 1]) {
+      const tx = p[0] - d.dir * L * 0.35, ty = p[1] + up * L * (0.55 + fl * 0.3 * up);
+      ctx.beginPath(); ctx.moveTo(p[0] + d.dir * S * 0.6, p[1]); ctx.quadraticCurveTo(p[0] + d.dir * L * 0.2, p[1] + up * L * 0.5, tx, ty);
+      for (let q = 1; q <= 3; q++) ctx.quadraticCurveTo(tx - d.dir * L * (0.05 + q * 0.12) , ty - up * L * (q * 0.2 - 0.1), tx - d.dir * L * q * 0.2, ty - up * L * q * 0.19);
+      ctx.lineTo(p[0] - d.dir * S * 1.2, p[1]); ctx.closePath();
+      const g = ctx.createLinearGradient(p[0], p[1], tx, ty); g.addColorStop(0, c1); g.addColorStop(1, light ? 'rgba(255,220,240,0.5)' : 'rgba(120,150,255,0.35)');
+      ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = rim; ctx.lineWidth = 1; ctx.stroke();
+    }
+  }
+  // 胴：背（明るい）と腹（暗い）の 2 本の帯で、丸みを出す
+  const side = (s: number) => { for (let i = 0; i < n; i++) { const p = pts[i], q = pts[Math.min(n - 1, i + 1)], o = pts[Math.max(0, i - 1)], dx = q[0] - o[0], dy = q[1] - o[1], l = Math.hypot(dx, dy) || 1; const x = p[0] - (dy / l) * p[2] * s, y = p[1] + (dx / l) * p[2] * s; if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); } };
+  ctx.beginPath(); side(1); for (let i = n - 1; i >= 0; i--) { const p = pts[i], q = pts[Math.min(n - 1, i + 1)], o = pts[Math.max(0, i - 1)], dx = q[0] - o[0], dy = q[1] - o[1], l = Math.hypot(dx, dy) || 1; ctx.lineTo(p[0] + (dy / l) * p[2], p[1] - (dx / l) * p[2]); } ctx.closePath();
+  const bg = ctx.createLinearGradient(0, d.y - S * 2, 0, d.y + S * 2); bg.addColorStop(0, c0); bg.addColorStop(1, c1);
+  ctx.fillStyle = bg; ctx.fill(); ctx.strokeStyle = rim; ctx.lineWidth = 1.2; ctx.stroke();
+  // 鱗の点線と、背びれ
+  ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]))); ctx.setLineDash([S * 0.25, S * 0.3]); ctx.strokeStyle = light ? 'rgba(200,120,170,0.5)' : 'rgba(20,20,70,0.55)'; ctx.lineWidth = S * 0.35; ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = light ? 'rgba(255,200,120,0.9)' : 'rgba(255,230,150,0.9)';
+  for (let i = 2; i < n - 3; i += 2) { const p = pts[i], q = pts[i + 1]; ctx.beginPath(); ctx.moveTo(p[0], p[1] - p[2]); ctx.lineTo((p[0] + q[0]) / 2 - d.dir * S * 0.3, (p[1] + q[1]) / 2 - p[2] * 1.9); ctx.lineTo(q[0], q[1] - q[2]); ctx.closePath(); ctx.fill(); }
+  // 頭：角 2 本、ひげ、光る目
+  const h = pts[0];
+  ctx.beginPath(); ctx.moveTo(h[0] - d.dir * S * 0.5, h[1] - S * 0.6); ctx.quadraticCurveTo(h[0] + d.dir * S * 0.9, h[1] - S * 0.5, h[0] + d.dir * S * 1.5, h[1]); ctx.quadraticCurveTo(h[0] + d.dir * S * 0.9, h[1] + S * 0.5, h[0] - d.dir * S * 0.5, h[1] + S * 0.6); ctx.closePath(); ctx.fillStyle = bg; ctx.fill(); ctx.strokeStyle = rim; ctx.lineWidth = 1.2; ctx.stroke();
+  ctx.strokeStyle = light ? 'rgba(255,200,120,0.95)' : 'rgba(255,230,150,0.95)'; ctx.lineWidth = Math.max(1, S * 0.14); ctx.lineCap = 'round';
+  for (const up of [-1, 1]) { ctx.beginPath(); ctx.moveTo(h[0] - d.dir * S * 0.2, h[1] + up * S * 0.4); ctx.quadraticCurveTo(h[0] - d.dir * S * 1.0, h[1] + up * S * 0.7, h[0] - d.dir * S * 1.6, h[1] + up * S * 1.3); ctx.stroke(); }
+  ctx.lineWidth = Math.max(0.8, S * 0.07); for (const up of [-1, 1]) { ctx.beginPath(); ctx.moveTo(h[0] + d.dir * S * 1.3, h[1] + up * S * 0.1); ctx.bezierCurveTo(h[0] + d.dir * S * 1.8, h[1] + up * S * 0.8, h[0] + d.dir * S * 0.6, h[1] + up * S * 1.4 + Math.sin(t * 3 + up) * S * 0.3, h[0] - d.dir * S * 0.6, h[1] + up * S * 1.5 + Math.sin(t * 3) * S * 0.4); ctx.stroke(); }
+  ctx.globalAlpha = 1; ctx.fillStyle = light ? '#ff6a9a' : '#fff6b0'; ctx.beginPath(); ctx.arc(h[0] + d.dir * S * 0.55, h[1] - S * 0.15, Math.max(1.2, S * 0.14), 0, TAU); ctx.fill();
+  if (G) { G.fillStyle = light ? 'rgba(255,160,200,0.25)' : 'rgba(160,200,255,0.35)'; G.beginPath(); G.arc(h[0], h[1], S * 2.2, 0, TAU); G.fill(); }
+  ctx.restore();
+}
+
+/**
+ * 電池の雷獣：右上の角に、稲妻の形の角をもつ獣の頭（青みの毛は、束ごとに根もとの藍から先の白へ）。左下に、稲妻の形の尾。
+ * 動いているあいだ、毛が逆立ち、角のあいだに火花が散る
+ */
+function thunderBeast(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, half: number, line: number, busy: boolean, pulse: number, t: number, ph: number) {
+  const light = P.name === 'light', edge = light ? '#0a1a3a' : '#05030f', lw = Math.max(0.8, line * 0.55), S = u * 0.2, up = busy ? 1.25 : 1;
+  // 尾：稲妻の形（金のグラデーション）
+  const tx = cx - half * 0.86, ty = cy + half * 0.86, zz: [number, number][] = [[0, 0], [-0.12, 0.02], [-0.07, -0.05], [-0.2, -0.04], [-0.14, -0.11], [-0.3, -0.13], [-0.17, -0.02], [-0.22, 0.04], [-0.08, 0.07]];
+  ctx.beginPath(); zz.forEach(([px, py], i) => (i ? ctx.lineTo(tx + px * u, ty + py * u) : ctx.moveTo(tx + px * u, ty + py * u))); ctx.closePath();
+  ctx.fillStyle = goldGrad(ctx, tx - u * 0.3, ty - u * 0.13, tx, ty + u * 0.07); ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.stroke();
+  const hx = cx + half * 0.82, hy = cy - half * 0.84;
+  ctx.save(); ctx.translate(hx, hy); ctx.rotate(-Math.PI / 4);
+  // たてがみ：うしろへ流れる毛の束
+  for (let i = 0; i < 9; i++) {
+    const a = Math.PI + (i - 4) * 0.24, Lm = S * (1.1 - Math.abs(i - 4) * 0.08) * up + (busy && !calm ? Math.sin(t * 12 + i * 2) * S * 0.08 : 0);
+    feather(ctx, -S * 0.2, Math.sin(a) * S * 0.2, -S * 0.2 + Math.cos(a) * Lm, Math.sin(a) * Lm, S * 0.3, '#1a2a7a', '#5aa0ff', '#f0faff', edge, lw * 0.6);
+  }
+  // 角：稲妻の形 2 本
+  for (const sd of [-1, 1]) { const b: [number, number][] = [[0, 0.3], [-0.35, 0.55], [-0.15, 0.6], [-0.6, 1.0], [-0.1, 0.78], [-0.3, 0.75], [0.2, 0.42]]; ctx.beginPath(); b.forEach(([px, py], i) => (i ? ctx.lineTo(px * S, sd * py * S) : ctx.moveTo(px * S, sd * py * S))); ctx.closePath(); ctx.fillStyle = goldGrad(ctx, -S * 0.6, sd * S, S * 0.2, sd * S * 0.3); ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 0.7; ctx.lineJoin = 'round'; ctx.stroke(); }
+  // 顔：鼻先のとがった獣。額の白から、あごの藍へ
+  ctx.beginPath(); ctx.moveTo(-S * 0.45, -S * 0.5); ctx.bezierCurveTo(S * 0.2, -S * 0.6, S * 0.7, -S * 0.25, S * 1.1, 0); ctx.bezierCurveTo(S * 0.7, S * 0.25, S * 0.2, S * 0.6, -S * 0.45, S * 0.5); ctx.quadraticCurveTo(-S * 0.65, 0, -S * 0.45, -S * 0.5); ctx.closePath();
+  const g = ctx.createLinearGradient(-S * 0.5, -S * 0.5, S, S * 0.5); g.addColorStop(0, '#f0faff'); g.addColorStop(0.5, '#6ab0ff'); g.addColorStop(1, '#1a2a7a');
+  ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 1.2; ctx.stroke();
+  // 頬の稲妻の紋、鼻、目
+  ctx.beginPath(); for (const sd of [-1, 1]) { ctx.moveTo(S * 0.05, sd * S * 0.42); ctx.lineTo(S * 0.3, sd * S * 0.3); ctx.lineTo(S * 0.22, sd * S * 0.4); ctx.lineTo(S * 0.5, sd * S * 0.26); } ctx.strokeStyle = MYTH_GOLD; ctx.lineWidth = lw * 0.9; ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(S * 1.02, 0, S * 0.08, S * 0.1, 0, 0, TAU); ctx.fillStyle = '#0a1030'; ctx.fill();
+  for (const sd of [-1, 1]) eyeGem(ctx, S * 0.3, sd * S * 0.22, S * 0.13, S * 0.09, sd * 0.35, busy ? mix('#ffe86a', '#ffffff', 0.5 * pulse) : '#ffe86a', edge, busy ? pulse * 0.6 : 0);
+  // 火花：角のあいだを、短い稲妻が飛ぶ
+  if (busy && !calm) {
+    const seed = Math.floor(t * 18);
+    ctx.beginPath(); ctx.moveTo(-S * 0.6, -S); for (let i = 1; i < 6; i++) ctx.lineTo(-S * 0.6 + (hash(i + seed, ph) - 0.5) * S * 0.5, -S + (i / 6) * S * 2); ctx.lineTo(-S * 0.6, S);
+    ctx.strokeStyle = 'rgba(160,220,255,0.9)'; ctx.lineWidth = Math.max(0.8, S * 0.07); ctx.lineJoin = 'miter'; ctx.stroke(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = Math.max(0.4, S * 0.025); ctx.stroke();
+  }
+  ctx.restore();
+  if (G && busy) { const gr = G.createRadialGradient(hx, hy, 0, hx, hy, S * 2); gr.addColorStop(0, `rgba(140,200,255,${0.4 * pulse})`); gr.addColorStop(1, 'rgba(140,200,255,0)'); G.fillStyle = gr; G.fillRect(hx - S * 2, hy - S * 2, S * 4, S * 4); }
 }

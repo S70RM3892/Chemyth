@@ -21,7 +21,7 @@ import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/s
 import { drawFar, farBegin, farEnd } from './far';
 import { bodyLite, buildChunkLite, hubLite } from './skinLite';
 import { AUTO_FANCY, TRAIN, autoRuns, lineRuns, railJunctions, railRuns, trainAt } from './railruns';
-import { bodyMyth, buildChunkMyth, hubMyth, mythAmbient, mythParticle, mythUnder, mythBelts, mythFrame, mythHubGlow, mythSelect, mythZoneLabel } from './skinMyth';
+import { bodyMyth, buildChunkMyth, hubMyth, mythAmbient, mythParticle, mythUnder, mythBelts, mythFrame, mythHubGlow, mythGuardian, mythSelect, mythTrain, mythZoneLabel } from './skinMyth';
 import { drawGlints, hubMeter, mapStats, noteFx } from './mapfx';
 import { newPlume, plumePaint, plumeRadius, plumeReact, PLUME_CAP, stepPlume, type Plume } from './plumephys';
 import { emissionOf, exhaustOf, plateNotes, plumeable } from './matterfx';
@@ -756,7 +756,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   ctx.textBaseline = 'alphabetic';
   for (const sp of zoneSpots(x0, y0, x1, y1)) {
     const zn = ZONES[sp.zone], lx = sp.cx, ly = sp.cy;
-    if (myth) { mythZoneLabel(ctx, P, zn.name, z >= 20 ? `${sub(zn.resource).name}・${zn.form}` : '', sx(lx), gy(ly), z, zn.tint[1]); continue; }
+    if (myth) { mythGuardian(ctx, P, sp.zone, sx(lx), gy(ly), z, t, zn.tint[1]); mythZoneLabel(ctx, P, zn.name, z >= 20 ? `${sub(zn.resource).name}・${zn.form}` : '', sx(lx), gy(ly), z, zn.tint[1]); continue; }
     if (lab) { labZoneLabel(ctx, P, zn.name, z >= 20 ? `${sub(zn.resource).name}・${zn.form}` : '', sx(lx), gy(ly), z, zn.tint[1]); continue; }
     if (punk) {
       // 鉱区の標識板
@@ -1489,7 +1489,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
         seenTr.push({ tr, x: tx, y: ty, dx: TRAIN.dx, dy: TRAIN.dy, col });
       }
     }
-    const L = z * 0.95, Wd = z * 0.46;
+    const L = z * 0.95, Wd = z * 0.46, tNow = t;
     if (lite || seenTr.length > 60) {
       // 軽量スキンと、列車がたくさん見えるとき：向きに合わせた四角だけ（回さない・影なし・灯りなし）。止まって待つ列車は、先頭が赤
       const b = Math.max(1, lw(0.05));
@@ -1509,6 +1509,12 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       const { tr, x: tx, y: ty, col } = t, ang = Math.atan2(t.dy, t.dx);
       ctx.save();
       ctx.translate(tx, ty); ctx.rotate(ang);
+      if (myth) {
+        // 幻想：列車はムカデ竜
+        mythTrain(ctx, P, L, Wd, col, tr.cargo.length > 0, !!tr.held, tr.p > 0.01 && tr.p < 0.99 && !tr.held, tNow);
+        ctx.restore();
+        continue;
+      }
       ctx.fillStyle = punk ? 'rgba(0,0,0,0.4)' : P.shadow; rr(ctx, -L / 2 + z * 0.06, -Wd / 2 + z * 0.14, L, Wd, z * 0.08); ctx.fill();
       rr(ctx, -L / 2, -Wd / 2, L, Wd, z * 0.08); ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = lw(0.05); ctx.stroke();
       rr(ctx, -L / 2 + z * 0.08, -Wd / 2 + z * 0.07, L * 0.62, Wd - z * 0.14, z * 0.04); ctx.fillStyle = tr.cargo.length ? '#f3f1e8' : 'rgba(0,0,0,0.35)'; ctx.fill(); ctx.stroke();
