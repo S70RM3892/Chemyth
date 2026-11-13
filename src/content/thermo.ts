@@ -119,7 +119,13 @@ export const speciesText = (s: Species) => `${s.n === 1 ? '' : s.n}${pretty(s.f)
 export const equationText = (r: DhRow) => `${r.lhs.map(speciesText).join(' + ')} → ${r.rhs.map(speciesText).join(' + ')}`;
 /** 0.5 は 0 から遠いほうへ丸める（−393.5 → −394） */
 const roundAway = (x: number) => Math.sign(x) * Math.round(Math.abs(x));
-/** 説明と札に出す ΔH の整数（kJ）。ΔfH から計算した値を丸める */
+/**
+ * 説明と札に出す ΔH の整数（kJ）。ΔfH から計算した値を丸める（表の 0.1 単位の値を、もう一度丸めない）。
+ * 表の値は計算した値を 0.1 単位に丸めたものなので、それをさらに整数に丸めると、ちょうど .5 になった 4 つの行で
+ * 本当の値から遠いほうの整数になる：co2-reduce 172.47 → 172（表 172.5）、slaking −64.47 → −64（表 −64.5）、
+ * methanol −90.48 → −90（表 −90.5）、hi-decomp 9.478 → 9（表 9.5）。
+ * どの行の整数も tests/matter-data.test.ts が決めておく
+ */
 export const dHInt = (r: DhRow) => roundAway(dHFromFormation(r));
 /** 「−92」「572」：負の数は全角のマイナス記号で書き、正の数に + は付けない（教科書の書き方） */
 export const dHText = (r: DhRow) => { const v = dHInt(r); return v < 0 ? `−${-v}` : String(v); };

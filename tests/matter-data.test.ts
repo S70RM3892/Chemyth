@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SOURCES } from '../src/content/captions';
+import { SOURCES, dHCaption } from '../src/content/captions';
 import { de00, de00As, hexToRgb, type Cvd } from '../src/content/colorsci';
 import { AGENTS, MUD_OH } from '../src/content/ions';
 import {
@@ -49,8 +49,6 @@ const S_SOLIDS: Record<string, [string, string]> = {
   PbCrO4: ['黄色', '#e8c62a'], Ag2CrO4: ['赤褐色', '#8f3a26'], CaSO3: ['白色', '#f6f6f3'], 'mud-oh': ['赤褐色', '#b0603a'], I2: ['黒紫色', '#3a2440'],
   Cu: ['赤色', '#c8733f'], CuO: ['黒色', '#222224'], Fe2O3: ['赤褐色', '#9a3a22'], MnO2: ['黒色', '#28262a'],
 };
-/** §10.5 と違うまま残す値：FeS は前からの #26262a（色差 1.3、どちらも黒色。描画の値は変えない） */
-const KEPT: Record<string, string> = { FeS: '#26262a' };
 // ---- §10.7 黒体の色と運転温度 ----
 const S_BB: [number, string, number | null][] = [
   [450, '#ff0000', -2.37], [525, '#ff1a00', -1.08], [600, '#ff2a00', 0], [700, '#ff3b00', 1.19], [800, '#ff4900', 2.17], [900, '#ff5400', 2.99], [1000, '#ff5e00', 3.68],
@@ -73,6 +71,16 @@ const S_DH: Record<string, [string, number]> = {
   'blast-furnace': ['Fe₂O₃(固) + 3CO(気) → 2Fe(固) + 3CO₂(気)', -24.8], 'hi-decomp': ['2HI(気) → H₂(気) + I₂(気)', 9.5],
   'water-electrolysis': ['2H₂O(液) → 2H₂(気) + O₂(気)', 571.7], 'fuel-cell': ['2H₂(気) + O₂(気) → 2H₂O(液)', -571.7], 'p4-burn': ['P₄(黄リン) + 5O₂(気) → P₄O₁₀(固)', -2984.0],
   phosphoric: ['P₄O₁₀(固) + 6H₂O(液) → 4H₃PO₄(固)', -417.0], 'so3-absorb': ['SO₃(気) + H₂O(液) → H₂SO₄(液)', -132.4],
+};
+/**
+ * 札と説明に出す ΔH の整数（dHText）。ΔfH から計算した値を丸めたもの（表の 0.1 単位の値をもう一度丸めない）。
+ * 表の値の丸めと整数がずれるのは、計算した値が .5 のすぐ下にある 4 行：co2-reduce 172.47、slaking −64.47、methanol −90.48、hi-decomp 9.478
+ */
+const S_DH_TEXT: Record<string, string> = {
+  'haber-bosch': '−92', contact: '−198', 'sulfur-burn': '−297', 'hcl-synthesis': '−185', 'carbon-burn': '−394', 'co-burn': '−566', 'coke-burn': '−221',
+  'co2-reduce': '172', 'lime-kiln': '179', slaking: '−64', 'soda-ash': '136', 'steam-reforming': '206', methanol: '−90', 'ethylene-hydration': '−45',
+  'ostwald-1': '−906', 'ostwald-2': '−114', 'blast-furnace': '−25', thermite: '−852', 'hi-decomp': '9', 'water-electrolysis': '572', 'fuel-cell': '−572',
+  'p4-burn': '−2984', phosphoric: '−417', 'so3-absorb': '−132',
 };
 // ---- §10.11 分析器（P0 と、ろ紙のニンヒドリン） ----
 const S_ANALYZER: Record<string, [string | undefined, string | null | undefined, string, string]> = {
@@ -175,8 +183,7 @@ describe('SPEC2 §10 の表と同じ値', () => {
   });
 
   it('§10.4・§10.5 物質の見た目：色・言葉・場面ごとの形', () => {
-    for (const [id, [word, hex]] of Object.entries(S_SOLIDS)) expect([LOOKS[id].word, LOOKS[id].hex], id).toEqual([word, KEPT[id] ?? hex]);
-    expect(de00(KEPT.FeS, S_SOLIDS.FeS[1])).toBeLessThan(1.5);
+    for (const [id, [word, hex]] of Object.entries(S_SOLIDS)) expect([LOOKS[id].word, LOOKS[id].hex], id).toEqual([word, hex]);
     expect(LOOKS.AgCl.photo).toEqual(['#8a7a9a', '#3a3640']);
     expect(ORES.ZnS).toBe('#4a2a1e');
     expect([LOOKS.S.turbid, TURBID_WORD.S]).toEqual(['#efe9c4', '白濁（淡黄白色）']);
@@ -188,6 +195,9 @@ describe('SPEC2 §10 の表と同じ値', () => {
     expect(LOOKS.I2.vap).toEqual({ hex: '#9b4fd0', word: '紫色' });
     expect(LOOKS.Br2.sol).toEqual({ hex: '#c8642a', word: '赤褐色（薄いと黄褐色）' });
     expect(LOOKS.Cl2.sol).toEqual({ hex: '#e3eba0', word: '淡黄緑色' });
+    // 塩素水の淡黄緑色は C46（気体の黄緑色だけを言う）にないので、出典は general（言い方は SPEC2 §12 で確かめる）
+    expect(SOLUTIONS['Cl2-water'].src).toEqual(['general']);
+    expect(LOOK_SRC.Cl2).toEqual(['C46', 'general']);
     // 図鑑の札の文（SPEC2 §6.C C8 の例のとおり）
     expect(lookSentence('I2')).toBe('黒紫色の固体（蒸気は紫色、KI 水溶液に溶かすと褐色）');
     expect(lookSentence('CuSO4')).toBe('水溶液は青色。無水物は白色の固体');
@@ -263,11 +273,18 @@ describe('SPEC2 §10 の表と同じ値', () => {
       if (!row.r2) { expect(recipeById(id), id).toBeDefined(); expect(dHOf(id)).toBe(dH); }
     }
     expect(DHF['CaCO3(固)'].v).toBe(-1207.6);
-    expect(dHText(DH['haber-bosch'])).toBe('−92');
-    expect(dHText(DH['water-electrolysis'])).toBe('572');
-    expect(dHText(DH['carbon-burn'])).toBe('−394');
     expect(dHOf('no2-dimer')).toBeUndefined();
     expect(dHOf('cracking')).toBeUndefined();
+  });
+
+  it('§10.9 札と説明の ΔH の整数：反応の一覧にあるどの行も決めておく（図鑑の札と dH の説明は同じ dHText を使う）', () => {
+    expect(Object.keys(S_DH_TEXT).sort()).toEqual(Object.keys(DH).filter((k) => !DH[k].r2).sort());
+    for (const [id, text] of Object.entries(S_DH_TEXT)) {
+      expect(dHText(DH[id]), id).toBe(text);
+      expect(dHCaption(id)!.text, id).toBe(`${equationText(DH[id])}　ΔH = ${text} kJ`);
+      // 計算した値に最も近い整数
+      expect(Math.abs(dHInt(DH[id]) - dHFromFormation(DH[id])), id).toBeLessThanOrEqual(0.5);
+    }
   });
 
   it('§10.11 分析器の検査', () => {
@@ -322,6 +339,8 @@ describe('色の言葉（§10.13）', () => {
     for (const c of Object.values(CATALYSTS)) texts.push(c.word, c.alt?.word ?? '');
     for (const b of Object.values(BURN)) texts.push(b.word);
     texts.push(...Object.values(TURBID_WORD), ...PPT_IN.solvay.map((p) => p.word), BURNER.word);
+    // 反応の様子の一言（場面の札と模試の解説に出る）
+    for (const r of RECIPES) texts.push(...reactionLook(r).notes.map((n) => n.text));
     for (const t of texts) for (const w of colourWordsIn(t)) expect(COLOUR_WORDS, `${t}：${w}`).toContain(w);
     // 主な言い方（word）は、括弧の補足を除けば表にある言葉そのもの
     for (const [id, l] of Object.entries(LOOKS)) expect(COLOUR_WORDS, id).toContain(l.word.includes('（') && !COLOUR_WORDS.includes(l.word) ? l.word.split('（')[0] : l.word);
@@ -347,6 +366,30 @@ describe('反応の見た目の新しい項目（§6.C C2）', () => {
     expect(molten.map((r) => r.id).sort()).toEqual(['alkali-fusion', 'hall-heroult', 'hall-heroult-co', 'hall-heroult-mix', 'molten-nacl']);
     for (const r of molten) { const l = reactionLook(r); expect(l.gasPhase || l.dry, r.id).toBe(true); expect(l.melt, r.id).toBe(1); }
     for (const r of RECIPES) if (!molten.includes(r)) expect(reactionLook(r).melt, r.id).toBeUndefined();
+  });
+  it('水の中の I₂ は I₃⁻ の褐色の液（黒紫色の粒の沈殿ではない）、HI の分解の I₂ は紫色の蒸気（SPEC2 M6）', () => {
+    const inWater = '水溶液中では I₃⁻ の褐色（固体は黒紫色）';
+    for (const id of ['br-i', 'h2o2-ki', 'ki-electrolysis']) {
+      const l = reactionLookById(id)!;
+      expect([l.dry, l.gasPhase], id).toEqual([false, false]);
+      expect(l.solids, id).not.toContain(LOOKS.I2.hex);
+      expect(l.after, id).toBe(LOOKS.I2.sol!.hex);
+      expect(l.notes.find((n) => n.id === 'I2'), id).toEqual({ id: 'I2', made: true, text: inWater });
+    }
+    // ヨウ素滴定：褐色から無色へ（I₂ を固体の粒として入れない）
+    const io = reactionLookById('iodometry')!;
+    expect([io.before, io.solidsIn, io.notes.find((n) => n.id === 'I2')!.text]).toEqual([LOOKS.I2.sol!.hex, [], inWater]);
+    // HI の分解（2HI(気) → H₂(気) + I₂(気)）：無色から紫色の気体へ
+    const hi = reactionLookById('hi-decomp')!;
+    expect([hi.gasPhase, hi.dry, hi.after, hi.notes.find((n) => n.id === 'I2')!.text]).toEqual([true, false, LOOKS.I2.vap!.hex, '紫色の気体（固体は黒紫色）']);
+    // どの水溶液の反応でも、溶ける固体（sol を持ち、水溶液の色を主に持たないもの）を沈殿として描かない
+    for (const r of RECIPES) {
+      const l = reactionLook(r);
+      if (l.dry || l.gasPhase) continue;
+      for (const [s] of r.outputs) if (LOOKS[s]?.sol && !LOOKS[s].aq && hasSub(s) && sub(s).state === 'solid') expect(l.solids, `${r.id} ${s}`).not.toContain(LOOKS[s].hex);
+    }
+    // 水溶液の色を主に持つ CuCl₂ は、これまでどおり「水溶液は青色」
+    expect(reactionLookById('cucl2-electrolysis')!.notes.find((n) => n.id === 'CuCl2')!.text).toBe('水溶液は青色');
   });
   it('生じる気体の比（同じ温度・圧力の体積比）：水の電気分解は H₂ : O₂ = 2 : 1', () => {
     expect(reactionLookById('water-electrolysis')!.gasRatio).toEqual([2, 1]);

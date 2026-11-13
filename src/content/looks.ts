@@ -83,8 +83,7 @@ export const LOOKS: Record<string, Look> = {
   PbO: L('#e2c33a', '黄色'),
   PbO2: L('#5a3a26', '褐色'),
   PbS: L('#222226', '黒色', { ppt: true }),
-  // SPEC2 §10.5 は #222226。前からの #26262a（色差 1.3、どちらも黒色）のまま
-  FeS: L('#26262a', '黒色', { ppt: true }),
+  FeS: L('#222226', '黒色', { ppt: true }),
   ZnS: L('#f3f3ef', '白色', { ppt: true }),
   ZnO: L('#f3f3ef', '白色'),
   CuFeS2: L('#b99a3a', '黄金色'),
@@ -134,7 +133,8 @@ export const LOOKS: Record<string, Look> = {
  * 検査で、LOOKS のどの物質にも 1 つ以上あることを確かめる
  */
 export const LOOK_SRC: Record<string, string[]> = {
-  Cl2: ['C46'], NO2: ['C15'], O3: ['C16'], F2: ['C47'], Br2: ['C21'], C6H5NO2: ['general'], crude: ['general'], tar: ['general'], heavy: ['general'],
+  // C46 は気体の黄緑色だけを言う。Cl₂ の sol（塩素水の淡黄緑色）の出典は general だけ（SOLUTIONS['Cl2-water'] と同じ。言い方は SPEC2 §12 で確かめる）
+  Cl2: ['C46', 'general'], NO2: ['C15'], O3: ['C16'], F2: ['C47'], Br2: ['C21'], C6H5NO2: ['general'], crude: ['general'], tar: ['general'], heavy: ['general'],
   S: ['C30', 'C17'], I2: ['C22', 'C4', 'C7', 'C8'], P4: ['C32', 'JP4'], C: ['general'], Si: ['general'], Cu: ['C3'], Ag: ['general'], Fe: ['general'],
   Al: ['general'], Zn: ['general'], Pb: ['general'], Sn: ['general'], Na: ['JNa'],
   CuO: ['C3'], Cu2S: ['general'], Fe2O3: ['C41'], MnO2: ['C40'], PbO: ['general'], PbO2: ['general'], PbS: ['C2'], FeS: ['C2'], ZnS: ['C37'], ZnO: ['general'],
@@ -303,7 +303,8 @@ export const SOLUTIONS: Record<string, SolutionRow> = {
   I3: { word: '褐色', hex: '#c08a3a', conc: '#8a4a14', ids: ['I2'], cue: 'label', src: ['C7', 'C8'] },
   'I2-starch': { word: '青紫色', hex: '#3b2a8a', cue: 'reagent', src: ['C22', 'C7'] },
   'Br2-water': { word: '赤褐色（薄いと黄褐色）', hex: '#c8642a', ids: ['Br2'], cue: 'label', src: ['C21'] },
-  'Cl2-water': { word: '淡黄緑色', hex: '#e3eba0', ids: ['Cl2'], cue: 'label', src: ['C46'], note: '言い方は教科書で確かめる（SPEC2 §12）' },
+  // C46（ja.wikipedia「塩素」）は気体の黄緑色だけで、塩素水の色を言わない。SPEC2 §10.4 もこの行に出典を挙げない
+  'Cl2-water': { word: '淡黄緑色', hex: '#e3eba0', ids: ['Cl2'], cue: 'label', src: ['general'], note: '言い方は教科書で確かめる（SPEC2 §12）' },
   fehling: { word: '深青色', hex: '#1f4fb0', cue: 'reagent', src: ['C25'] },
   // Ag⁺・Pb²⁺・Al³⁺・Zn²⁺・Ca²⁺・Na⁺・K⁺・Ba²⁺ と、Ag・Zn・Al のアンミン錯イオン・ヒドロキシド錯イオン
   colourless: { word: '無色', hex: null, src: ['general'] },
@@ -427,6 +428,12 @@ export function appearance(id: string): string {
 /** 溶かすときの言い方。I₂ は水にはほとんど溶けず、KI 水溶液に I₃⁻ として溶ける */
 const SOL_IN: Record<string, string> = { I2: 'KI 水溶液に溶かすと' };
 /**
+ * 水溶液の中で溶けている形の名前。水溶液の反応で生じる I₂ は、まわりの I⁻ と I₃⁻ になって溶け、液が褐色になる（黒紫色の粒の沈殿にはならない）。
+ * 反応の見た目（reactionLook）では、sol を持つ固体を水溶液の反応で溶けたものとして扱い、solids・solidsIn に入れず、液の色に sol の色を混ぜる。
+ * 電解槽の絵は生成物の固体を電極に hexOf の色で描くので、ヨウ化カリウム水溶液の電気分解の陽極の I₂ は、陽極のまわりの褐色（SPEC2 M7）に替えるまで黒紫色のまま
+ */
+const SOL_ION: Record<string, string> = { I2: 'I₃⁻' };
+/**
  * 図鑑の札の見た目の文。場面ごとの色も添える：「黒紫色の固体（蒸気は紫色、KI 水溶液に溶かすと褐色）」
  * 「水溶液は青色。無水物は白色の固体」。見た目の決まっていない物質は appearance と同じ
  */
@@ -507,39 +514,48 @@ export function reactionLook(r: Recipe): ReactionLook {
   const ins = r.inputs.map(([s]) => s).filter((s) => s !== 'e' && hasSub(s)), outs = r.outputs.map(([s]) => s).filter((s) => s !== 'e' && hasSub(s));
   const st = (s: string) => sub(s).state;
   const cond = r.accept[0] ?? '', heat = HEAT.test(cond);
-  const allGas = [...ins, ...outs].every((s) => st(s) === 'gas');
+  // 熱した気体の反応の中の、蒸気の色を持つ物質（HI の分解で生じる I₂ は気体：2HI(気) → H₂(気) + I₂(気)）。固体の粒にしない
+  const vapour = (s: string) => heat && st(s) !== 'gas' && !!LOOKS[s]?.vap;
+  const allGas = [...ins, ...outs].every((s) => st(s) === 'gas' || vapour(s));
   // 融解塩・融解した氷晶石・アルカリ融解は、水のない融解液の中の反応（「融解塩（水なし）」の「水」で水溶液と取り違えない）
   const melt = r.accept.some((a) => MELT.test(a));
   // 塩は固体として持っているが、反応は水溶液で起きるものが多い。熱して固体どうしを反応させるもの（乾式）と融解液の反応だけ、水の液を描かない
   const dry = !allGas && (melt || (heat && !/酸|水|溶液/.test(cond) && !ins.some((s) => st(s) === 'liquid' || LOOKS[s]?.aq)));
   const wet = !allGas && !dry;
+  // 水溶液の反応で溶けて色を見せる固体（sol を持つもの。I₂ は I₃⁻ の褐色）。水溶液の色を主に持つ物質（aq）は、もとから液の色で描く
+  const dissolved = (s: string) => wet && st(s) === 'solid' && !!LOOKS[s]?.sol && !LOOKS[s].aq;
+  const tint = (s: string) => (allGas && vapour(s) ? LOOKS[s].vap!.hex : dissolved(s) ? LOOKS[s].sol!.hex : hexOf(s));
   const pt = PROCESS_T[r.id];
   // 容器の中身：色のついた気体・液体・水溶液があればその色。なければ、水溶液なら無色の液、乾式なら固体の色
   const body = (ids: string[]) => {
     // 乾式：固体そのものの色（水溶液の色は使わない）。気体だけ：気体の色。水溶液：液体と水溶液の色（気体は泡として出ていく）
     if (dry) { const solid = ids.filter((s) => st(s) === 'solid'); return solid.length ? blend(solid.map((s) => (LOOKS[s] && !LOOKS[s].aq ? LOOKS[s].hex : PLAIN.solid))) : PLAIN.solid; }
-    const colored = ids.filter((s) => LOOKS[s] && !LOOKS[s].metal && (allGas ? st(s) === 'gas' : st(s) === 'liquid' || !!LOOKS[s].aq));
-    if (colored.length) return blend(colored.map(hexOf));
+    const colored = ids.filter((s) => LOOKS[s] && !LOOKS[s].metal && (allGas ? st(s) === 'gas' || vapour(s) : st(s) === 'liquid' || !!LOOKS[s].aq || dissolved(s)));
+    if (colored.length) return blend(colored.map(tint));
     return wet ? PLAIN.liquid : PLAIN.gas;
   };
   const look: ReactionLook = {
     before: body(ins), after: body(outs), gasPhase: allGas, dry,
     gases: allGas ? [] : outs.filter((s) => st(s) === 'gas').map(hexOf),
-    // 沈殿・析出：水溶液の反応で生じる、色の決まっている固体（溶けない塩・硫化物・単体など）
-    solids: wet ? outs.filter((s) => st(s) === 'solid' && LOOKS[s] && !LOOKS[s].aq).map(hexOf) : [],
+    // 沈殿・析出：水溶液の反応で生じる、色の決まっている固体（溶けない塩・硫化物・単体など）。溶けるもの（I₂）は液の色にする
+    solids: wet ? outs.filter((s) => st(s) === 'solid' && LOOKS[s] && !LOOKS[s].aq && !dissolved(s)).map(hexOf) : [],
     heat, light: cond === '光', cold: /氷冷/.test(cond),
     tag: (r.machine === 'reactor' || r.machine === 'separator') && cond !== 'なし' && cond.length <= 9 ? cond : '',
     notes: [...ins.map((s) => ({ id: s, made: false })), ...outs.map((s) => ({ id: s, made: true }))]
       .filter((x, i, a) => LOOKS[x.id] && a.findIndex((y) => y.id === x.id) === i)
       .map((x) => {
         const l = LOOKS[x.id];
-        // 水溶液の中で生じる固体は、沈殿（金属なら析出）と言う。乾式の反応では、水溶液の色は言わない
-        const text = x.made && wet && st(x.id) === 'solid' && !l.aq ? (l.metal ? `${l.word}の固体が析出する` : `${l.word}の沈殿`) : dry && l.aq ? '' : appearance(x.id);
+        // 水溶液の中で生じる固体は、沈殿（金属なら析出）と言う。乾式の反応では、水溶液の色は言わない。
+        // 蒸気になるもの・溶けるものは、その場面の色を言い、主な言い方（模試の色の問いの答え）も添える
+        const own = `（${STATE_WORD[st(x.id) as keyof typeof STATE_WORD]}は${l.word}）`;
+        const text = allGas && vapour(x.id) ? `${l.vap!.word}の気体${own}`
+          : dissolved(x.id) ? `水溶液中では${SOL_ION[x.id] ? ` ${SOL_ION[x.id]} の` : ''}${l.sol!.word}${own}`
+          : x.made && wet && st(x.id) === 'solid' && !l.aq ? (l.metal ? `${l.word}の固体が析出する` : `${l.word}の沈殿`) : dry && l.aq ? '' : appearance(x.id);
         return { ...x, text };
       }).filter((x) => x.text),
     process: processOf(r.id),
     gasIn: wet ? ins.filter((s) => st(s) === 'gas' && LOOKS[s]) : [],
-    solidsIn: wet ? ins.filter((s) => st(s) === 'solid' && LOOKS[s] && !LOOKS[s].aq) : [],
+    solidsIn: wet ? ins.filter((s) => st(s) === 'solid' && LOOKS[s] && !LOOKS[s].aq && !dissolved(s)) : [],
     gasRatio: r.outputs.filter(([s]) => s !== 'e' && hasSub(s) && st(s) === 'gas').map(([, n]) => n),
   };
   if (BURN[r.id]) look.burn = BURN[r.id];
