@@ -3,7 +3,7 @@ import { ELEMENTS } from '../content/elements';
 import { lineColor, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
 import { heightOf, TOP_H } from './three';
-import { flowTrace, JAM_SEC, MOVERS, type FlowTrace } from '../engine/world';
+import { flowTrace, JAM_SEC, markEpoch, MOVERS, stationsOf, type FlowTrace } from '../engine/world';
 import { at, floorOf, FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
 import { BRASS, BRASS_DARK, mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
@@ -20,6 +20,7 @@ import { AMINO_ORDER, aminoOf, phOf, poleAt, type AminoKey } from '../content/ph
 import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/sep';
 import { drawFar, farBegin, farEnd } from './far';
 import { bodyLite, buildChunkLite, hubLite } from './skinLite';
+import { railJunctions, railRuns } from './railruns';
 import { bodyMyth, buildChunkMyth, hubMyth, mythAmbient, mythParticle, mythUnder, mythBelts, mythFrame, mythHubGlow, mythSelect, mythZoneLabel } from './skinMyth';
 import { drawGlints, hubMeter, mapStats, noteFx } from './mapfx';
 import { newPlume, plumePaint, plumeRadius, plumeReact, PLUME_CAP, stepPlume, type Plume } from './plumephys';
@@ -564,16 +565,6 @@ function onCurve(c: ReturnType<typeof beltCurve>, p: number): [number, number] {
   return [q * q * c.ax + p * p * c.bx, q * q * c.ay + p * p * c.by];
 }
 
-/** 敷いた線路のマスを、描きやすい形（x, y, つながり の並び）にして覚えておく。線路が変わるまで作り直さない */
-let railCache: { w: World; rev: number; geo: Int32Array } | null = null;
-function railGeo(w: World): Int32Array {
-  if (railCache && railCache.w === w && railCache.rev === w.railRev) return railCache.geo;
-  const geo = new Int32Array(w.rails.size * 3);
-  let i = 0;
-  for (const [k, m] of w.rails) { const c = k.indexOf(','); geo[i++] = +k.slice(0, c); geo[i++] = +k.slice(c + 1); geo[i++] = m; }
-  railCache = { w, rev: w.railRev, geo };
-  return geo;
-}
 /** いまの信号の状態（検知器と弁の絵に使う） */
 let SIG: number[] = [];
 /** 区画の集計は 1 秒半に 1 回でよい */
@@ -587,6 +578,7 @@ function districts(w: World): District[] {
 
 /** 地図を描く。1 マスが小さく見えるほど引いたら（平らな表示のとき）、far.ts の戦略図に切り替える */
 export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: World, cam: Camera, t: number, dt: number, view: View) {
+  markEpoch();
   if (view.three || !farBegin(ctx, cam, t, cw, ch)) drawNear(ctx, cw, ch, w, cam, t, dt, view);
   else {
     // 引いた視野では煙や土ぼこりを描かないので、出来事はためずに捨てる（写真などは、画面の分を消さない）
@@ -640,6 +632,9 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
 
   const x0 = Math.floor(wx0), x1 = Math.ceil(wx1), y0 = Math.floor(wy0), y1 = Math.ceil(wy1);
   const inView = (e: Ent) => e.x >= x0 - 2 && e.x <= x1 + 2 && e.y - off >= y0 - 2 && e.y - off <= y1 + 2;
+  // 見えている設備（この階）を、1 コマに 1 度だけ選ぶ。描く所ごとに全部の設備を見直さない（設備が 1 万を超えても、見える分だけの手間で済む）
+  const vis: Ent[] = [];
+  for (const e of w.ents.values()) if (e.x >= x0 - 3 && e.x <= x1 + 3 && e.y - off >= y0 - 3 && e.y - off <= y1 + 3) vis.push(e);
   // ---- 光と効果の層（WebGL の合成段があるときだけ）----
   const G = view.fx?.glow ?? null, M = view.fx?.mask ?? null;
   if (lab) labFrame(G, M, !!three, calm);
@@ -673,7 +668,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     HT.globalCompositeOperation = 'lighten';
     const fl = view.floor || 0;
     const put = (v: number, x: number, y: number, ww: number, hh: number) => { const b = Math.round(v * 255); HT.fillStyle = `rgb(${b},${b},${b})`; HT.fillRect(sx(x), sy(y), ww * z, hh * z); };
-    for (const e of w.ents.values()) {
+    for (const e of vis) {
       if (e.kind === 'part' || !inView(e) || floorOf(e.y) !== fl) continue;
       const k = e.kind;
       if (k === 'hub') continue;
@@ -832,7 +827,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
 
   // ---- ベルト：輪郭線つきの管。中身の状態で太さと模様が変わる ----
   const belts: { e: Ent; c: ReturnType<typeof beltCurve> }[] = [];
-  for (const e of w.ents.values()) {
+  for (const e of vis) {
     if (e.kind !== 'belt' || !inView(e)) continue;
     belts.push({ e, c: beltCurve(e, inflow(w, e.x, e.y, e.dir) ?? e.dir) });
   }
@@ -997,7 +992,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   }
 
   // 地下ベルト：入口は後ろ半分、出口は前半分だけ地上に見える。あいだは点線
-  for (const e of w.ents.values()) {
+  for (const e of vis) {
     if (e.kind !== 'tunnel' || !inView(e)) continue;
     const cx = sx(e.x + 0.5), cy = sy(e.y + 0.5), wd = z * WIDTH.none, pair = tunnelPair(w, e);
     const dxv = DX[e.dir], dyv = DY[e.dir], side = pair ? -1 : 1;
@@ -1031,7 +1026,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   }
 
   // 立体交差：縦の管の上を横の管がまたぐ
-  for (const e of w.ents.values()) {
+  for (const e of vis) {
     if (e.kind !== 'bridge' || !inView(e)) continue;
     const cx = sx(e.x + 0.5), cy = sy(e.y + 0.5), wd = z * WIDTH.none;
     const pipe = (x1: number, y1: number, x2: number, y2: number) => {
@@ -1077,7 +1072,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       ctx.fillRect(sx(b.e.x + 0.5 + ox) - z * 0.2, sy(b.e.y + 0.5 + oy) - z * 0.2, z * 0.4, z * 0.4);
     } else load(sx(b.e.x + 0.5 + ox), sy(b.e.y + 0.5 + oy), b.e.item.s, b.e.item.n);
   }
-  for (const e of w.ents.values()) {
+  for (const e of vis) {
     if (e.kind !== 'bridge' || !e.items || !inView(e)) continue;
     e.items.forEach((it, a) => {
       if (!it) return;
@@ -1096,7 +1091,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   }
 
   // ---- 装置 ----
-  for (const e of w.ents.values()) {
+  for (const e of vis) {
     if (e.kind === 'belt' || e.kind === 'bridge' || e.kind === 'tunnel' || e.kind === 'hub' || e.kind === 'part' || !(inView(e) || (e.big && inView({ ...e, x: e.x + 1, y: e.y + 1 })))) continue;
     if (!born.has(e)) born.set(e, t);
     const age = t - born.get(e)!;
@@ -1212,7 +1207,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   use(base);
   // ---- 詰まりの見える化：稼働率の札を出しているとき、荷が待っているマスを、待った時間で黄 → 赤に塗る ----
   if (view.stats && !veryFar) {
-    for (const e of w.ents.values()) {
+    for (const e of vis) {
       if (!MOVERS.has(e.kind) || !inView(e)) continue;
       const its = e.kind === 'bridge' ? e.items ?? [] : [e.item];
       let wt = 0;
@@ -1266,7 +1261,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     };
     const hr0 = hubRect(w.hubSize);
     pool(hr0.x + hr0.s / 2, hr0.y + hr0.s / 2, hr0.s * 1.6 + 1, 0.2 + 0.04 * Math.sin(t * 2.3));
-    for (const e of w.ents.values()) if (e.busy && inView(e)) pool(e.x + sizeOf(e) / 2, e.y + sizeOf(e) / 2, 1 + sizeOf(e) * 0.5, 0.22 + 0.06 * Math.sin(t * 9 + e.x));
+    for (const e of vis) if (e.busy && inView(e)) pool(e.x + sizeOf(e) / 2, e.y + sizeOf(e) / 2, 1 + sizeOf(e) * 0.5, 0.22 + 0.06 * Math.sin(t * 9 + e.x));
     ctx.globalCompositeOperation = 'source-over';
   }
   // 1 階から見たとき、2 階の設備がある場所に薄い印をつける
@@ -1348,11 +1343,11 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       ctx.fillStyle = `rgba(14,20,44,${0.36 * dusk})`; ctx.fillRect(0, 0, cw, ch);
       ctx.globalCompositeOperation = 'lighter';
       const pool = (x: number, y: number, r: number, rgb: string, a: number) => { const g = ctx.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, `rgba(${rgb},${a})`); g.addColorStop(1, `rgba(${rgb},0)`); ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2); };
-      for (const e of w.ents.values()) if (e.busy && inView(e)) pool(sx(e.x + sizeOf(e) / 2), sy(e.y + sizeOf(e) / 2), z * (0.8 + sizeOf(e) * 0.6), '255,214,140', 0.32 * dusk);
+      for (const e of vis) if (e.busy && inView(e)) pool(sx(e.x + sizeOf(e) / 2), sy(e.y + sizeOf(e) / 2), z * (0.8 + sizeOf(e) * 0.6), '255,214,140', 0.32 * dusk);
       pool(sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), z * hr.s * 1.2, '255,150,90', 0.3 * dusk);
       ctx.globalCompositeOperation = 'source-over';
     } else if (G) {
-      for (const e of w.ents.values()) if (e.busy && inView(e)) glow(sx(e.x + sizeOf(e) / 2), sy(e.y + sizeOf(e) / 2), z * (0.8 + sizeOf(e) * 0.6), '255,214,140', 0.35 * dusk);
+      for (const e of vis) if (e.busy && inView(e)) glow(sx(e.x + sizeOf(e) / 2), sy(e.y + sizeOf(e) / 2), z * (0.8 + sizeOf(e) * 0.6), '255,214,140', 0.35 * dusk);
     }
   }
   // 線路・列車・札は装置の上を通るので、立体表示では天面の層に描く
@@ -1362,33 +1357,35 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   if (!off) {
     const ink = punk ? '#0b0d10' : lab && !light ? '#03070c' : P.ink, lift2 = z * 0.3;
     if (w.rails.size) {
-      const geo = railGeo(w);
+      const runs = railRuns(w);
+      // 線は、まっすぐ続く区間ごとに 1 本（1 万マスの線路でも、区間の数だけ線を引く）。見える所にかかる区間だけ
       const seg: number[] = [], junc: number[] = [];
-      for (let k = 0; k < geo.length; k += 3) {
-        const x = geo[k], y = geo[k + 1], m = geo[k + 2];
-        if (x < x0 - 2 || x > x1 + 2 || y < y0 - 2 || y > y1 + 2) continue;
-        if (m & 1) seg.push(x + 0.5, y + 0.5, x + 1.5, y + 0.5);
-        if (m & 2) seg.push(x + 0.5, y + 0.5, x + 0.5, y + 1.5);
-        if ((m & 1) + ((m >> 1) & 1) + ((m >> 2) & 1) + ((m >> 3) & 1) >= 3) junc.push(x + 0.5, y + 0.5);
+      for (let k = 0; k < runs.length; k += 4) {
+        const ax = runs[k], ay = runs[k + 1], bx = runs[k + 2], by = runs[k + 3];
+        if (bx < x0 - 2 || ax > x1 + 2 || by < y0 - 2 || ay > y1 + 2) continue;
+        seg.push(ax, ay, bx, by);
       }
+      const jn = railJunctions(w);
+      for (let k = 0; k < jn.length; k += 2) if (jn[k] >= x0 - 2 && jn[k] <= x1 + 3 && jn[k + 1] >= y0 - 2 && jn[k + 1] <= y1 + 3) junc.push(jn[k], jn[k + 1]);
       const path = (ox: number, oy: number) => { ctx.beginPath(); for (let k = 0; k < seg.length; k += 4) { ctx.moveTo(sx(seg[k]) + ox, sy(seg[k + 1]) + oy); ctx.lineTo(sx(seg[k + 2]) + ox, sy(seg[k + 3]) + oy); } };
       ctx.lineJoin = 'round';
-      if (!far) { ctx.lineCap = 'round'; ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.22; path(lift2 * 0.5, lift2); ctx.stroke(); }
+      // 軽量：影と枕木と細い線を省き、桁とレールの 2 回だけ
+      if (!far && !lite) { ctx.lineCap = 'round'; ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.22; path(lift2 * 0.5, lift2); ctx.stroke(); }
       // 枕木 → 桁 → 2 本のレール
       ctx.lineCap = 'butt';
-      if (!veryFar) { ctx.strokeStyle = ink; ctx.lineWidth = z * 0.32; ctx.setLineDash([z * 0.07, z * 0.18]); path(0, 0); ctx.stroke(); ctx.setLineDash([]); }
+      if (!veryFar && !lite) { ctx.strokeStyle = ink; ctx.lineWidth = z * 0.32; ctx.setLineDash([z * 0.07, z * 0.18]); path(0, 0); ctx.stroke(); ctx.setLineDash([]); }
       ctx.lineCap = 'round';
       ctx.strokeStyle = ink; ctx.lineWidth = Math.max(2, z * 0.2); path(0, 0); ctx.stroke();
       ctx.strokeStyle = punk ? (light ? '#c9ced3' : '#8a939c') : lab ? (light ? '#dfe7ec' : '#6c8194') : light ? '#e9e6da' : '#aeb6c2'; ctx.lineWidth = Math.max(1, z * 0.1); path(0, 0); ctx.stroke();
-      if (!far) { ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.8, z * 0.03); path(0, 0); ctx.stroke(); }
+      if (!far && !lite) { ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.8, z * 0.03); path(0, 0); ctx.stroke(); }
       // 分岐点：転てつ器の印
       for (let k = 0; k < junc.length; k += 2) {
         ctx.beginPath(); ctx.arc(sx(junc[k]), sy(junc[k + 1]), z * 0.2, 0, Math.PI * 2);
         ctx.fillStyle = P.hi; ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = lw(0.05); ctx.stroke();
       }
     }
-    for (const e of w.ents.values()) {
-      if (e.kind !== 'station' || e.role !== 'in') continue;
+    for (const e of stationsOf(w)) {
+      if (e.role !== 'in') continue;
       const routes = stationRoutes(w, e);
       if (!routes.length) continue;
       const col = lineColor(e.ch || 1);
@@ -1403,7 +1400,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
           continue;
         }
         // 自動の仮線路：地面の影 → 枕木 → 桁 → 路線色
-        ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2; path(lift2 * 0.5, lift2); ctx.stroke();
+        if (!lite) { ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2; path(lift2 * 0.5, lift2); ctx.stroke(); }
         ctx.strokeStyle = ink; ctx.lineWidth = z * 0.26; ctx.setLineDash([z * 0.07, z * 0.2]); path(0, 0); ctx.stroke(); ctx.setLineDash([]);
         ctx.lineWidth = z * 0.13; path(0, 0); ctx.stroke();
         ctx.strokeStyle = col; ctx.lineWidth = z * 0.07; path(0, 0); ctx.stroke();
@@ -1423,7 +1420,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
         ctx.save();
         ctx.translate(tx, ty); ctx.rotate(ang);
         const L = z * 0.95, Wd = z * 0.46;
-        ctx.fillStyle = punk ? 'rgba(0,0,0,0.4)' : P.shadow; rr(ctx, -L / 2 + z * 0.06, -Wd / 2 + z * 0.14, L, Wd, z * 0.08); ctx.fill();
+        if (!lite) { ctx.fillStyle = punk ? 'rgba(0,0,0,0.4)' : P.shadow; rr(ctx, -L / 2 + z * 0.06, -Wd / 2 + z * 0.14, L, Wd, z * 0.08); ctx.fill(); }
         rr(ctx, -L / 2, -Wd / 2, L, Wd, z * 0.08); ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = lw(0.05); ctx.stroke();
         rr(ctx, -L / 2 + z * 0.08, -Wd / 2 + z * 0.07, L * 0.62, Wd - z * 0.14, z * 0.04); ctx.fillStyle = tr.cargo.length ? '#f3f1e8' : 'rgba(0,0,0,0.35)'; ctx.fill(); ctx.stroke();
         // 先頭の灯り：前の列車を待って止まっているときは赤
@@ -1446,7 +1443,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   if (view.stats && z >= 13) {
     const GOOD = '#2f8f55', WARN = '#c9821a';
     ctx.textAlign = 'center';
-    for (const e of w.ents.values()) {
+    for (const e of vis) {
       const cfg = isMachine(e.kind) && !!e.recipe;
       if (!(cfg || e.kind === 'extractor') || !inView(e)) continue;
       const u = e.u ?? 0, sz = sizeOf(e), st = e.off ? 3 : cfg ? machineState(e) : u >= 0.5 ? 0 : 2;
@@ -1606,7 +1603,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       notes.forEach((n, i) => { ctx.font = `500 ${fs * 0.74}px ${FONT_UI}`; ctx.fillStyle = punk ? '#c9ccc4' : P.soft; ctx.fillText(n, px + wd / 2, py + fs * ((cond ? 3.05 : 2.0) + i * 1.05), max); });
       ctx.textBaseline = 'alphabetic';
     };
-    if (z >= (view.allPlates ? 34 : 70)) { for (const e of w.ents.values()) if (e.recipe && e !== view.selected && inView(e) && floorOf(e.y) === (view.floor || 0)) plate(e); }
+    if (z >= (view.allPlates ? 34 : 70)) { for (const e of vis) if (e.recipe && e !== view.selected && inView(e) && floorOf(e.y) === (view.floor || 0)) plate(e); }
     if (view.selected?.recipe && inView(view.selected)) plate(view.selected, true);
   }
 

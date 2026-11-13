@@ -8,11 +8,12 @@
  *  - 重ね書き：資源地の名前と産出物、納品所、線路の網、いまの指令の資源地、区画ごとの生産の札、縮尺。重ならないように、大事なものから置く
  * 色は、見た目（Palette）と資源地の色（ZONES）から作る。新しいスキンでも、そのまま描ける。
  */
+import { railRuns } from './railruns';
 import { ZONES, blobRadius, hubRect, isSea, zoneSpots, type Zone, type ZoneSpot } from '../content/map';
 import { lineColor, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
 import { isSep, sepReady } from '../content/sep';
-import { DX, DY, FLOOR_DY, at, currentGoal, floorOf, inflow, isMachine, sizeOf, stationRoutes, type Ent, type Route, type World } from '../engine/world';
+import { DX, DY, FLOOR_DY, at, currentGoal, floorOf, inflow, isMachine, sizeOf, stationRoutes, stationsOf, type Ent, type Route, type World } from '../engine/world';
 import { districtsOf, type District } from '../engine/districts';
 import { BRASS_DARK, mix, onThemeChange, type Palette } from './theme';
 import { sprite } from './token';
@@ -308,7 +309,7 @@ let routeCache: { w: World; tick: number; rev: number; n: number; list: { e: Ent
 function routesOf(w: World) {
   if (routeCache && routeCache.w === w && routeCache.rev === w.railRev && routeCache.n === w.ents.size && Math.abs(w.tick - routeCache.tick) < 60) return routeCache.list;
   const list: { e: Ent; routes: Route[] }[] = [];
-  for (const e of w.ents.values()) if (e.kind === 'station' && e.role === 'in') { const routes = stationRoutes(w, e); if (routes.length) list.push({ e, routes }); }
+  for (const e of stationsOf(w)) if (e.role === 'in') { const routes = stationRoutes(w, e); if (routes.length) list.push({ e, routes }); }
   routeCache = { w, tick: w.tick, rev: w.railRev, n: w.ents.size, list };
   return list;
 }
@@ -644,12 +645,12 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
   const trains: number[] = [];
   if (!off) {
     if (w.rails.size) {
-      const geo = railGeo(w), p = new Path2D();
-      for (let i = 0; i < geo.length; i += 3) {
-        const x = geo[i], y = geo[i + 1], m = geo[i + 2];
-        if (x < x0 || x > x1 || y < y0 || y > y1) continue;
-        if (m & 1) { p.moveTo(sx(x + 0.5), sy(y + 0.5)); p.lineTo(sx(x + 1.5), sy(y + 0.5)); }
-        if (m & 2) { p.moveTo(sx(x + 0.5), sy(y + 0.5)); p.lineTo(sx(x + 0.5), sy(y + 1.5)); }
+      // まっすぐ続く区間ごとに 1 本（1 万マスでも、区間の数だけ）
+      const runs = railRuns(w), p = new Path2D();
+      for (let i = 0; i < runs.length; i += 4) {
+        const ax = runs[i], ay = runs[i + 1], bx = runs[i + 2], by = runs[i + 3];
+        if (bx < x0 || ax > x1 + 1 || by < y0 || ay > y1 + 1) continue;
+        p.moveTo(sx(ax), sy(ay)); p.lineTo(sx(bx), sy(by));
       }
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.strokeStyle = rail.ink; ctx.lineWidth = Math.max(2, z * 0.26); ctx.stroke(p);

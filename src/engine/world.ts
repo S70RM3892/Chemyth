@@ -1033,9 +1033,26 @@ export function tunnelPair(w: World, e: Ent): Ent | null {
   return null;
 }
 /** 積む駅 e とつながる降ろす駅：同じ路線のものを、近い順に */
+/**
+ * 駅の一覧（工場を 1 歩進めるたび・1 コマ描くたびに 1 度だけ、全部の設備から選び直す）。
+ * 同じ回のうちに駅の向き（積む・降ろす）や番線が変わったら、そこで選び直す。
+ * 駅が多い大きな工場で、駅ごとに全部の設備を見直さないため
+ */
+let stationEpoch = 0;
+/** 工場を 1 歩進める前と、1 コマ描く前に呼ぶ（駅の一覧を選び直す合図） */
+export const markEpoch = () => { stationEpoch++; };
+const stationCache = new WeakMap<World, { epoch: number; size: number; list: Ent[]; sig: string[] }>();
+export function stationsOf(w: World): Ent[] {
+  const c = stationCache.get(w);
+  if (c && c.epoch === stationEpoch && c.size === w.ents.size && c.list.every((n, i) => w.ents.get(key(n.x, n.y)) === n && c.sig[i] === `${n.role}|${n.ch}`)) return c.list;
+  const list: Ent[] = [];
+  for (const n of w.ents.values()) if (n.kind === 'station') list.push(n);
+  stationCache.set(w, { epoch: stationEpoch, size: w.ents.size, list, sig: list.map((n) => `${n.role}|${n.ch}`) });
+  return list;
+}
 export function stationTargets(w: World, e: Ent): Ent[] {
   const out: Ent[] = [];
-  for (const n of w.ents.values()) if (n.kind === 'station' && n.role === 'out' && n.ch === e.ch) out.push(n);
+  for (const n of stationsOf(w)) if (n.role === 'out' && n.ch === e.ch) out.push(n);
   const d = (n: Ent) => Math.abs(n.x - e.x) + Math.abs(n.y - e.y);
   return out.sort((a, b) => d(a) - d(b) || a.x - b.x || a.y - b.y);
 }
@@ -1454,6 +1471,7 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
 }
 
 export function step(w: World, dt: number) {
+  markEpoch();
   w.tick++;
   w.playMs += dt * 1000;
   bucket(w); // 何も流れていない間も区切りを作る（在庫の推移と、1 時間の記録が途切れない）
@@ -1800,11 +1818,14 @@ export const FNAME_MAX = 20;
  * セーブを小さくする：設備の欄のうち、null と false は書かない（読むときは、ないのと同じに扱う）。
  * 整数でない数（進み具合・待ち時間・時計）は小数 3 桁まで（1 ミリ秒・0.1 % より細かい違いは、遊びに出ない）
  */
-const slim = (_k: string, v: unknown) => (v === null || v === false ? undefined : typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? Math.round(v * 1000) / 1000 : v);
-const slimEnt = (e: Ent) => JSON.parse(JSON.stringify(e, (k, v) => (k === '' ? v : Array.isArray(v) ? v.map((x) => (typeof x === 'number' && !Number.isInteger(x) ? Math.round(x * 1000) / 1000 : x)) : slim(k, v))));
+const round3 = (v: number) => Math.round(v * 1000) / 1000;
+const slim = (_k: string, v: unknown) => (v === null || v === false ? undefined : typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? round3(v) : v);
+/** 設備の一覧だけを、欄を整えながら 1 回で文字にする（配列の中の null は、場所を保つためにそのまま） */
+const entsJson = (list: Ent[]) => JSON.stringify(list, function (this: unknown, k, v) { return Array.isArray(this) ? (typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? round3(v) : v) : k === '' ? v : slim(k, v); });
 export function serialize(w: World): string {
+  const ents = entsJson([...w.ents.values()].filter((e) => e.kind !== 'part'));
   return JSON.stringify({
-    v: SAVE_VERSION, ents: [...w.ents.values()].filter((e) => e.kind !== 'part').map(slimEnt), chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
+    v: SAVE_VERSION, ents: 0, chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
     rails: [...w.rails], hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, exams: w.exams, calib: w.calib, relearn: w.relearn, hcLog: w.hcLog, side: w.side, night: w.night, dayMs: w.dayMs, tested: w.tested, today: w.today, revDays: w.revDays, ret: w.ret, bonusDay: w.bonusDay, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
     discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, research: w.research, agents: w.agents, cases: w.cases, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
     // 1 時間の流れは、1 分ごとの合計だけを [分, 納品, 指令, 廃棄口, あふれ, 作った] の数の並びで残す（60 行）
@@ -1813,7 +1834,7 @@ export function serialize(w: World): string {
     fname: w.fname || undefined,
     study: w.study,
     pins: w.pins,
-  });
+  }).replace('"ents":0', () => `"ents":${ents}`);
 }
 
 /** 置ける設備の種類か（納品所と 'part' は含まない）。'constructor' のような、どのオブジェクトにもある名前は種類ではない */

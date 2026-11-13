@@ -44,6 +44,7 @@ import { showReview, renderQuiz, calibLine, quizKey } from './ui/review';
 import { showWeek, todayExtras } from './ui/learn2';
 import { logNight } from './engine/learn';
 import { conflictSlots, flushAccount, initAccount, onAccountChange, slotErased, syncState } from './ui/account';
+import { railRuns } from './ui/railruns';
 import { bigGet, bigReady } from './ui/bigstore';
 import { applySkin, applyTheme, onThemeChange, skinName } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
@@ -1137,7 +1138,9 @@ function boot(data: HotData) {
     // 線路（1 階だけ）と駅
     if (!floor && world.rails.size) {
       mctx.fillStyle = P.ink; mctx.globalAlpha = 0.55;
-      for (const kk of world.rails.keys()) { const [rx, ry] = kk.split(',').map(Number); mctx.fillRect(px(rx + 0.25), py(ry + 0.25), Math.max(1, k * 0.5), Math.max(1, k * 0.5)); }
+      // 線路は、まっすぐ続く区間ごとに 1 本の細い四角（1 万マスでも、区間の数だけ）
+      const runs = railRuns(world), wd = Math.max(1, k * 0.5);
+      for (let i = 0; i < runs.length; i += 4) { const ax = px(runs[i] - 0.25), ay = py(runs[i + 1] - 0.25), bx = px(runs[i + 2] - 0.25), by = py(runs[i + 3] - 0.25); mctx.fillRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax) + wd, Math.abs(by - ay) + wd); }
       mctx.globalAlpha = 1;
     }
     mctx.strokeStyle = P.ink; mctx.lineWidth = 1.2;
@@ -2252,18 +2255,23 @@ function boot(data: HotData) {
   // ---- ループ ----
   let miniTick = 0, idleSkip = 0;
   let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0, chapterBefore = 0, slowFrames = 0;
-  const STEP = 1 / 60;
+  /** 工場を進める 1 歩。軽量スキンは 1/30 秒（結果は 1/60 秒と同じ：ベルトは 1 歩に 1 マスまでで、いちばん速いベルトでも 1 秒に 6 マスほど。手間は半分） */
+  let STEP = 1 / 60, saveMs = 0;
   /** 1 コマのうち、工場を進め、出来事を知らせ、ときどき保存する所 */
   const simFrame = (now: number, dt: number) => {
     if (slot) {
       // 「限られた原料」は、予想を答えるまで動かさない
       if (modal.hidden && closingEl.hidden && !(sandbox?.c.kind === 'limit' && !world.pred)) {
+        STEP = lite() ? 1 / 30 : 1 / 60;
         acc += dt * speed;
         let guard = 0;
-        const s0 = PERF ? performance.now() : 0;
-        while (acc >= STEP && guard++ < 24) { step(world, STEP); acc -= STEP; }
+        const s0 = performance.now();
+        // 1 コマで工場を進めてよい時間（軽量 6 ms、ほか 10 ms）。大きな工場で端末が追いつかないときは、追いつこうとして
+        // 1 コマに何十歩も進め、さらに遅くなる（止まったように見える）のではなく、工場の時間をゆっくり進める
+        const budget = lite() ? 6 : 10;
+        while (acc >= STEP && guard++ < 24) { step(world, STEP); acc -= STEP; if (performance.now() - s0 > budget) break; }
         if (PERF) PERF.step.push(performance.now() - s0);
-        if (acc > STEP * 4) acc = 0;
+        if (acc > STEP * 4) acc = STEP * 4;
       }
       if (sandbox && !sandbox.done && modal.hidden) { const st = sandbox.c.check(world); if (st.done) finishCase(st); }
       if (!world.events.length) chapterBefore = world.chapter;
@@ -2312,7 +2320,8 @@ function boot(data: HotData) {
       if (evSave) save();
       if (!sandbox) statsTick(world); // 指令の見込みの記録と、実績（半秒に 1 回）
       sinceSave += dt;
-      if (sinceSave > 5) { sinceSave = 0; save(); saveCam(); paintSync(); }
+      // 自動保存は 5 秒ごと。大きな工場で 1 回の保存に時間がかかるときは、間をあける（保存 1 回の時間の 400 倍、最長 30 秒。閉じるときと出来事のあとは、これまでどおりすぐ保存する）
+      if (sinceSave > Math.min(30, Math.max(5, saveMs * 0.4))) { sinceSave = 0; const t0 = performance.now(); save(); saveMs = performance.now() - t0; saveCam(); paintSync(); }
       if (!warned && pf.breakMin && now - began > pf.breakMin * 60000) { warned = true; breakReminder(pf.breakMin); }
     }
   };
