@@ -15,7 +15,7 @@ import { hasSub, label, sub } from '../content/substances';
 import { dayKey, dayNum, review, type Card } from './fsrs';
 import { leeches, recallNow } from './habit';
 import { chapterRecipes } from './pace';
-import { CONFUSABLE, condsInProducts, nameTells, partsFor, topicOf, type Quiz } from './quiz';
+import { CONFUSABLE, condsInProducts, condTells, nameTells, partsFor, topicOf, type Quiz } from './quiz';
 import { platingOf, type Mistake, type World } from './world';
 import { NIGHT_KEEP, WHY_KEEP, type NightRec, type Why } from './study';
 
@@ -55,7 +55,7 @@ export function hintFor(q: Quiz): Hint | null {
   if (q.part === 'coef') return { text: `${MACHINES[r.machine].name}・${CONDITIONS[r.machine].label}：${r.accept.join(' または ')}。両辺の原子の数を、元素ごとに数えて比べろ。`, drop: q.choices.slice(3) };
   const eq = equationOf(r);
   // 条件の名前が反応式に入っているとき（加硫 → 加硫ゴム など）は、式を見せずに選択肢を 2 つに絞る。問いがもう反応式で出ているときも
-  if ((q.part === 'cond' && r.accept.some((c) => eq.includes(c))) || q.q.includes(eq)) return { text: '選択肢を 2 つに絞った。', drop: q.choices.slice(2) };
+  if ((q.part === 'cond' && condTells(r, eq)) || q.q.includes(eq)) return { text: '選択肢を 2 つに絞った。', drop: q.choices.slice(2) };
   return { text: `反応式：${eq}`, drop: [] };
 }
 

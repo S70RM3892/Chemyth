@@ -2,17 +2,23 @@ import { describe, expect, it, vi } from 'vitest';
 import { capByExams, dayKey, initS, migrate, review, S_MAX, type Card } from '../src/engine/fsrs';
 import { answer, deserialize, EXAMS_DEFAULT, newWorld, serialize } from '../src/engine/world';
 import { forecast, hintFor, weekReport } from '../src/engine/learn';
-import { learnedToday, partsFor, recipeQuiz } from '../src/engine/quiz';
+import { learnedToday, nameTells, partsFor, recipeQuiz } from '../src/engine/quiz';
 import { applyTestOut, canTestOut, chapterRecipes, testOutQuiz } from '../src/engine/pace';
 import { CHAPTERS } from '../src/content/goals';
 import { KNOWLEDGE } from '../src/content/knowledge';
 import { RECIPES, productsOf, type Recipe } from '../src/content/recipes';
 import { label, sub } from '../src/content/substances';
+import { equationOf } from '../src/content/looks';
 
 const DAY = 86400000;
 const EX = EXAMS_DEFAULT;
 const rec = (id: string) => RECIPES.find((r) => r.id === id)!;
 const lcg = (seed: number) => { let x = seed; return () => { x = (x * 16807) % 2147483647; return x / 2147483647; }; };
+/** 物質の名前と、その（）の外と中（炭化カルシウム（カーバイド）→ 炭化カルシウム・カーバイド） */
+const nameAndParts = (n: string) => [n, ...n.split(/[（）]/).map((t) => t.trim()).filter((t) => t.length >= 2)];
+/** 正解の条件を ・ や（）で区切った語の、3 文字のつながり。原料の名前・式に入っているもの（ペプチド → ペプチダーゼ）は除く */
+const condRuns = (r: Recipe) => r.accept.flatMap((c) => c.split(/[・（）｜+\s]+/)).flatMap((p) => Array.from({ length: Math.max(0, p.length - 2) }, (_, i) => p.slice(i, i + 3)))
+  .filter((w) => !r.inputs.some(([s]) => sub(s).name.includes(w) || label(s).includes(w)));
 
 describe('試験日に合わせた間隔', () => {
   it('試験の手前 10 日間：決まった日に 1 回だけ出し、1 時間ごとに出し直さない（安定度もふくらまない）', () => {
@@ -98,21 +104,25 @@ describe('試験日に合わせた間隔', () => {
 
 describe('ヒントと問いの文に答えを出さない', () => {
   it('生成物を問うときのヒント：名前に生成物が入る反応は名前を出さず、原料の名前の一部としてだけ入るものは出す', () => {
-    for (const id of ['hcl-synthesis', 'methanol', 'methyl-salicylate', 'ethylene-oxide', 'acetylene', 'bleaching-powder', 'cl-br', 'polyethylene', 'vulcanization']) {
+    // 炭化カルシウム（カーバイド）・DNA（ポリヌクレオチド）のように名前に（）があるものや、慣用名（硫安・過リン酸石灰）も
+    for (const id of ['hcl-synthesis', 'methanol', 'methyl-salicylate', 'ethylene-oxide', 'acetylene', 'bleaching-powder', 'cl-br', 'polyethylene', 'vulcanization', 'carbide', 'dna', 'scrub-nh3', 'superphosphate']) {
       const h = hintFor(recipeQuiz(rec(id), 'products', lcg(3))!)!;
       expect(h.text, id).toMatch(/^できるものは/);
     }
-    for (const id of ['cuso4-electrolysis', 'seawater-distillation', 'zinc-reduce', 'hi-decomp', 'scrub-h2s']) {
+    for (const id of ['cuso4-electrolysis', 'seawater-distillation', 'zinc-reduce', 'hi-decomp', 'scrub-h2s', 'hall-heroult', 'lime-kiln']) {
       expect(hintFor(recipeQuiz(rec(id), 'products', lcg(3))!)!.text, id).toBe(`反応の名前：${rec(id).name}`);
     }
-    // どの反応でも、ヒントに出した名前は、原料の名前を除くと、生成物の名前・式・別名を含まない
+    // 原料の名前の（）の外の語（陽イオン交換樹脂（H 型））は、生成物（陽イオン交換樹脂（Na 型））の語と同じでも数えない
+    expect(nameTells({ ...rec('ion-exchange'), name: '陽イオン交換樹脂による交換' }, ['resinNa'])).toBe(false);
+    expect(nameTells({ ...rec('ion-exchange'), name: '陽イオン交換樹脂（Na 型）の生成' }, ['resinNa'])).toBe(true);
+    // どの反応でも、ヒントに出した名前は、原料の名前（（）の外と中も）を除くと、生成物の名前（（）の外と中も）・式・別名を含まない
     for (const r of RECIPES) {
       if (!partsFor(r).includes('products')) continue;
       const h = hintFor(recipeQuiz(r, 'products', lcg(5))!)!;
       if (!h.text.startsWith('反応の名前')) continue;
       let rest = r.name;
-      for (const n of r.inputs.map(([s]) => sub(s).name).sort((a, b) => b.length - a.length)) rest = rest.split(n).join('｜');
-      for (const [s] of productsOf(r)) for (const w of [label(s), sub(s).name, ...(sub(s).aliases ?? [])]) expect(rest.includes(w), `${r.id}：${w}`).toBe(false);
+      for (const n of r.inputs.flatMap(([s]) => nameAndParts(sub(s).name)).sort((a, b) => b.length - a.length)) rest = rest.split(n).join('｜');
+      for (const [s] of productsOf(r)) for (const w of [label(s), ...nameAndParts(sub(s).name), ...(sub(s).aliases ?? [])]) expect(rest.includes(w), `${r.id}：${w}`).toBe(false);
     }
   });
   it('生成物の問い：同じ装置・同じ原料・問いに出した条件で正しい別の生成物は、まちがいの選択肢に出さない', () => {
@@ -145,15 +155,28 @@ describe('ヒントと問いの文に答えを出さない', () => {
         const q = recipeQuiz(r, 'cond', lcg(seed));
         if (!q) continue;
         for (const c of r.accept) expect(q.q.includes(c), `${r.id}：${q.q}`).toBe(false);
+        // 条件の語と 3 文字以上つながって重なるところもない（「…水溶液の電気分解（白金電極）」と「水溶液・白金電極」）
+        for (const w of condRuns(r)) expect(q.q.includes(w), `${r.id}：${q.q}（${w}）`).toBe(false);
         // 式で問うときのヒントは、式をもう一度見せずに選択肢を絞る
         const h = hintFor(q)!;
         if (q.q.includes('→')) { expect(h.drop.length, r.id).toBe(2); expect(h.drop).not.toContain(q.choices[0]); }
+        // ヒントに式を見せるときも、式に条件は入っていない
+        if (h.text.startsWith('反応式')) for (const w of [...r.accept, ...condRuns(r)]) expect(h.text.includes(w), `${r.id}：${h.text}（${w}）`).toBe(false);
         n++;
       }
     }
     expect(n).toBeGreaterThan(100);
     expect(recipeQuiz(rec('coal-carbonization'), 'cond', lcg(1))!.q).toBe('「石炭 → C + コールタール」の分離法は？');
     expect(recipeQuiz(rec('vulcanization'), 'cond', lcg(1))!.q).toBe('「生ゴム + S → ？」の触媒・条件は？');
+    // 電気分解：名前の「水溶液」「白金電極」「炭素電極」「食塩水」「イオン交換膜」が条件を明かすので、反応式で問う
+    for (const id of ['brine-electrolysis', 'cuso4-electrolysis', 'agno3-electrolysis', 'cucl2-electrolysis', 'ki-electrolysis']) {
+      for (let seed = 1; seed <= 5; seed++) expect(recipeQuiz(rec(id), 'cond', lcg(seed))!.q, id).toBe(`「${equationOf(rec(id))}」の電解の条件は？`);
+    }
+    expect(recipeQuiz(rec('cuso4-electrolysis'), 'cond', lcg(1))!.q).toBe('「2CuSO₄ + 2H₂O → 2Cu + O₂ + 2H₂SO₄」の電解の条件は？');
+    // 酵素の名前が基質から来ているもの（ペプチド → ペプチダーゼ）は、それを結びつけるのが覚えることなので、名前で問う
+    expect(recipeQuiz(rec('peptidolysis'), 'cond', lcg(1))!.q).toBe('「ペプチドの加水分解」の触媒・条件は？');
+    // 式に条件の物質が入るとき（鉛蓄電池の充電の H₂SO₄、ダニエル電池の ZnSO₄）は、ヒントに式を見せず選択肢を絞る
+    for (const id of ['lead-charge', 'daniell']) expect(hintFor(recipeQuiz(rec(id), 'cond', lcg(1))!)!.text, id).toBe('選択肢を 2 つに絞った。');
     // 生成物の問いでも、生成物の名前のもとになった条件（加硫 → 加硫ゴム）は伏せる
     expect(recipeQuiz(rec('vulcanization'), 'products', lcg(1))!.q).toBe('反応器：生ゴム + S → できるものは？');
   });
