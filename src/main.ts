@@ -1260,6 +1260,7 @@ function boot(data: HotData) {
     paintArea();
     const t = TOOLS.find((x) => x.id === id)!;
     for (const [k, el] of buttons) { el.classList.toggle('on', k === tool); el.setAttribute('aria-pressed', String(k === tool)); }
+    showPicked();
     tip.replaceChildren(h('b', {}, clone ? `${t.name}をコピー中` : t.name), clone ? 'タップした場所に、同じ設定のものを貼りつける。ほかの道具を選ぶとやめる。' : t.tip);
     // 説明は選んだ直後だけ出して、じきに消す（出しっぱなしだと下側が地図をふさぐ）
     tip.hidden = false;
@@ -1305,6 +1306,16 @@ function boot(data: HotData) {
       for (const id of g.tools) buttons.get(id)?.classList.toggle('off', g.id !== tab);
     }
     b2.paintTabs(tab);
+    showPicked();
+  }
+  /** 選んだ道具が、棚の見えている所の外（横に送った先）にあれば、見える所まで送る。いまの棚にないときは、棚の頭へ（狭い画面では、棚の一部しか見えない） */
+  function showPicked() {
+    const b = buttons.get(tool);
+    if (bar.scrollWidth <= bar.clientWidth) return;
+    if (!b || !b.offsetWidth) { bar.scrollLeft = 0; return; }
+    const r = b.getBoundingClientRect(), br = bar.getBoundingClientRect();
+    if (r.left < br.left) bar.scrollLeft -= br.left - r.left;
+    else if (r.right > br.right) bar.scrollLeft += r.right - br.right;
   }
   paintTabs();
   /** 指令が進むと使える道具が増える */

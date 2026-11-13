@@ -84,7 +84,7 @@ b { font-weight: 700; }
 #goal-bar { height: 100%; width: 0; background: var(--red); transition: width 0.25s; }
 
 /* ---- 右上：見出しタブ ---- */
-#topbtns { position: absolute; top: 14px; right: var(--gr); display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: calc(100% - 350px); }
+#topbtns { position: absolute; top: 14px; right: var(--gr); display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: calc(100% - var(--goal-r, 334px) - var(--gr) - 8px); pointer-events: none; }
 #pts { font-family: var(--font-mono); color: var(--red); margin-left: 3px; font-variant-numeric: tabular-nums; }
 #due:not(:empty) { background: var(--red); color: var(--on-ink); border-radius: 3px; padding: 0 6px; font-family: var(--font-mono); font-size: 13px; margin-left: 4px; }
 #b-speed.hot { box-shadow: inset 0 -5px 0 var(--hi), 2px 2px 0 var(--shadow); }
@@ -94,18 +94,18 @@ b { font-weight: 700; }
 @media (max-width: 640px) { #goal-hint { display: none; } #goal::after { display: none; } #topbtns { top: 118px; left: var(--gl); max-width: none; justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 4px; } #topbtns button { flex: 0 0 auto; } }
 
 /* ---- 選んだものの上に出る操作 ---- */
-#act { position: absolute; left: 0; top: 0; display: flex; gap: 0; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px; box-shadow: 3px 3px 0 var(--shadow); will-change: transform; overflow: hidden; }
+#act { position: absolute; left: 0; top: 0; z-index: 4; display: flex; gap: 0; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px; box-shadow: 3px 3px 0 var(--shadow); will-change: transform; overflow: hidden; }
 #act button { min-width: 50px; min-height: 48px; border: 0; border-right: var(--bw) solid var(--ink); background: transparent; font-weight: 700; font-size: 17px; padding: 0 14px; }
 #act button:last-child { border-right: 0; }
 #act #act-open { background: var(--ink); color: var(--on-ink); font-size: 15px; }
 #act #act-erase { color: var(--red); }
 
 /* ---- お知らせ：赤ペンの走り書き ---- */
-#toast { position: absolute; left: 50%; bottom: 104px; z-index: 4; transform: translateX(-50%) rotate(-0.6deg); max-width: calc(100% - 32px); background: var(--card); color: var(--red); border: var(--bw) solid var(--red); padding: 8px 18px; border-radius: 4px; font-family: var(--font-hand); font-weight: 600; font-size: 16px; text-align: center; pointer-events: none; box-shadow: 3px 3px 0 var(--shadow); animation: rise 0.2s ease; }
+#toast { position: absolute; left: 50%; bottom: calc(var(--dock-b) / var(--z, 1)); z-index: 7; transform: translateX(-50%) rotate(-0.6deg); max-width: calc(100% - 32px); background: var(--card); color: var(--red); border: var(--bw) solid var(--red); padding: 8px 18px; border-radius: 4px; font-family: var(--font-hand); font-weight: 600; font-size: 16px; text-align: center; pointer-events: none; box-shadow: 3px 3px 0 var(--shadow); animation: rise 0.2s ease; }
 @keyframes rise { from { opacity: 0; transform: translate(-50%, 8px) rotate(-0.6deg); } }
 
 /* ---- 正解のはんこ ---- */
-#stamp { position: absolute; left: 50%; top: 42%; width: 190px; height: 190px; margin: -95px 0 0 -95px; border: 7px solid var(--red); border-radius: 50%; color: var(--red); font-family: var(--font-hand); font-weight: 600; font-size: 40px; display: grid; place-items: center; pointer-events: none; z-index: 5; animation: stamp 1s ease forwards; }
+#stamp { position: absolute; left: 50%; top: 42%; width: 190px; height: 190px; margin: -95px 0 0 -95px; border: 7px solid var(--red); border-radius: 50%; color: var(--red); font-family: var(--font-hand); font-weight: 600; font-size: 40px; display: grid; place-items: center; pointer-events: none; z-index: 7; animation: stamp 1s ease forwards; }
 #stamp::before { content: ""; position: absolute; inset: 9px; border: 2px solid var(--red); border-radius: 50%; }
 @keyframes stamp { 0% { opacity: 0; transform: scale(1.7) rotate(-14deg); } 14% { opacity: 0.92; transform: scale(1) rotate(-14deg); } 70% { opacity: 0.92; transform: scale(1) rotate(-14deg); } 100% { opacity: 0; transform: scale(1) rotate(-14deg); } }
 
@@ -122,7 +122,7 @@ b { font-weight: 700; }
 /* 今夜の 10 問：就寝の 4 時間前から 1 時間前まで、上の段に出る */
 #b-night { background: var(--hi-soft); font-weight: 700; }
 /* 工場の中の復習：左下、道具の段の上。地図は、そのまま触れる */
-#rvcard { position: absolute; left: var(--gl); bottom: 104px; width: min(390px, calc(100% - var(--gl) - var(--gr))); max-height: 56vh; overflow-y: auto; background: var(--card); color: var(--ink); border: var(--bw) solid var(--ink); border-radius: 6px; box-shadow: 3px 3px 0 var(--shadow); padding: 8px 12px 12px; z-index: 3; }
+#rvcard { position: absolute; left: var(--gl); bottom: calc(var(--dock-b) / var(--z, 1)); width: min(390px, calc(100% - var(--gl) - var(--gr))); max-height: 56vh; overflow-y: auto; background: var(--card); color: var(--ink); border: var(--bw) solid var(--ink); border-radius: 6px; box-shadow: 3px 3px 0 var(--shadow); padding: 8px 12px 12px; z-index: 3; }
 .in-title #rvcard { display: none; }
 #rvcard .rv-top { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 #rvcard .rv-top .grow { flex: 1; }
@@ -143,7 +143,7 @@ b { font-weight: 700; }
 .chapter-row .testout { white-space: nowrap; }
 .pace { font-size: 13px; line-height: 1.6; background: var(--hi-soft); padding: 8px 10px; border-radius: 4px; }
 /* 全体の小地図：右下、道具の段の上。押すとその場所へ移る */
-#minimap { position: absolute; right: var(--gr); bottom: 104px; width: 220px; height: 150px; background: color-mix(in srgb, var(--card) 90%, transparent); border: var(--bw) solid var(--ink); border-radius: 6px; box-shadow: 3px 3px 0 var(--shadow); z-index: 2; touch-action: none; cursor: pointer; }
+#minimap { position: absolute; right: var(--gr); bottom: var(--dock-b); width: 220px; height: 150px; background: color-mix(in srgb, var(--card) 90%, transparent); border: var(--bw) solid var(--ink); border-radius: 6px; box-shadow: 3px 3px 0 var(--shadow); z-index: 2; touch-action: none; cursor: pointer; }
 .in-title #minimap { visibility: hidden; }
 @media (max-width: 860px), (max-height: 560px) { #minimap { display: none; } }
 #dock { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 var(--gr) calc(6px + env(safe-area-inset-bottom, 0px)) var(--gl); display: grid; justify-items: center; gap: 4px; pointer-events: none; }
@@ -289,25 +289,25 @@ b { font-weight: 700; }
 .clues li::marker { font-family: var(--font-mono); font-weight: 600; color: var(--red); }
 .pep-line { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .pep-line .slot { min-width: 0; flex: 0 1 auto; padding: 6px 10px; font-size: 16px; }
-#area-act { position: absolute; left: 50%; top: 72px; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; align-items: center; z-index: 3; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px; padding: 6px 8px 6px 12px; box-shadow: 2px 2px 0 var(--shadow); font-size: 13px; max-width: calc(100% - 32px); }
+#area-act { position: absolute; left: 50%; top: calc((var(--top-b, 64px) + 8px) / var(--z, 1)); transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; align-items: center; z-index: 3; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px; padding: 6px 8px 6px 12px; box-shadow: 2px 2px 0 var(--shadow); font-size: 13px; max-width: calc(100% - 32px); }
 #area-n { flex: 1 1 180px; min-width: 0; }
 #area-act .nudge { display: inline-flex; gap: 2px; }
 #area-act .nudge button { min-width: 40px; padding: 6px 8px; }
 #area-act .nudge[hidden] { display: none; }
 /* 選んだ設備の状態の一行（操作の帯の上） */
-#act-note { position: absolute; left: 0; top: 0; z-index: 2; margin: 0; max-width: min(420px, calc(100% - 24px)); padding: 3px 10px; background: var(--card); color: var(--ink); border: 1.5px solid var(--ink); border-radius: 4px; font-size: 13px; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; will-change: transform; }
+#act-note { position: absolute; left: 0; top: 0; z-index: 4; margin: 0; max-width: min(420px, calc(100% - 24px)); padding: 3px 10px; background: var(--card); color: var(--ink); border: 1.5px solid var(--ink); border-radius: 4px; font-size: 13px; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; will-change: transform; }
 .in-title #act-note, .in-title #marks, .in-title #paused { visibility: hidden; }
 /* 覚えた場所と、小地図の大きさ */
-#marks { position: absolute; right: var(--gr); bottom: calc(104px + 150px + 6px); z-index: 2; display: flex; gap: 4px; }
+#marks { position: absolute; right: var(--gr); bottom: calc(var(--dock-b) + 150px + 6px); z-index: 2; display: flex; gap: 4px; }
 #marks button { min-height: 32px; padding: 2px 10px; font-size: 12px; border: 1.5px solid var(--ink); border-radius: 4px; background: var(--card); color: var(--ink); }
 #marks button.set { background: var(--ink); color: var(--on-ink); }
 .mini-big #minimap { width: 340px; height: 232px; }
-.mini-big #marks { bottom: calc(104px + 232px + 6px); }
+.mini-big #marks { bottom: calc(var(--dock-b) + 232px + 6px); }
 /* 全体が画面に収まって小地図を隠しているあいだは、場所のボタンを下へ */
-#app.mini-fit #marks { bottom: 104px; }
+#app.mini-fit #marks { bottom: var(--dock-b); }
 @media (max-width: 860px), (max-height: 560px) { #marks { display: none; } }
 /* 一時停止中の帯 */
-#paused { position: absolute; left: 50%; top: 70px; transform: translateX(-50%); z-index: 2; padding: 4px 14px; border: 2px solid var(--ink); border-radius: 4px; background: var(--card); color: var(--ink); font-weight: 700; font-size: 14px; pointer-events: none; }
+#paused { position: absolute; left: 50%; top: calc(max(var(--top-b, 64px), var(--band-b, 0px)) + 8px); transform: translateX(-50%); z-index: 2; padding: 4px 14px; border: 2px solid var(--ink); border-radius: 4px; background: var(--card); color: var(--ink); font-weight: 700; font-size: 14px; pointer-events: none; }
 #paused .muted { font-weight: 500; font-size: 12px; }
 /* 同期の印（メニューの右肩） */
 #b-menu { position: relative; }
@@ -884,8 +884,8 @@ html.hc :is(#tabs button, #opts button, #tip, #act-note, .gl-name) { border-colo
 html.hc .tool.on { box-shadow: inset 0 0 0 2px var(--ink); }
 /* 画面の明るさ：黒を薄く重ねる（明るさを下げたのと同じ見え方で、描く手間が少ない） */
 html.dimmed #app::after { content: ""; position: absolute; inset: 0; z-index: 40; background: #000; opacity: var(--dim, 0); pointer-events: none; }
-/* 通知を上に：指令の札の下（拡大している通知は、位置も拡大されるので倍率で割る） */
-html.toast-top #toast { bottom: auto; top: calc((var(--goal-b, 150px) + 8px) / var(--z, 1)); }
+/* 通知を上に：指令の札と上の帯の下（範囲選択の帯・コピー中の帯が出ていれば、その下）。拡大している通知は、位置も拡大されるので倍率で割る */
+html.toast-top #toast { bottom: auto; top: calc((max(var(--top-b, 64px), var(--band-b, 0px)) + 8px) / var(--z, 1)); }
 html.toast-top #app.focus #toast { top: calc((60px + var(--gt)) / var(--z, 1)); }
 /* 上の帯：時計と、つながらないときの印 */
 #clock { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; min-height: 44px; border: 1.5px dashed var(--soft); border-radius: 5px; background: var(--card); color: var(--ink); font-size: 12px; font-weight: 700; white-space: nowrap; flex: 0 0 auto; }
@@ -925,12 +925,14 @@ html.toast-top #app.focus #toast { top: calc((60px + var(--gt)) / var(--z, 1)); 
 .in-title #tour { display: none; }
 /* 下の道具の段：列の幅を画面の幅までにする（道具が増えると、道具の棚が画面より広がり、右端の道具に届かなかった。いまは棚の中を横に送れる） */
 #dock { grid-template-columns: minmax(0, 1fr); }
-/* 縦長のスマホ（幅 640 以下）：上の帯をいちばん上の 1 段に、指令をその下に。範囲選択の帯・「停止中」・上に出す通知は、指令の札の下（--goal-b は settings2.ts で測る） */
+/* 縦長のスマホ（幅 640 以下）：上の帯をいちばん上の 1 段に、指令をその下に。範囲選択の帯・「停止中」・上に出す通知は、指令の札の下（--top-b・--band-b は settings2.ts で測る） */
 @media (max-width: 640px) {
-  #topbtns { top: calc(8px + var(--gt)); }
+  /* 帯は横に送れる箱で、はみ出す所は切れる。上に余白をとって、ボタンの右肩の印と枠を収める（ボタンの位置は変えない） */
+  #topbtns { top: calc(2px + var(--gt)); padding-top: 6px; }
   #goal { top: calc((60px + var(--gt)) / var(--z, 1)); }
   html.big-btn #goal { top: calc((78px + var(--gt)) / var(--z, 1)); }
-  #area-act, #paused, html.toast-top #toast { top: calc(var(--goal-b, 150px) + 8px); }
+  #area-act { top: calc(var(--top-b, 150px) + 8px); }
+  #paused, html.toast-top #toast { top: calc(max(var(--top-b, 64px), var(--band-b, 0px)) + 8px); }
   html.toast-top #app.focus #toast { top: calc(60px + var(--gt)); }
   /* 通知は画面の幅いっぱいまで使う（真ん中寄せのままだと、半分の幅で折り返していた） */
   #toast { width: max-content; max-width: calc(100vw - 32px); }
@@ -1015,10 +1017,10 @@ table.week td.n { color: var(--ink); }
 #tabs #tab-fav { color: var(--red); }
 #tabs #tab-fav.on { color: var(--on-ink); }
 /* 拡大・縮小のボタン（片手で使う）と、道具の棚の寄せ */
-#zoom2 { position: absolute; right: var(--gr); top: 50%; transform: translateY(-50%); z-index: 2; display: grid; gap: 8px; }
+#zoom2 { position: absolute; right: var(--gr); top: var(--z2-r, calc(50% - 56px)); z-index: 2; display: grid; gap: 8px; }
 #zoom2 button { width: 52px; height: 52px; border: var(--bw) solid var(--ink); border-radius: 50%; background: var(--card); color: var(--ink); font-size: 26px; font-weight: 700; line-height: 1; box-shadow: 2px 2px 0 var(--shadow); }
 html.big-btn #zoom2 button { width: 64px; height: 64px; }
-html.hand-left #zoom2 { right: auto; left: var(--gl); }
+html.hand-left #zoom2 { right: auto; left: var(--gl); top: var(--z2-l, calc(50% - 56px)); }
 html.hand-left #dock { justify-items: start; }
 html.hand-right #dock { justify-items: end; }
 .in-title #zoom2, .in-title #clone-bar { visibility: hidden; }
@@ -1033,10 +1035,10 @@ html.hand-right #dock { justify-items: end; }
 #ask2 .muted { margin: 0; }
 .primary.danger { background: var(--red); border-color: var(--red); color: #fff; }
 /* コピー中の帯 */
-#clone-bar { position: absolute; left: 50%; top: 72px; transform: translateX(-50%); z-index: 3; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 32px); background: var(--hi-soft); color: var(--ink); border: var(--bw) solid var(--ink); border-radius: 5px; padding: 6px 8px 6px 14px; box-shadow: 2px 2px 0 var(--shadow); font-size: 14px; font-weight: 700; line-height: 1.4; }
+#clone-bar { position: absolute; left: 50%; top: calc((var(--top-b, 64px) + 8px) / var(--z, 1)); transform: translateX(-50%); z-index: 3; display: flex; align-items: center; gap: 10px; width: max-content; max-width: calc(100% - 32px); background: var(--hi-soft); color: var(--ink); border: var(--bw) solid var(--ink); border-radius: 5px; padding: 6px 8px 6px 14px; box-shadow: 2px 2px 0 var(--shadow); font-size: 14px; font-weight: 700; line-height: 1.4; }
 #clone-bar button { border: var(--bw) solid var(--ink); background: var(--card); color: var(--ink); border-radius: 4px; padding: 4px 12px; min-height: 38px; font-weight: 700; white-space: nowrap; }
 #app:has(#modal:not([hidden])) #clone-bar { display: none; }
-html.big-text #clone-bar { zoom: 1.15; }
+html.big-text #clone-bar { zoom: var(--z, 1.15); }
 /* 設備の名前の欄・設計図の見本と並べ替え・一時停止中・絞り込み */
 .memo-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 13px; font-weight: 700; }
 .memo-row input { flex: 1; min-width: 0; font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--rule); border-bottom: 1.5px solid var(--ink); border-radius: 3px; padding: 4px 6px; }
@@ -1143,7 +1145,7 @@ button.cn-st { cursor: pointer; min-height: 30px; }
 .ach-at { font-size: 12px; font-family: var(--font-mono); }
 .ach-prog { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; justify-self: stretch; }
 .ach-prog small { font-family: var(--font-mono); font-size: 11px; color: var(--soft); }
-#ach-pop { position: absolute; top: 72px; right: var(--gr); z-index: 5; display: flex; gap: 10px; align-items: center; max-width: min(380px, calc(100% - 32px)); padding: 8px 14px; background: var(--card); color: var(--ink); border: var(--bw) solid var(--ink); border-radius: 6px; box-shadow: 3px 3px 0 var(--shadow); cursor: pointer; animation: ach-in 0.35s ease; }
+#ach-pop { position: absolute; top: calc(max(var(--top-b, 64px), var(--band-b, 0px)) + 8px); right: var(--gr); z-index: 7; display: flex; gap: 10px; align-items: center; max-width: min(380px, calc(100% - 32px)); padding: 8px 14px; background: var(--card); color: var(--ink); border: var(--bw) solid var(--ink); border-radius: 6px; box-shadow: 3px 3px 0 var(--shadow); cursor: pointer; animation: ach-in 0.35s ease; }
 #ach-pop .ach-medal { color: var(--red); font-size: 26px; }
 #ach-pop > span { display: grid; font-weight: 700; font-size: 14px; line-height: 1.4; }
 #ach-pop small { font-weight: 500; font-size: 11.5px; color: var(--soft); }
@@ -1383,3 +1385,35 @@ button.cn-st { cursor: pointer; min-height: 30px; }
 /* 「ずらす」で行き先を待っている間は、⇲ を押したままの見た目にする（もう一度押すと、やめる） */
 #app.arming #act #act-move { background: var(--hi-soft); box-shadow: inset 0 -4px 0 var(--hi); }
 [data-skin="punk"] #app.arming #act #act-move { background: var(--hi); color: #14181d; box-shadow: none; }
+
+/* ===== fix:layout ===== */
+/* 上と下に出す札の位置は、settings2.ts（watchLayout）が測った値で決める：--top-b は指令の札と上の帯の下の端、--band-b は範囲選択の帯・コピー中の帯の下の端（「停止中」・実績の札・上に出す通知は、その下に重ねずに出す）、--dock-h は下の道具の段（説明と棚）の高さ。
+   下の札（通知・復習の札・小地図・場所のボタン）は、ふだんは 104px（棚と 1 行の説明の上）。説明が折り返したり、ボタンや文字を大きくして段が高くなったら、その上へ */
+#app { --dock-b: max(104px, calc(var(--dock-h, 96px) + 8px)); }
+/* 復習の札は、上へ伸びても指令の札と上の帯にかからない高さまで（入らない問いは札の中を送る。低い画面でも 140px は残す） */
+#rvcard { max-height: max(140px, min(56vh, calc(100% - (var(--top-b, 64px) + var(--dock-b) + 16px) / var(--z, 1)))); }
+/* 「停止中」の帯も、真ん中寄せのまま画面の幅まで使う（半分の幅で折り返さない） */
+#paused { width: max-content; max-width: calc(100% - 32px); }
+/* 上の帯は、ボタンだけが押せる（折り返した帯の箱の空いた所は、下の地図や指令の札へ通す）。狭い画面の帯は、横に送るので箱ごと押せる */
+#topbtns > * { pointer-events: auto; }
+@media (max-width: 640px) { #topbtns { pointer-events: auto; } }
+/* 拡大・縮小のボタン：手の側に入らない（小地図や復習の札でふさがる）ときは、反対の側へ */
+html:not(.hand-left) #app.z2-r-full:not(.z2-l-full) #zoom2 { right: auto; left: var(--gl); top: var(--z2-l); }
+html.hand-left #app.z2-l-full:not(.z2-r-full) #zoom2 { left: auto; right: var(--gr); top: var(--z2-r); }
+/* 復習の札を右にしたとき：小地図と場所のボタンに重ねず、その左（場所のボタンだけのときは、その上）に出す */
+@media (min-width: 861px) and (min-height: 561px) {
+  html.card-right #app:has(#minimap:not([hidden])) #rvcard { right: calc((var(--gr) + 230px) / var(--z, 1)); }
+  html.card-right.mini-big #app:has(#minimap:not([hidden])) #rvcard { right: calc((var(--gr) + 350px) / var(--z, 1)); }
+  html.card-right #app.mini-fit:has(#marks:not([hidden])) #rvcard { bottom: calc((var(--dock-b) + 40px) / var(--z, 1)); }
+}
+@media (max-width: 640px) {
+  #rvcard { max-height: max(140px, min(46vh, calc(100% - (var(--top-b, 64px) + var(--dock-b) + 16px) / var(--z, 1)))); }
+  /* 狭い棚では、最近の道具を出さない（出すと、いまの棚の道具が 1 つ分も見えなくなる。よく使う道具は ★ の棚へ） */
+  #recent { display: none; }
+  /* 通知は拡大しない（文字だけ大きくする）ので、位置も倍率で割らない */
+  #toast { bottom: var(--dock-b); }
+  /* コピー中の帯：指令の札の下に、画面の幅いっぱいまで使って出す。拡大はせず、文字だけ大きくする */
+  #clone-bar { top: calc(var(--top-b, 150px) + 8px); max-width: calc(100vw - 24px); gap: 8px; padding: 4px 6px 4px 12px; font-size: 13px; }
+  html.big-text #clone-bar { zoom: 1; font-size: 14.5px; }
+  html.huge-text #clone-bar { font-size: 16px; }
+}
