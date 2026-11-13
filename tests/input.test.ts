@@ -139,6 +139,14 @@ describe('ゆっくりめのタップ', () => {
     expect(log.slice(-1)).toEqual(['end']);
     expect(log.some((l) => l.startsWith('tap'))).toBe(false);
   });
+  it('abort がなければ、早く離しても end で終え、タップにはしない（置いたあとに、そのマスをタップしない）', () => {
+    const { cv, log } = rig(true, { abort: undefined });
+    ptr(cv, 'pointerdown', 1, 300, 300);
+    vi.advanceTimersByTime(300);
+    ptr(cv, 'pointerup', 1, 300, 300);
+    expect(log.slice(-1)).toEqual(['end']);
+    expect(log.some((l) => l.startsWith('tap'))).toBe(false);
+  });
   it('長押しが何も始めなければ、500 ms で press を呼ぶ。それより前に離せば、ただのタップ', () => {
     const a = rig(false);
     ptr(a.cv, 'pointerdown', 1, 300, 300);

@@ -201,8 +201,9 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
     if (!pts.delete(ev.pointerId)) return;
     at = null;
     clearTimeout(holdTimer);
-    // 長押しの見本が出てすぐ（TAP_MS より前）に、動かさずに離した：ゆっくりめのタップ。見本やずらしかけたものは捨てて、タップにする
-    const slowTap = pts.size === 0 && !!start && held && !slid && ev.type === 'pointerup' && performance.now() - firstDown < TAP_MS;
+    // 長押しの見本が出てすぐ（TAP_MS より前）に、動かさずに離した：ゆっくりめのタップ。見本やずらしかけたものは捨てて、タップにする。
+    // 捨てる手段（abort）がなければ、これまでどおり end で終える（end で置いたあとにタップすると、二重の操作になる）
+    const slowTap = !!h.abort && pts.size === 0 && !!start && held && !slid && ev.type === 'pointerup' && performance.now() - firstDown < TAP_MS;
     if (pts.size === 0 && start && moved && !panning) {
       // 指が取り消された（ほかの操作に取られた）ときも、置く前の見本は決めない
       if ((slowTap || ev.type === 'pointercancel') && h.abort) h.abort();
