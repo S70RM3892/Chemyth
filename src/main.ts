@@ -4,7 +4,7 @@ import { HUB_CENTER, LAND, ZONES, hubRect, resourceAt, zoneAt, zoneSpots } from 
 import { ELEMENTS } from './content/elements';
 import { MACHINES } from './content/machines';
 import { label, sub } from './content/substances';
-import { moveEnts, moveRails, researchBlock, UPGRADE_COST, signalOn, stationCap, TANK_CAP, type Item, relearnReady, MOVERS, JAM_SEC, machineState, freeLine, lineNo, LINE_MAX, BIG, FEED_TIERS, flamesFed, addRail, removeRail, setRailMask, stationRoutes, FLOOR_DY, floorOf, groundY, has, liftPartner, footprint, inDoors, maxLanes, mergeDirs, slotCount, slotPort, at, autoDir, beltSpeed, configure, currentGoal, extractInterval, fedTier, flowStats, goalRate, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
+import { moveEnts, moveRails, researchBlock, UPGRADE_COST, signalOn, stationCap, TANK_CAP, type Item, relearnReady, MOVERS, JAM_SEC, machineState, freeLine, lineNo, LINE_MAX, BIG, FEED_TIERS, flamesFed, addRail, removeRail, setRailMask, stationDests, FLOOR_DY, floorOf, groundY, has, liftPartner, footprint, inDoors, maxLanes, mergeDirs, slotCount, slotPort, at, autoDir, beltSpeed, configure, currentGoal, extractInterval, fedTier, flowStats, goalRate, deserialize, doneCount, fitAnchor, goalCount, requiredOf, isMachine, newWorld, place, remove, restore, serialize, sizeOf, step, toolUnlocked, type Dir, type Ent, type Kind, type World } from './engine/world';
 import { productsOf, recipeById } from './content/recipes';
 import { about, chip, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
@@ -1624,7 +1624,7 @@ function boot(data: HotData) {
       b2.strokeEnd();
       if (tool === 'rail' && railsLaid) {
         // 敷き終えた：つながった駅があれば知らせる
-        const linked = [...world.ents.values()].filter((e) => e.kind === 'station' && e.role === 'in' && stationRoutes(world, e).some((r) => r.custom)).length;
+        const linked = [...world.ents.values()].filter((e) => e.kind === 'station' && e.role === 'in' && stationDests(world, e).laid).length;
         toast(`線路を ${railsLaid} マス敷いた。${linked ? `線路でつながった積む駅：${linked} か所。` : 'まだ、積む駅と降ろす駅はつながっていない。'}`, 2600);
         sfx.ok(); railsLaid = 0;
       }
@@ -2256,20 +2256,28 @@ function boot(data: HotData) {
   let miniTick = 0, idleSkip = 0;
   let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0, chapterBefore = 0, slowFrames = 0;
   /** 工場を進める 1 歩。軽量スキンは 1/30 秒（結果は 1/60 秒と同じ：ベルトは 1 歩に 1 マスまでで、いちばん速いベルトでも 1 秒に 6 マスほど。手間は半分） */
-  let STEP = 1 / 60, saveMs = 0;
+  let STEP = 1 / 60, saveMs = 0, stepMs = 0, stepHz = 60;
   /** 1 コマのうち、工場を進め、出来事を知らせ、ときどき保存する所 */
   const simFrame = (now: number, dt: number) => {
     if (slot) {
       // 「限られた原料」は、予想を答えるまで動かさない
       if (modal.hidden && closingEl.hidden && !(sandbox?.c.kind === 'limit' && !world.pred)) {
-        STEP = lite() ? 1 / 30 : 1 / 60;
+        // 1 歩にかかる時間（ならした値）が長い大きな工場では、歩幅を広げる（1/60 → 1/30 → 1/20 秒。工場の時間の進みは同じで、手間が半分・3 分の 1 になる）。
+        // 行ったり来たりしないよう、戻すときは、ゆとりができてから
+        const base = lite() ? 30 : 60;
+        if (stepMs > 12) stepHz = 20;
+        else if (stepMs > 5) { if (stepHz > 30 || stepMs < 9) stepHz = 30; }
+        else if (stepMs < 3) stepHz = base;
+        else if (stepHz < 30) stepHz = 30;
+        if (stepHz > base) stepHz = base;
+        STEP = 1 / stepHz;
         acc += dt * speed;
         let guard = 0;
         const s0 = performance.now();
         // 1 コマで工場を進めてよい時間（軽量 6 ms、ほか 10 ms）。大きな工場で端末が追いつかないときは、追いつこうとして
         // 1 コマに何十歩も進め、さらに遅くなる（止まったように見える）のではなく、工場の時間をゆっくり進める
         const budget = lite() ? 6 : 10;
-        while (acc >= STEP && guard++ < 24) { step(world, STEP); acc -= STEP; if (performance.now() - s0 > budget) break; }
+        while (acc >= STEP && guard++ < 24) { const s1 = performance.now(); step(world, STEP); const now1 = performance.now(); stepMs += (now1 - s1 - stepMs) * 0.1; acc -= STEP; if (now1 - s0 > budget) break; }
         if (PERF) PERF.step.push(performance.now() - s0);
         if (acc > STEP * 4) acc = STEP * 4;
       }
@@ -2485,10 +2493,11 @@ function boot(data: HotData) {
   window.addEventListener('unhandledrejection', onCrash);
   window.addEventListener('pagehide', () => { save(); saveCam(); });
   // 更新のお知らせ：新しい版で、はじめて工場を開いたときに 1 度だけ
-  const NEWS = '2026-11-awake';
+  const NEWS = '2026-11-bigrail';
   const showNews = () => {
     store.setMeta({ news: NEWS });
     showSheet(h('header', {}, h('h2', {}, '更新のお知らせ'), closeBtn()),
+      h('p', {}, h('b', {}, 'とても大きな工場を、軽くした。'), '積む駅が数百・列車が千本・線路が 2 万マスを超える工場で、線路を敷くたびに数秒固まっていたのを直した（道筋を、駅の組ぜんぶではなく、列車が走る分だけ探す）。近づいたとき、採取機と列車がたくさん映る所は、同じ絵を使い回して描く。引いた全体図は、並んだ装置を帯にまとめて塗る。駅と列車の荷を短く書くので、セーブも半分ほどになる。まだ重ければ、メニュー →「データ」で書き出したセーブを見せてほしい。'),
       h('p', {}, h('b', {}, 'スキンを 2 つ足した（タイトルかメニューの見た目で選ぶ）。'), '「軽量」（白い紙／黒い紙）は、飾りをすべて省いた、いちばん軽い見た目：影・光・立体表示なし、地図は等倍の細かさで毎秒 30 コマ、黒い紙は真っ黒の地。重い端末や、電池を長く持たせたいときに。「幻想」（天空の庭／星の海）は、重さを気にしない飾りの見た目：光の川のベルト、宝石の台座の装置、虹色の大水晶の納品所、オーロラと流れ星、花びらと虹。どちらも、装置の中の反応の絵と物質の色は、ほかのスキンと同じ。'),
       h('p', {}, h('b', {}, '「幻想」を、さらに。'), '納品所を中心に、地面いっぱいの大魔法陣がゆっくり回り、動いている装置へ光の脈が伸びる。反応が終わるたびに虹色の星が飛び、納品所から光の柱が立つ。星の海には満月と、ときどき空を渡る光の竜。天空の庭には太陽と蝶。'),
       h('p', {}, h('b', {}, '光と影を、見た目ごとの「部屋の光」にした。'), NOTICE),

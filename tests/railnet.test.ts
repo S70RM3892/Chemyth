@@ -1,0 +1,253 @@
+import { describe, expect, it } from 'vitest';
+import { addRail, at, deserialize, layRail, newWorld, place, railOf, railRoute, remove, serialize, stationDests, stationRoutes, stationsOf, step, TRAIN_CAP, type Ent, type Train, type World } from '../src/engine/world';
+import { LINE_EXACT, lineRuns, TRAIN, trainAt } from '../src/ui/railruns';
+
+// 決まった乱数
+const rng = (seed: number) => { let x = seed; return () => { x = (x * 16807) % 2147483647; return (x - 1) / 2147483646; }; };
+const station = (w: World, x: number, y: number, role: 'in' | 'out', ch = 1): Ent => { place(w, 'station', x, y, 0); const e = at(w, x, y)!; e.role = role; e.ch = ch; return e; };
+/** 確かめ用：幅優先で、駅 a から駅 b までの線路のマスの数（たがいに両側からつながったマスだけを進む）。つながっていなければ -1 */
+function bfsLen(w: World, a: Ent, b: Ent): number {
+  const touch = (e: Ent) => { const out: string[] = []; for (let dx = -1; dx <= 2; dx++) for (let dy = -1; dy <= 2; dy++) { if ((dx === -1 || dx === 2) && (dy === -1 || dy === 2)) continue; const k = `${e.x + dx},${e.y + dy}`; if (w.rails.has(k)) out.push(k); } return out; };
+  const goal = new Set(touch(b)), dist = new Map<string, number>(), q: string[] = [];
+  for (const k of touch(a)) { dist.set(k, 1); q.push(k); }
+  const D = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+  for (let i = 0; i < q.length; i++) {
+    const k = q[i], [x, y] = k.split(',').map(Number), m = w.rails.get(k)!;
+    if (goal.has(k)) return dist.get(k)!;
+    for (let d = 0; d < 4; d++) {
+      if (!((m >> d) & 1)) continue;
+      const nk = `${x + D[d][0]},${y + D[d][1]}`;
+      if (dist.has(nk) || !(((w.rails.get(nk) || 0) >> ((d + 2) % 4)) & 1)) continue;
+      dist.set(nk, dist.get(k)! + 1); q.push(nk);
+    }
+  }
+  return -1;
+}
+
+describe('線路の道探し（行き先へ向かって探す）', () => {
+  it('でたらめに敷いた網でも、道筋はいちばん短い（幅優先で確かめた長さと同じ）。つながらない組は null', () => {
+    for (const seed of [3, 11, 29]) {
+      const r = rng(seed), w = newWorld();
+      // 60×40 の中に、縦横の線をでたらめに敷く（交わる所は分岐点になる）。ところどころ切る
+      for (let i = 0; i < 26; i++) {
+        const horiz = r() < 0.5, c = Math.floor(r() * (horiz ? 40 : 60)), s = Math.floor(r() * 30), e = s + 6 + Math.floor(r() * 24);
+        layRail(w, horiz ? [[100 + s, 200 + c], [100 + Math.min(59, e), 200 + c]] : [[100 + c, 200 + Math.min(s, 30)], [100 + c, 200 + Math.min(39, e)]]);
+      }
+      const keys = [...w.rails.keys()];
+      const sts: Ent[] = [];
+      // 駅は、線路の外に並べ、短い支線で網につなぐ（つながない駅もある）
+      for (let i = 0; i < 12; i++) {
+        const e = station(w, 80 - (i % 2) * 6, 200 + i * 4, i % 3 === 0 ? 'out' : 'in');
+        sts.push(e);
+        if (i % 5 !== 4) { const [tx, ty] = keys[Math.floor(r() * keys.length)].split(',').map(Number); layRail(w, [[e.x + 2, e.y], [tx, e.y], [tx, ty]]); }
+      }
+      let linked = 0;
+      for (const a of sts) for (const b of sts) {
+        if (a === b) continue;
+        const want = bfsLen(w, a, b), got = railRoute(w, a, b);
+        expect(got ? got.tiles.length : -1, `${seed}: ${a.x},${a.y} → ${b.x},${b.y}`).toBe(want);
+        if (got) {
+          linked++;
+          // 道筋は、隣り合うマスを順にたどる
+          for (let i = 1; i < got.tiles.length; i++) expect(Math.abs(got.tiles[i][0] - got.tiles[i - 1][0]) + Math.abs(got.tiles[i][1] - got.tiles[i - 1][1])).toBe(1);
+        }
+      }
+      expect(linked).toBeGreaterThan(10);
+    }
+  });
+  it('行き先は線路のつながりで決まる：つながる降ろす駅があればそこだけ（近い順）。なければ同じ番線のすべて', () => {
+    const w = newWorld();
+    const a = station(w, 0, 100, 'in'), b1 = station(w, 40, 100, 'out'), b2 = station(w, 20, 110, 'out'), other = station(w, 10, 90, 'out', 2);
+    expect(stationDests(w, a)).toEqual({ list: [b2, b1], laid: false });   // 線路なし：近い順にすべて（番線の違う駅は入らない）
+    layRail(w, [[2, 100], [39, 100]]);
+    expect(stationDests(w, a)).toEqual({ list: [b1], laid: true });
+    expect(stationRoutes(w, a).map((q) => [q.dest, q.custom])).toEqual([[b1, true]]);
+    layRail(w, [[20, 100], [20, 109]]);
+    expect(stationDests(w, a).list).toEqual([b2, b1]);
+    expect(stationDests(w, other).list).toEqual([]);                        // 降ろす駅には行き先がない
+    // 番線を変えると、すぐ行き先が変わる
+    b1.ch = 2;
+    expect(stationDests(w, a).list).toEqual([b2]);
+  });
+  it('駅を置いた・消したは、同じ回のうちでもすぐ一覧に出る（設備の数が同じままでも）', () => {
+    const w = newWorld();
+    for (let i = 0; i < 4; i++) place(w, 'belt', 300 + i, 300, 0);
+    const a = station(w, 0, 100, 'in');
+    expect(stationsOf(w)).toEqual([a]);
+    const before = w.ents.size;
+    for (let i = 0; i < 4; i++) remove(w, 300 + i, 300);
+    const b = station(w, 30, 100, 'out');
+    expect(w.ents.size).toBe(before);
+    expect(stationsOf(w)).toEqual([a, b]);
+    remove(w, 30, 100);
+    expect(stationsOf(w)).toEqual([a]);
+  });
+});
+
+describe('列車の場所（道のりからじかに出す）', () => {
+  /** これまでの出し方：曲がり角だけの折れ線を、道のりの割合でたどる */
+  const slow = (pts: [number, number][], p: number) => {
+    const segs = pts.slice(1).map((q, k) => Math.abs(q[0] - pts[k][0]) + Math.abs(q[1] - pts[k][1]));
+    let d = Math.max(0, Math.min(1, p)) * segs.reduce((x, y) => x + y, 0), a = 0;
+    while (a < segs.length - 1 && d > segs[a]) { d -= segs[a]; a++; }
+    const f = segs[a] ? Math.min(1, d / segs[a]) : 0;
+    return [pts[a][0] + (pts[a + 1][0] - pts[a][0]) * f, pts[a][1] + (pts[a + 1][1] - pts[a][1]) * f];
+  };
+  it('敷いた線路でも、自動の仮線路でも、折れ線をたどったときと同じ場所になる', () => {
+    const w = newWorld();
+    const a = station(w, 0, 100, 'in'), b = station(w, 40, 80, 'out');
+    for (const laid of [false, true]) {
+      if (laid) layRail(w, [[2, 100], [25, 100], [25, 81], [39, 81]]);
+      const r = railOf(w, a, b)!;
+      expect(r.custom).toBe(laid);
+      for (let i = 0; i <= 200; i++) {
+        const tr: Train = { p: i / 200, back: i % 2 === 1, cargo: [], wait: 0, to: `${b.x},${b.y}` };
+        trainAt(w, a, tr);
+        const [x, y] = slow(r.pts, tr.p);
+        expect(TRAIN.x).toBeCloseTo(x, 6);
+        expect(TRAIN.y).toBeCloseTo(y, 6);
+      }
+    }
+    // 向き：行きは進む方、帰りは逆
+    const go: Train = { p: 0.5, back: false, cargo: [], wait: 0, to: `${b.x},${b.y}` };
+    trainAt(w, a, go);
+    const dx = TRAIN.dx, dy = TRAIN.dy;
+    trainAt(w, a, { ...go, back: true });
+    expect([TRAIN.dx, TRAIN.dy]).toEqual([-dx, -dy]);
+    // 行き先のない列車は、駅にいる
+    trainAt(w, a, { p: 0, back: false, cargo: [], wait: 0 });
+    expect([TRAIN.x, TRAIN.y]).toEqual([1, 101]);
+  });
+  it('走っている列車は自分の道筋を覚えていて、線路を敷き直すと選び直す。覚えた道筋はセーブに書かない', () => {
+    const w = newWorld();
+    const a = station(w, 0, 100, 'in'), b = station(w, 40, 100, 'out');
+    layRail(w, [[2, 100], [39, 100]]);
+    a.buf = Array(TRAIN_CAP).fill('N2');
+    for (let i = 0; i < 30; i++) step(w, 1 / 60);
+    const r1 = a.tr!.rt!;
+    expect(r1.custom).toBe(true);
+    expect(r1.tiles.length).toBe(38);
+    expect(serialize(w)).not.toMatch(/"rt"|"rtRev"|"nb"/);
+    // 遠回りの線路を足しても道筋は同じ長さ。途中を切ると、遠回りへ選び直す
+    layRail(w, [[10, 100], [10, 95], [30, 95], [30, 100]]);
+    step(w, 1 / 60);
+    expect(a.tr!.rt!.tiles.length).toBe(38);
+    w.rails.set('20,100', 0); w.rails.set('19,100', w.rails.get('19,100')! & ~1); w.rails.set('21,100', w.rails.get('21,100')! & ~4); w.rails.delete('20,100'); w.railRev++;
+    step(w, 1 / 60);
+    expect(a.tr!.rt!.tiles.length).toBe(48);
+    expect(a.tr!.rt).not.toBe(r1);
+    // 読み込んだあとも、そのまま走り続けて届く
+    const w2 = deserialize(serialize(w))!, a2 = at(w2, 0, 100)!, b2 = at(w2, 40, 100)!;
+    expect(a2.tr!.rt).toBeUndefined();
+    for (let i = 0; i < 60 * 20; i++) step(w2, 1 / 60);
+    expect(b2.buf!.length).toBe(TRAIN_CAP);
+  });
+});
+
+describe('番線の色を重ねる線路', () => {
+  const cover = (runs: Float64Array) => { const s = new Set<string>(); for (let i = 0; i < runs.length; i += 4) { if (runs[i + 1] === runs[i + 3]) for (let x = runs[i]; x < runs[i + 2]; x++) s.add(`h${x},${runs[i + 1]}`); else for (let y = runs[i + 1]; y < runs[i + 3]; y++) s.add(`v${runs[i]},${y}`); } return s; };
+  const routeEdges = (w: World) => {
+    const s = new Set<string>();
+    for (const e of stationsOf(w)) if (e.role === 'in') for (const r of stationRoutes(w, e)) for (let i = 1; i < r.tiles.length; i++) {
+      const [ax, ay] = r.tiles[i - 1], [bx, by] = r.tiles[i];
+      s.add(ay === by ? `h${Math.min(ax, bx) + 0.5},${ay + 0.5}` : `v${ax + 0.5},${Math.min(ay, by) + 0.5}`);
+    }
+    return s;
+  };
+  it('駅が少ないうちは、列車が通る道筋だけ（通らない枝には色がつかない）', () => {
+    const w = newWorld();
+    station(w, 0, 100, 'in', 3); station(w, 40, 100, 'out', 3);
+    layRail(w, [[2, 100], [39, 100]]);
+    layRail(w, [[20, 100], [20, 120]]);   // だれも通らない枝
+    const L = lineRuns(w);
+    expect(L.map((l) => l.ch)).toEqual([3]);
+    expect(cover(L[0].runs)).toEqual(routeEdges(w));
+    expect(cover(L[0].runs).has('v20.5,110.5')).toBe(false);
+    expect(L[0].stubs.length).toBe(8);
+  });
+  it('駅が多い工場では、つながった網の線路ぜんぶに色がつく（どの道筋も含む）。つながっていない線路にはつかない', () => {
+    const w = newWorld();
+    // 積む駅 42 × 降ろす駅 10 ＝ 420 組（LINE_EXACT より多い）。幹線 1 本に、駅ごとの支線
+    layRail(w, [[0, 300], [200, 300]]);
+    for (let i = 0; i < 42; i++) { station(w, i * 4, 290, 'in', 5); layRail(w, [[i * 4, 292], [i * 4, 300]]); }
+    for (let i = 0; i < 10; i++) { station(w, i * 4, 310, 'out', 5); layRail(w, [[i * 4, 309], [i * 4, 300]]); }
+    layRail(w, [[0, 400], [30, 400]]);    // どの駅にもつながらない線路
+    expect(42 * 10).toBeGreaterThan(LINE_EXACT);
+    const L = lineRuns(w);
+    expect(L.map((l) => l.ch)).toEqual([5]);
+    const got = cover(L[0].runs);
+    for (const k of routeEdges(w)) expect(got.has(k), k).toBe(true);
+    expect(got.has('h10.5,400.5')).toBe(false);
+    expect(got.has('h190.5,300.5')).toBe(true);   // 幹線の先（列車は通らないが、同じ網）
+    expect(L[0].stubs.length).toBe(52 * 4);
+  });
+});
+
+describe('セーブ：駅と列車の荷をまとめて書く', () => {
+  it('同じ物が続く所は「物質, 個数」。読み込むと元どおり。1 個ずつ書いた古いセーブも読める', () => {
+    const w = newWorld();
+    const a = station(w, 0, 100, 'in'), b = station(w, 40, 100, 'out');
+    a.buf = [...Array(700).fill('N2'), 'O2', ...Array(3).fill('!H2'), 'N2', 'N2'];
+    a.tr = { p: 0.4, back: false, cargo: Array(TRAIN_CAP).fill('!O2'), wait: 0, to: '40,100' };
+    b.buf = ['H2'];
+    const s = serialize(w);
+    expect(s).toContain('"buf":["N2",700,"O2","!H2",3,"N2",2]');
+    expect(s).toContain(`"cargo":["!O2",${TRAIN_CAP}]`);
+    expect(s).toContain('"buf":["H2"]');
+    const r = deserialize(s)!;
+    expect(at(r, 0, 100)!.buf).toEqual(a.buf);
+    expect(at(r, 0, 100)!.tr!.cargo).toEqual(a.tr.cargo);
+    expect(at(r, 40, 100)!.buf).toEqual(['H2']);
+    // 古い形
+    const old = JSON.parse(s);
+    for (const e of old.ents) if (e.x === 0 && e.y === 100) { e.buf = ['N2', 'N2', 'O2']; e.tr.cargo = ['!O2', '!O2']; }
+    const r2 = deserialize(JSON.stringify(old))!;
+    expect(at(r2, 0, 100)!.buf).toEqual(['N2', 'N2', 'O2']);
+    expect(at(r2, 0, 100)!.tr!.cargo).toEqual(['!O2', '!O2']);
+    // おかしな個数（負・小数・とても大きい）は、1 個か上限まで
+    for (const e of old.ents) if (e.x === 0 && e.y === 100) e.buf = ['N2', -5, 'O2', 2.5, 'H2', 1e9];
+    const r3 = deserialize(JSON.stringify(old))!.ents.get('0,100')!.buf!;
+    expect(r3.slice(0, 3)).toEqual(['N2', 'O2', 'H2']);
+    expect(r3.length).toBeLessThanOrEqual(20000);
+    expect(new Set(r3.slice(2))).toEqual(new Set(['H2']));
+  });
+  it('大きな工場（積む駅 100・列車 300 本）：最初の 1 歩で固まらず、荷は降ろす駅へ届く', () => {
+    const w = newWorld();
+    w.research.push('yard');
+    layRail(w, [[0, 300], [420, 300]]);
+    const ins: Ent[] = [];
+    for (let i = 0; i < 100; i++) { const e = station(w, i * 4, 290, 'in', 7); e.cars = 3; e.buf = Array(600).fill('N2'); ins.push(e); layRail(w, [[i * 4, 292], [i * 4, 300]]); }
+    const outs: Ent[] = [];
+    for (let i = 0; i < 6; i++) { const e = station(w, 404 + i * 3, 310, 'out', 7); outs.push(e); layRail(w, [[404 + i * 3, 309], [404 + i * 3, 300]]); }
+    const t0 = performance.now();
+    step(w, 1 / 30);
+    // これまでは、駅の組ぜんぶの道筋を最初に探していた（この大きさで数百 ms〜）。余裕を大きくとって確かめる
+    expect(performance.now() - t0).toBeLessThan(400);
+    let got = 0;
+    for (let i = 0; i < 30 * 120; i++) { step(w, 1 / 30); for (const o of outs) { got += o.buf!.length; o.buf = []; } w.fx.length = 0; }
+    expect(got).toBeGreaterThan(TRAIN_CAP * 20);
+    expect(ins.every((e) => e.xtr!.length === 2)).toBe(true);
+    // 行き先は 6 か所に順番に配られる
+    expect(stationDests(w, ins[0]).list.length).toBe(6);
+  });
+});
+
+describe('置いた・消したあとの、正面の設備の覚え書き', () => {
+  it('ベルトの先に設備を置くと、すぐそこへ流れる。消すと止まる（古い覚え書きを使わない）', () => {
+    const w = newWorld();
+    place(w, 'belt', 300, 300, 0);
+    const b = at(w, 300, 300)!;
+    b.item = { s: 'N2', p: 1, m: -1 };
+    step(w, 1 / 60);
+    expect(b.item).not.toBeNull();          // 先に何もない
+    place(w, 'belt', 301, 300, 0);
+    step(w, 1 / 60);
+    expect(b.item).toBeNull();
+    expect(at(w, 301, 300)!.item!.s).toBe('N2');
+    b.item = { s: 'O2', p: 1, m: -1 };
+    remove(w, 301, 300);
+    step(w, 1 / 60);
+    expect(b.item!.s).toBe('O2');           // 消したので、進めない
+    expect(addRail(w, [300, 300], [301, 300])).toBe(true);
+  });
+});

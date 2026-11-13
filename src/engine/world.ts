@@ -64,6 +64,8 @@ export const JAM_SEC = 2;
 export interface Ent {
   /** 採取機が採る資源の覚え書き（場所 resAt のときの値。セーブには書かない） */
   res?: string; resAt?: number;
+  /** 正面の設備の覚え書き（設備の顔ぶれ nbRev のときのもの。セーブには書かない） */
+  nb?: Ent | null; nbRev?: number;
   kind: Kind;
   x: number;
   y: number;
@@ -147,7 +149,11 @@ export interface Ent {
   memo?: string;
 }
 /** 列車。p：0 が自分の駅、1 が行き先。back：戻り。to：行き先の駅のキー。held：前の列車を待って止まっている */
-export interface Train { p: number; back: boolean; cargo: string[]; wait: number; to?: string; held?: boolean }
+export interface Train {
+  p: number; back: boolean; cargo: string[]; wait: number; to?: string; held?: boolean;
+  /** いま走っている道筋の覚え書き（線路 rtRev・駅の顔ぶれ rtVer のときのもの。セーブには書かない） */
+  rt?: Route | null; rtRev?: number; rtVer?: number;
+}
 
 /** 有毒な気体と、無害にする方法。捨てても罰はないが、処理の反応は入試で問われる */
 export const TOXIC: Record<string, string> = {
@@ -276,7 +282,7 @@ export interface World {
   /** 線路を敷き直すたびに増える番号（道筋の覚え書きを捨てるのに使う）。保存しない */
   railRev: number;
   /** 敷いた線路の上の列車の位置。キーは 'x,y,進む向き'。同じ向きの列車は前の列車を追い越せない。保存しない */
-  occ: Map<string, { o: object; t: number }>;
+  occ: Map<number, { o: object; t: number }>;
   /** 複数の物質を同時に求める指令で、物質ごとに納めた数。キーは指令（'章:番号'）。章ごとに残り、ほかの章の指令とは混ざらない */
   multi: Record<string, Record<string, number>>;
   /** そのまま捨てた有毒な気体の数（物質ごとの累計） */
@@ -351,6 +357,8 @@ export interface Route {
   len: number;
   /** 敷いた線路を通るか */
   custom: boolean;
+  /** 列車がいるマスの覚え書きの鍵（行きは [2j]、帰りは [2j+1]。敷いた線路の道筋だけ） */
+  ok?: Int32Array;
 }
 const dirBetween = (a: [number, number], b: [number, number]): number => (b[0] === a[0] + 1 && b[1] === a[1] ? 0 : b[0] === a[0] && b[1] === a[1] + 1 ? 1 : b[0] === a[0] - 1 && b[1] === a[1] ? 2 : b[0] === a[0] && b[1] === a[1] - 1 ? 3 : -1);
 /** 隣り合う 2 マスを線路でつなぐ。つないだら true（すでに両側からつながっていたら false。片側だけなら、もう片側も足す） */
@@ -430,57 +438,144 @@ function stationTouch(w: World, e: Ent): string[] {
   }
   return out;
 }
-const routeCache = new WeakMap<World, { rev: number; m: Map<string, Route | null> }>();
-/** 最後にたどった駅からの木（1 つだけ覚える）。prev：ひとつ手前のマス、order：届いた順（近い順） */
-let lastTree: { w: World; rev: number; ax: number; ay: number; prev: Map<string, string | null>; order: Map<string, number> } | null = null;
-function treeOf(w: World, a: Ent) {
-  if (lastTree && lastTree.w === w && lastTree.rev === w.railRev && lastTree.ax === a.x && lastTree.ay === a.y) return lastTree;
-  const prev = new Map<string, string | null>(), order = new Map<string, number>();
-  let queue = stationTouch(w, a), n = 0;
-  for (const k of queue) prev.set(k, null);
-  while (queue.length) {
-    const next: string[] = [];
-    for (const k of queue) {
-      order.set(k, n++);
-      const m = w.rails.get(k)!, c = k.indexOf(','), x = +k.slice(0, c), y = +k.slice(c + 1);
-      for (let d = 0; d < 4; d++) {
-        if (!((m >> d) & 1)) continue;
-        // 隣からもつながっているときだけ進む（片側だけのつながりは、描かれないので走らない）
-        const nk = `${x + DX[d]},${y + DY[d]}`;
-        if (!prev.has(nk) && ((w.rails.get(nk) || 0) >> ((d + 2) % 4)) & 1) { prev.set(nk, k); next.push(nk); }
-      }
-    }
-    queue = next;
-  }
-  lastTree = { w, rev: w.railRev, ax: a.x, ay: a.y, prev, order };
-  return lastTree;
+// ---- 線路の道探し ----
+// 駅が何百もある大きな工場では、「積む駅 × 降ろす駅」の道筋をすべて作っておくことはできない（数万本、1 本が数百マス）。
+// そこで、(1) 線路のつながり（どのマスがどの網に属すか）を線路が変わるたびに 1 度だけ調べ、行ける駅はそれで決める。
+// (2) 道筋は、列車が実際に走るときに、その組だけを A* で探す（行き先の方へまっすぐ探すので、網が大きくても道の長さほどの手間）。
+// (3) 探した道筋は、新しいものから決まった数だけ覚えておく。走っている列車は、自分の道筋を持っている
+const R_OFF = 32768, R_W = 65536;
+const rk = (x: number, y: number) => (x + R_OFF) * R_W + (y + R_OFF);
+/** 線路の網。マスに 0 から順の番号をふり、あとは番号の配列で扱う（探すときに、文字の鍵も、入れ物の作り直しもいらない） */
+interface RailNet {
+  rev: number; n: number;
+  /** マス（数の鍵）→ 番号 */
+  idx: Map<number, number>;
+  xs: Int32Array; ys: Int32Array;
+  /** 番号 i のマスから向き d（0 東・1 南・2 西・3 北）へ進んだ先の番号（たがいに両側からつながっているときだけ。なければ -1） */
+  nb: Int32Array;
+  /** どの網に属すか（つながったマスどうしが同じ番号） */
+  comp: Int32Array;
+  // A* の作業場（回ごとの印 stamp で使い回す）
+  g: Int32Array; prev: Int32Array; stamp: Int32Array; goal: Int32Array; gen: number;
 }
+const netCache = new WeakMap<World, RailNet>();
+function railNet(w: World): RailNet {
+  const c = netCache.get(w);
+  if (c && c.rev === w.railRev) return c;
+  const n = w.rails.size, idx = new Map<number, number>(), xs = new Int32Array(n), ys = new Int32Array(n), ms = new Uint8Array(n);
+  let i = 0;
+  for (const [k, m] of w.rails) { const q = k.indexOf(','), x = +k.slice(0, q), y = +k.slice(q + 1); idx.set(rk(x, y), i); xs[i] = x; ys[i] = y; ms[i] = m; i++; }
+  const nb = new Int32Array(n * 4).fill(-1), DN = [R_W, 1, -R_W, -1];
+  for (i = 0; i < n; i++) {
+    const base = rk(xs[i], ys[i]);
+    for (let d = 0; d < 4; d++) {
+      if (!((ms[i] >> d) & 1)) continue;
+      // 隣からもつながっているときだけ進める（片側だけのつながりは、描かれないので走らない）
+      const j = idx.get(base + DN[d]);
+      if (j !== undefined && (ms[j] >> ((d + 2) % 4)) & 1) nb[i * 4 + d] = j;
+    }
+  }
+  const comp = new Int32Array(n), stack: number[] = [];
+  let id = 0;
+  for (i = 0; i < n; i++) {
+    if (comp[i]) continue;
+    comp[i] = ++id; stack.push(i);
+    while (stack.length) { const a = stack.pop()!; for (let d = 0; d < 4; d++) { const b = nb[a * 4 + d]; if (b >= 0 && !comp[b]) { comp[b] = id; stack.push(b); } } }
+  }
+  const net: RailNet = { rev: w.railRev, n, idx, xs, ys, nb, comp, g: new Int32Array(n), prev: new Int32Array(n), stamp: new Int32Array(n), goal: new Int32Array(n), gen: 0 };
+  netCache.set(w, net);
+  return net;
+}
+/** 線路の網（読むだけ。番線の色を線路に重ねるときなどに使う） */
+export const railGraph = (w: World): { n: number; xs: Int32Array; ys: Int32Array; nb: Int32Array; comp: Int32Array } => railNet(w);
+/** 駅 e が触れている線路のマスの番号（railGraph の番号） */
+export const stationRailIdx = (w: World, e: Ent): number[] => (w.rails.size ? touchIdx(railNet(w), e) : []);
+/** 駅 e に触れている線路のマス（番号） */
+function touchIdx(net: RailNet, e: Ent): number[] {
+  const out: number[] = [];
+  for (let dx = -1; dx <= 2; dx++) for (let dy = -1; dy <= 2; dy++) {
+    if ((dx === -1 || dx === 2) && (dy === -1 || dy === 2)) continue;
+    const i = net.idx.get(rk(e.x + dx, e.y + dy));
+    if (i !== undefined) out.push(i);
+  }
+  return out;
+}
+/** 探した道筋の覚え書き（線路が変わったら捨てる。新しいものから ROUTE_KEEP 本） */
+const ROUTE_KEEP = 3000;
+const routeCache = new WeakMap<World, { rev: number; m: Map<string, Route | null> }>();
+// A* の順番待ち（見積もりの小さい順。使い回す）
+let heapF = new Float64Array(1024), heapN = new Int32Array(1024), heapLen = 0;
+const heapPush = (f: number, n: number) => {
+  if (heapLen >= heapF.length) { const f2 = new Float64Array(heapF.length * 2), n2 = new Int32Array(heapF.length * 2); f2.set(heapF); n2.set(heapN); heapF = f2; heapN = n2; }
+  let i = heapLen++;
+  while (i > 0) { const p = (i - 1) >> 1; if (heapF[p] <= f) break; heapF[i] = heapF[p]; heapN[i] = heapN[p]; i = p; }
+  heapF[i] = f; heapN[i] = n;
+};
+const heapPop = (): number => {
+  const top = heapN[0], f = heapF[--heapLen], n = heapN[heapLen];
+  let i = 0;
+  for (;;) { let c = i * 2 + 1; if (c >= heapLen) break; if (c + 1 < heapLen && heapF[c + 1] < heapF[c]) c++; if (heapF[c] >= f) break; heapF[i] = heapF[c]; heapN[i] = heapN[c]; i = c; }
+  heapF[i] = f; heapN[i] = n;
+  return top;
+};
 /** 駅 a から駅 b まで、敷いた線路をたどるいちばん短い道筋。つながっていなければ null */
 export function railRoute(w: World, a: Ent, b: Ent): Route | null {
   let c = routeCache.get(w);
   if (!c || c.rev !== w.railRev) { c = { rev: w.railRev, m: new Map() }; routeCache.set(w, c); }
   const ck = `${a.x},${a.y}>${b.x},${b.y}`;
   const hit = c.m.get(ck);
-  if (hit !== undefined) return hit ? (hit.dest === b ? hit : { ...hit, dest: b }) : null;
+  if (hit !== undefined) {
+    // 使ったものを新しい側へ（古いものから捨てる）
+    if (c.m.size > ROUTE_KEEP / 2) { c.m.delete(ck); c.m.set(ck, hit); }
+    return hit ? (hit.dest === b ? hit : { ...hit, dest: b }) : null;
+  }
   let found: Route | null = null;
-  // 駅 a から届く線路を、幅優先で 1 度だけたどっておく（同じ駅から、同じ番線の降ろす駅すべてへの道筋を続けて聞かれる。行き先ごとにたどり直さない）
-  const goals = w.rails.size ? stationTouch(w, b) : [];
-  if (goals.length) {
-    const tr = treeOf(w, a);
-    // いちばん先に届いたマス（いちばん近い。同じ近さなら、たどった順）
-    let end: string | null = null, best = Infinity;
-    for (const g of goals) { const o = tr.order.get(g); if (o !== undefined && o < best) { best = o; end = g; } }
-    if (end) {
+  const net = w.rails.size ? railNet(w) : null, starts = net ? touchIdx(net, a) : [], goals = starts.length ? touchIdx(net!, b) : [];
+  // 同じ網に触れていなければ、探すまでもなくつながっていない
+  if (net && goals.length && starts.some((s0) => goals.some((g0) => net.comp[g0] === net.comp[s0]))) {
+    const { xs, ys, nb, g, prev, stamp, goal } = net, gen = ++net.gen;
+    // 行き先までの残りの見積もり：降ろす駅のまわり（線路が触れる範囲）までの、縦横の距離。実際の残りより長くはならない
+    const gx0 = b.x - 1, gx1 = b.x + 2, gy0 = b.y - 1, gy1 = b.y + 2;
+    const hOf = (i: number) => { const x = xs[i], y = ys[i]; return (x < gx0 ? gx0 - x : x > gx1 ? x - gx1 : 0) + (y < gy0 ? gy0 - y : y > gy1 ? y - gy1 : 0); };
+    for (const g0 of goals) goal[g0] = gen;
+    heapLen = 0;
+    // 同じ見積もりなら、先に進んだもの（残りの少ないもの）を先に：見積もりに、残りのごく小さな割合を足して順をつける
+    for (const s0 of starts) { stamp[s0] = gen; g[s0] = 0; prev[s0] = -1; const h = hOf(s0); heapPush(h + h * 1e-6, s0); }
+    let end = -1;
+    while (heapLen) {
+      const i = heapPop();
+      if (goal[i] === gen) { end = i; break; }
+      const gi = g[i] + 1;
+      for (let d = 0; d < 4; d++) {
+        const j = nb[i * 4 + d];
+        if (j < 0 || (stamp[j] === gen && g[j] <= gi)) continue;
+        stamp[j] = gen; g[j] = gi; prev[j] = i;
+        const h = hOf(j);
+        heapPush(gi + h + h * 1e-6, j);
+      }
+    }
+    if (end >= 0) {
       const tiles: [number, number][] = [];
-      for (let k: string | null = end; k; k = tr.prev.get(k) ?? null) tiles.unshift(k.split(',').map(Number) as [number, number]);
+      for (let i = end; i >= 0; i = prev[i]) tiles.push([xs[i], ys[i]]);
+      tiles.reverse();
       const full: [number, number][] = [[a.x + 1, a.y + 1], ...tiles.map(([x, y]) => [x + 0.5, y + 0.5] as [number, number]), [b.x + 1, b.y + 1]];
       // 描くときは曲がり角だけ残す
       const pts = full.filter((q, i) => i === 0 || i === full.length - 1 || !((full[i - 1][0] === q[0] && q[0] === full[i + 1][0]) || (full[i - 1][1] === q[1] && q[1] === full[i + 1][1])));
-      found = { pts, tiles, dest: b, len: pathLength(full), custom: true };
+      // 列車がいるマスの覚え書きの鍵（マスの番号 × 4 + 向き）：行きは [2j]、帰りは [2j+1]
+      const n = tiles.length, ok = new Int32Array(n * 2);
+      { let j = n - 1; for (let i = end; i >= 0; i = prev[i], j--) { ok[j * 2] = i * 4 + tileDir(tiles, n, j, true); ok[j * 2 + 1] = i * 4 + tileDir(tiles, n, j, false); } }
+      found = { pts, tiles, dest: b, len: pathLength(full), custom: true, ok };
     }
   }
   c.m.set(ck, found);
+  if (c.m.size > ROUTE_KEEP) { const first = c.m.keys().next().value; if (first !== undefined) c.m.delete(first); }
   return found;
+}
+/** 道筋 tiles の i 番めのマスを、進む向き fwd で通るときの向き（0 東・1 南・2 西・3 北） */
+function tileDir(tiles: [number, number][], n: number, i: number, fwd: boolean): number {
+  if (n < 2) return 0;
+  const k = Math.max(0, Math.min(n - 2, fwd ? i : i - 1)), d = dirBetween(tiles[k], tiles[k + 1]);
+  return fwd ? d : (d + 2) % 4;
 }
 /** 自動の仮線路：横に進んでから縦に曲がる。駅ごとに少しずらす */
 function autoRoute(e: Ent, dest: Ent): Route {
@@ -490,25 +585,39 @@ function autoRoute(e: Ent, dest: Ent): Route {
 }
 /** 積む駅 e から降ろす駅 to（省くと、いちばん近い行き先）への線路。敷いた線路でつながっていればそれ、なければ自動の仮線路 */
 export function railOf(w: World, e: Ent, to?: Ent): Route | null {
-  const dest = to ?? stationRoutes(w, e)[0]?.dest;
+  const dest = to ?? stationDests(w, e).list[0];
   if (!dest || dest.kind !== 'station' || dest.role !== 'out' || dest.ch !== e.ch) return null;
   return railRoute(w, e, dest) ?? autoRoute(e, dest);
 }
-/** 積む駅 e の行き先すべて。敷いた線路でつながる降ろす駅があれば、そこだけへ送る（分岐点で枝分かれする）。
- *  1 つもつながっていなければ、同じ番線のすべての降ろす駅へ、自動の仮線路で送る */
-const routesCache = new WeakMap<World, { rev: number; ver: number; m: Map<Ent, Route[]> }>();
-export function stationRoutes(w: World, e: Ent): Route[] {
-  // 線路と駅の顔ぶれが変わるまで、駅ごとの道筋を覚えておく（毎コマ・毎歩、駅の数 × 行き先の数だけ探し直さない）
-  const ver = stationVer(w);
-  let c = routesCache.get(w);
-  if (!c || c.rev !== w.railRev || c.ver !== ver) { c = { rev: w.railRev, ver, m: new Map() }; routesCache.set(w, c); }
+/**
+ * 積む駅 e の行き先（近い順）。敷いた線路でつながる降ろす駅があれば、そこだけへ送る（laid。分岐点で枝分かれする）。
+ * 1 つもつながっていなければ、同じ番線のすべての降ろす駅へ、自動の仮線路で送る。
+ * 道筋は探さず、線路のつながり（網）だけで決める。線路と駅の顔ぶれが変わるまで覚えておく
+ */
+const destCache = new WeakMap<World, { rev: number; ver: number; m: Map<Ent, { list: Ent[]; laid: boolean }>; nets: Map<Ent, number[]> }>();
+const NO_DEST: { list: Ent[]; laid: boolean } = { list: [], laid: false };
+export function stationDests(w: World, e: Ent, ver = stationVer(w)): { list: Ent[]; laid: boolean } {
+  if (e.kind !== 'station' || e.role !== 'in') return NO_DEST;
+  let c = destCache.get(w);
+  if (!c || c.rev !== w.railRev || c.ver !== ver) { c = { rev: w.railRev, ver, m: new Map(), nets: new Map() }; destCache.set(w, c); }
   const hit = c.m.get(e);
   if (hit) return hit;
   const ts = stationTargets(w, e);
-  const laid = ts.map((d) => railRoute(w, e, d)).filter((r): r is Route => !!r);
-  const out = laid.length ? laid : ts.map((d) => autoRoute(e, d));
+  let out = { list: ts, laid: false };
+  if (ts.length && w.rails.size) {
+    const net = railNet(w), cc = c;
+    // 駅が触れている網の番号
+    const netsOf = (n: Ent) => { let v = cc.nets.get(n); if (!v) { v = [...new Set(touchIdx(net, n).map((t) => net.comp[t]))]; cc.nets.set(n, v); } return v; };
+    const mine = netsOf(e);
+    if (mine.length) { const laid = ts.filter((d) => netsOf(d).some((id) => mine.includes(id))); if (laid.length) out = { list: laid, laid: true }; }
+  }
   c.m.set(e, out);
   return out;
+}
+/** 積む駅 e の行き先すべての道筋（行き先の数だけ道を探すので、駅の多い工場で毎コマ呼ばない。行き先だけなら stationDests） */
+export function stationRoutes(w: World, e: Ent): Route[] {
+  const d = stationDests(w, e);
+  return d.list.map((t) => (d.laid ? railRoute(w, e, t) : null) ?? autoRoute(e, t));
 }
 
 export const key = (x: number, y: number) => `${x},${y}`;
@@ -635,15 +744,18 @@ export function newWorld(): World {
  * 設備の地図。鍵は "x,y" の文字列（セーブや外の部品はこの形で使う）。同じ中身を、数の鍵でも引けるようにしてある（num）。
  * 工場を進めるとき、1 歩に何万回もマスを調べる。そのたびに文字列をつなぎ、文字列で探すと、それだけで 1 歩の時間の 3 割を使う
  */
-const NUM_OFF = 32768, NUM_W = 65536;
+// 小さな整数（31 ビット）に収まる鍵にする：入れ物から探すのが速く、数の箱も作られない
+const NUM_OFF = 16384, NUM_W = 32768;
 const numKey = (x: number, y: number) => (x + NUM_OFF) * NUM_W + (y + NUM_OFF);
 const inNum = (x: number, y: number) => x >= -NUM_OFF && x < NUM_OFF && y >= -NUM_OFF && y < NUM_OFF && Number.isInteger(x) && Number.isInteger(y);
 export class EntMap extends Map<string, Ent> {
   num = new Map<number, Ent>();
   private static n(k: string): number { const c = k.indexOf(','), x = +k.slice(0, c), y = +k.slice(c + 1); return c > 0 && inNum(x, y) ? numKey(x, y) : -1; }
-  set(k: string, v: Ent): this { const n = EntMap.n(k); if (n >= 0) this.num.set(n, v); return super.set(k, v); }
-  delete(k: string): boolean { const n = EntMap.n(k); if (n >= 0) this.num.delete(n); return super.delete(k); }
-  clear(): void { this.num.clear(); super.clear(); }
+  /** 置く・消すたびに進む番号（駅の一覧などを、変わったときだけ作り直すため） */
+  rev = 0;
+  set(k: string, v: Ent): this { const n = EntMap.n(k); if (n >= 0) this.num.set(n, v); this.rev++; return super.set(k, v); }
+  delete(k: string): boolean { const n = EntMap.n(k); if (n >= 0) this.num.delete(n); this.rev++; return super.delete(k); }
+  clear(): void { this.num.clear(); this.rev++; super.clear(); }
 }
 export function at(w: World, x: number, y: number): Ent | undefined {
   const m = w.ents as EntMap;
@@ -1078,24 +1190,32 @@ export function tunnelPair(w: World, e: Ent): Ent | null {
 let stationEpoch = 0;
 /** 工場を 1 歩進める前と、1 コマ描く前に呼ぶ（駅の一覧を選び直す合図） */
 export const markEpoch = () => { stationEpoch++; };
-const stationCache = new WeakMap<World, { epoch: number; size: number; list: Ent[]; sig: string[]; ver: number }>();
+const stationCache = new WeakMap<World, { epoch: number; size: number; erev: number; list: Ent[]; roles: (string | undefined)[]; chs: (number | undefined)[]; pos: number[]; ver: number; outs: Map<number, Ent[]> }>();
 let stationVerNo = 0;
 /** 駅の顔ぶれ（場所・向き・番線）が変わるたびに変わる番号 */
 export const stationVer = (w: World) => { stationsOf(w); return stationCache.get(w)!.ver; };
 export function stationsOf(w: World): Ent[] {
-  const c = stationCache.get(w);
-  if (c && c.epoch === stationEpoch && c.size === w.ents.size && c.list.every((n, i) => w.ents.get(key(n.x, n.y)) === n && c.sig[i] === `${n.role}|${n.ch}`)) return c.list;
+  const c = stationCache.get(w), erev = (w.ents as EntMap).rev;
+  // 設備を置いても消してもいない（erev が同じ）なら、駅の向きと番線だけ確かめる。erev のない入れ物（古い形）では、回ごとに選び直す
+  if (c && c.size === w.ents.size && (erev !== undefined ? c.erev === erev : c.epoch === stationEpoch)) {
+    const l = c.list;
+    let ok = true;
+    for (let i = 0; i < l.length; i++) { const n = l[i]; if (n.role !== c.roles[i] || n.ch !== c.chs[i] || (erev === undefined && at(w, n.x, n.y) !== n)) { ok = false; break; } }
+    if (ok) return l;
+  }
   const list: Ent[] = [];
   for (const n of w.ents.values()) if (n.kind === 'station') list.push(n);
-  const sig = list.map((n) => `${n.role}|${n.ch}`);
+  const roles = list.map((n) => n.role), chs = list.map((n) => n.ch), pos = list.map((n) => rk(n.x, n.y));
   // 顔ぶれが前と同じなら、番号は変えない（道筋の覚え書きをそのまま使える）
-  const same = !!c && c.list.length === list.length && list.every((n, i) => c.list[i] === n && c.sig[i] === sig[i]);
-  stationCache.set(w, { epoch: stationEpoch, size: w.ents.size, list, sig, ver: same ? c!.ver : ++stationVerNo });
+  const same = !!c && c.list.length === list.length && list.every((n, i) => c.list[i] === n && c.roles[i] === roles[i] && c.chs[i] === chs[i] && c.pos[i] === pos[i]);
+  const outs = same ? c!.outs : new Map<number, Ent[]>();
+  if (!same) for (const n of list) if (n.role === 'out') { const k = n.ch ?? -1; let l = outs.get(k); if (!l) outs.set(k, (l = [])); l.push(n); }
+  stationCache.set(w, { epoch: stationEpoch, size: w.ents.size, erev: erev ?? -1, list, roles, chs, pos, ver: same ? c!.ver : ++stationVerNo, outs });
   return list;
 }
 export function stationTargets(w: World, e: Ent): Ent[] {
-  const out: Ent[] = [];
-  for (const n of stationsOf(w)) if (n.role === 'out' && n.ch === e.ch) out.push(n);
+  stationsOf(w);
+  const out = (stationCache.get(w)!.outs.get(e.ch ?? -1) ?? []).slice();
   const d = (n: Ent) => Math.abs(n.x - e.x) + Math.abs(n.y - e.y);
   return out.sort((a, b) => d(a) - d(b) || a.x - b.x || a.y - b.y);
 }
@@ -1380,8 +1500,20 @@ const stacks = (it: Item, s: string, rc: boolean | undefined, n: number) => it.s
 
 /** 荷をとなりのマスへ渡す。n は個数。受け取れたら true（荷は、分けずに丸ごと渡る） */
 function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n = 1, dry = false): boolean {
+  return pushInto(w, at(w, x, y), x, y, d, s, rc, n, dry);
+}
+/**
+ * 正面の設備（ベルトと採取機は、向きの先の 1 マス）。置く・消すが起きるまで覚えておく
+ * （何千台も並ぶ工場で、毎歩、設備ごとに隣を探し直さない）。セーブには書かない
+ */
+function ahead(w: World, e: Ent, erev: number | undefined): Ent | undefined {
+  if (erev === undefined) return at(w, e.x + DX[e.dir], e.y + DY[e.dir]);
+  if (e.nbRev !== erev) { e.nb = at(w, e.x + DX[e.dir], e.y + DY[e.dir]) ?? null; e.nbRev = erev; }
+  return e.nb ?? undefined;
+}
+/** push と同じ。受け取る側 t がわかっているとき */
+function pushInto(w: World, t: Ent | undefined, x: number, y: number, d: Dir, s: string, rc?: boolean, n = 1, dry = false): boolean {
   const N = n > 1 ? n : undefined;
-  const t = at(w, x, y);
   if (!t) return false;
   // 一時停止している装置は、何も受け取らない（ベルトはそこで待つ）
   if (t.off) return false;
@@ -1513,6 +1645,65 @@ function push(w: World, x: number, y: number, d: Dir, s: string, rc?: boolean, n
   }
 }
 
+const occRev = new WeakMap<World, number>();
+/** 積む駅 e の列車 1 本を、1 歩進める（毎歩・列車ごとに呼ぶので、ここでは配列も関数も作らない） */
+function runTrain(w: World, e: Ent, tr: Train, buf: string[], dt: number, sver: number) {
+  if (tr.p <= 0 && !tr.back) {
+    const cap = trainCap(w);
+    if (buf.length && tr.cargo.length < cap) { const got = buf.splice(0, cap - tr.cargo.length); for (let i = 0; i < got.length; i++) tr.cargo.push(got[i]); }
+    tr.wait += dt;
+    // 満載か、少し待っても増えなければ発車する
+    if (tr.cargo.length && (tr.cargo.length >= cap || tr.wait > 2.5)) {
+      const ds = stationDests(w, e, sver).list;
+      if (ds.length) { e.rr = ((e.rr || 0) + 1) % ds.length; const to = ds[e.rr]; tr.to = key(to.x, to.y); tr.p = 1e-6; tr.wait = 0; tr.rt = undefined; }
+    }
+    return;
+  }
+  // 道筋は、線路と駅の顔ぶれが変わるまで、列車が覚えている（毎歩、探し直さない）
+  let route: Route | null;
+  if (tr.rt !== undefined && tr.rtRev === w.railRev && tr.rtVer === sver) route = tr.rt;
+  else {
+    const d0 = tr.to ? w.ents.get(tr.to) : undefined;
+    route = d0 && d0.kind === 'station' && d0.role === 'out' && d0.ch === e.ch ? railOf(w, e, d0) : null;
+    tr.rt = route; tr.rtRev = w.railRev; tr.rtVer = sver;
+  }
+  const dest = route ? route.dest : undefined;
+  if (!route) tr.back = true; // 行き先がなくなった：引き返す
+  const v = (trainSpeed(w) * (route?.custom ? RAIL_BOOST : 1) * dt) / (route?.len ?? 12);
+  // 敷いた線路は、ほかの駅の列車と共有する。同じ向きに走る前の列車がすぐ先にいれば、止まって待つ
+  const tiles = route?.custom ? route.tiles : null, n = tiles ? tiles.length : 0, okeys = route?.ok;
+  let held = false;
+  if (okeys && n) {
+    const i = Math.max(0, Math.min(n - 1, Math.round(tr.p * (n - 1)))), fwd = !tr.back, st = fwd ? 1 : -1;
+    for (let q = 1; q <= 2; q++) {
+      const j = i + st * q;
+      if (j < 0 || j >= n) continue;
+      const o = w.occ.get(okeys![j * 2 + (fwd ? 0 : 1)]);
+      if (o && o.o !== tr && o.t >= w.tick - 1) held = true;
+    }
+  }
+  tr.held = held || undefined;
+  if (!tr.back) {
+    if (!held) tr.p = Math.min(1, tr.p + v);
+    if (tr.p >= 1) {
+      const db = (dest!.buf ??= []), room = stationCap(w) - db.length;
+      if (tr.cargo.length && room > 0) {
+        const got = tr.cargo.splice(0, room);
+        for (let i = 0; i < got.length; i++) db.push(got[i]);
+        w.fx.push({ x: dest!.x + 1, y: dest!.y + 1, type: 'train', s: got[0].replace(/^!/, ''), n: got.length });
+      }
+      if (!tr.cargo.length) { tr.back = true; e.n = (e.n || 0) + 1; }
+    }
+  } else {
+    if (!held) tr.p = Math.max(0, tr.p - v);
+    if (tr.p <= 0) { tr.p = 0; tr.back = false; if (tr.cargo.length) buf.unshift(...tr.cargo.splice(0)); }
+  }
+  if (okeys && n && (tr.p > 0 || tr.back)) {
+    const i = Math.max(0, Math.min(n - 1, Math.round(tr.p * (n - 1)))), k = okeys![i * 2 + (tr.back ? 1 : 0)], o = w.occ.get(k);
+    if (o) { o.o = tr; o.t = w.tick; } else w.occ.set(k, { o: tr, t: w.tick });
+  }
+}
+
 export function step(w: World, dt: number) {
   markEpoch();
   w.tick++;
@@ -1531,7 +1722,12 @@ export function step(w: World, dt: number) {
   for (const k in w.sig) { if (w.sig[k] > 0) w.sig[k] = Math.max(0, w.sig[k] - dt); else delete w.sig[k]; }
   // 列車の位置の覚え書きは、古いものをときどき捨てる
   if (w.tick % 600 === 0 && w.occ.size) for (const [k, o] of w.occ) if (o.t < w.tick - 2) w.occ.delete(k);
+  // 鍵は線路のマスの番号なので、線路が変わったら捨てる（次の 1 歩で、走っている列車が書き直す）
+  if (occRev.get(w) !== w.railRev) { w.occ.clear(); occRev.set(w, w.railRev); }
   const speed = beltSpeed(w), every = extractInterval(w), rate = machineRate(w), kU = 1 - Math.exp(-dt / UTIL_TAU);
+  // 駅の顔ぶれの番号は、1 歩のあいだ変わらない（駅ごとに確かめ直さない）
+  const sver = stationVer(w);
+  const erev: number | undefined = (w.ents as EntMap).rev;
   for (const e of w.ents.values()) {
     // 一時停止している装置は、反応も採取も出すことも止める（途中の反応・ためた物はそのまま残る）。
     // 途中の反応は busy から offProg へ預ける（止めている間は「動いている」ことにしない）。稼働率は下がっていき、詰まり・受け取れない物質の印は外す
@@ -1549,7 +1745,7 @@ export function step(w: World, dt: number) {
         const it = e.item;
         if (!it) break;
         it.p = Math.min(1, it.p + speed * dt);
-        if (it.p >= 1 && it.m !== w.tick) { if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc, it.n)) e.item = null; else it.w = (it.w || 0) + dt; }
+        if (it.p >= 1 && it.m !== w.tick) { if (pushInto(w, ahead(w, e, erev), e.x + DX[e.dir], e.y + DY[e.dir], e.dir, it.s, it.rc, it.n)) e.item = null; else it.w = (it.w || 0) + dt; }
         break;
       }
       case 'splitter': {
@@ -1698,6 +1894,8 @@ export function step(w: World, dt: number) {
       case 'extractor': {
         // 出口がふさがっている間も採り続け、SOURCE_HOLD 個までためて、空いたときにまとめて出す
         const cap = every * SOURCE_HOLD, full = (e.timer || 0) >= cap - 1e-9;
+        // いっぱいで、出口を確かめる番でもない歩：何も変わらない（稼働率だけ下がる）。何千台も並ぶ畑で、ここが 1 歩の大半
+        if (full && ((w.tick + e.x * 7 + e.y * 13) & 3) !== 0) { e.timer = cap; e.u = (e.u ?? 1) * (1 - kU); break; }
         e.timer = Math.min((e.timer || 0) + dt, cap);
         const k = Math.floor(e.timer / every + 1e-9);
         // いっぱいまでためて出口がふさがったままの採取機は、4 歩に 1 回だけ出口を確かめる（何千台も並ぶ畑で、毎歩すべての出口を調べない。場所でずらす）
@@ -1705,7 +1903,7 @@ export function step(w: World, dt: number) {
           // 採れる資源は場所で決まる。場所が変わるまで覚えておく
           const at2 = e.x * 65536 + e.y;
           if (e.resAt !== at2) { e.res = resourceAt(e.x, e.y); e.resAt = at2; }
-          if (push(w, e.x + DX[e.dir], e.y + DY[e.dir], e.dir, e.res!, undefined, k)) { e.timer = Math.max(0, e.timer - k * every); e.n = (e.n || 0) + k; tally(w, e.res!, 0, k); }
+          if (pushInto(w, ahead(w, e, erev), e.x + DX[e.dir], e.y + DY[e.dir], e.dir, e.res!, undefined, k)) { e.timer = Math.max(0, e.timer - k * every); e.n = (e.n || 0) + k; tally(w, e.res!, 0, k); }
         }
         // ためられる量がいっぱいになると、採れるのに出せない
         e.u = (e.u ?? 1) + ((e.timer < every * SOURCE_HOLD - 1e-9 ? 1 : 0) - (e.u ?? 1)) * kU;
@@ -1747,57 +1945,12 @@ export function step(w: World, dt: number) {
           break;
         }
         // 積む駅：列車を走らせる。編成は 3 つまで増やせる。降ろす駅がいくつもあれば、順番に配る（分岐）
-        const trains = [(e.tr ??= { p: 0, back: false, cargo: [], wait: 0 }), ...(e.xtr ??= [])];
-        while (trains.length < Math.min(maxCars(w), e.cars || 1)) { const t2 = { p: 0, back: false, cargo: [], wait: 0 }; e.xtr.push(t2); trains.push(t2); }
+        e.tr ??= { p: 0, back: false, cargo: [], wait: 0 };
+        const xtr = (e.xtr ??= []), want = Math.min(maxCars(w), e.cars || 1);
+        while (xtr.length + 1 < want) xtr.push({ p: 0, back: false, cargo: [], wait: 0 });
         // 減らしたときは、駅に戻っている空の編成から外す
-        while (e.xtr.length > Math.max(0, Math.min(maxCars(w), e.cars || 1) - 1)) { const k = e.xtr.findIndex((t2) => t2.p <= 0 && !t2.back && !t2.cargo.length); if (k < 0) break; e.xtr.splice(k, 1); }
-        for (const tr of [e.tr, ...e.xtr]) {
-          if (tr.p <= 0 && !tr.back) {
-            if (buf.length && tr.cargo.length < trainCap(w)) tr.cargo.push(...buf.splice(0, trainCap(w) - tr.cargo.length));
-            tr.wait += dt;
-            // 満載か、少し待っても増えなければ発車する
-            if (tr.cargo.length && (tr.cargo.length >= trainCap(w) || tr.wait > 2.5)) {
-              const rs = stationRoutes(w, e);
-              if (rs.length) { e.rr = ((e.rr || 0) + 1) % rs.length; const to = rs[e.rr].dest; tr.to = key(to.x, to.y); tr.p = 1e-6; tr.wait = 0; }
-            }
-            continue;
-          }
-          const dest = tr.to ? w.ents.get(tr.to) : undefined;
-          const ok = !!dest && dest.kind === 'station' && dest.role === 'out' && dest.ch === e.ch;
-          if (!ok) tr.back = true; // 行き先がなくなった：引き返す
-          const route = ok ? railOf(w, e, dest) : null;
-          const v = (trainSpeed(w) * (route?.custom ? RAIL_BOOST : 1) * dt) / (route?.len ?? 12);
-          // 敷いた線路は、ほかの駅の列車と共有する。同じ向きに走る前の列車がすぐ先にいれば、止まって待つ
-          const tiles = route?.custom ? route.tiles : null, n = tiles?.length ?? 0;
-          const idx = (p: number) => Math.max(0, Math.min(n - 1, Math.round(p * (n - 1))));
-          const dirAt = (i: number, fwd: boolean) => { if (n < 2) return 0; const k = Math.max(0, Math.min(n - 2, fwd ? i : i - 1)), d = dirBetween(tiles![k], tiles![k + 1]); return fwd ? d : (d + 2) % 4; };
-          let held = false;
-          if (tiles && n) {
-            const i = idx(tr.p), fwd = !tr.back;
-            for (const j of fwd ? [i + 1, i + 2] : [i - 1, i - 2]) {
-              if (j < 0 || j >= n) continue;
-              const o = w.occ.get(`${tiles[j][0]},${tiles[j][1]},${dirAt(j, fwd)}`);
-              if (o && o.o !== tr && o.t >= w.tick - 1) held = true;
-            }
-          }
-          tr.held = held || undefined;
-          if (!tr.back) {
-            if (!held) tr.p = Math.min(1, tr.p + v);
-            if (tr.p >= 1) {
-              const db = (dest!.buf ??= []);
-              if (tr.cargo.length && db.length < stationCap(w)) {
-                const got = tr.cargo.splice(0, stationCap(w) - db.length);
-                db.push(...got);
-                w.fx.push({ x: dest!.x + 1, y: dest!.y + 1, type: 'train', s: got[0].replace(/^!/, ''), n: got.length });
-              }
-              if (!tr.cargo.length) { tr.back = true; e.n = (e.n || 0) + 1; }
-            }
-          } else {
-            if (!held) tr.p = Math.max(0, tr.p - v);
-            if (tr.p <= 0) { tr.p = 0; tr.back = false; if (tr.cargo.length) buf.unshift(...tr.cargo.splice(0)); }
-          }
-          if (tiles && n && (tr.p > 0 || tr.back)) { const i = idx(tr.p); w.occ.set(`${tiles[i][0]},${tiles[i][1]},${dirAt(i, !tr.back)}`, { o: tr, t: w.tick }); }
-        }
+        while (xtr.length > Math.max(0, want - 1)) { const k = xtr.findIndex((t2) => t2.p <= 0 && !t2.back && !t2.cargo.length); if (k < 0) break; xtr.splice(k, 1); }
+        for (let ti = -1; ti < xtr.length; ti++) runTrain(w, e, ti < 0 ? e.tr : xtr[ti], buf, dt, sver);
         break;
       }
       case 'vent':
@@ -1869,9 +2022,27 @@ export const FNAME_MAX = 20;
  * 整数でない数（進み具合・待ち時間・時計）は小数 3 桁まで（1 ミリ秒・0.1 % より細かい違いは、遊びに出ない）
  */
 const round3 = (v: number) => Math.round(v * 1000) / 1000;
-const slim = (k: string, v: unknown) => (v === null || v === false || k === 'res' || k === 'resAt' ? undefined : typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? round3(v) : v);
+const slim = (k: string, v: unknown) => (v === null || v === false || k === 'res' || k === 'resAt' || k === 'nb' || k === 'nbRev' || k === 'rt' || k === 'rtRev' || k === 'rtVer' ? undefined : typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? round3(v) : v);
 /** 設備の一覧だけを、欄を整えながら 1 回で文字にする（配列の中の null は、場所を保つためにそのまま） */
-const entsJson = (list: Ent[]) => JSON.stringify(list, function (this: unknown, k, v) { return Array.isArray(this) ? (typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? round3(v) : v) : k === '' ? v : slim(k, v); });
+/**
+ * 駅や列車にためた物の並びを、短く書く：同じ物が続く所は「物質, 個数」にまとめる（["N2", 1200] ＝ N2 が 1200 個）。
+ * 大きな工場では、駅と列車の荷だけでセーブの大半を占める（1 個ずつ書くと、駅 1 つで数千字）
+ */
+const RLE_KEYS = new Set(['buf', 'buf2', 'buf3', 'cargo']);
+function rle(a: unknown[]): unknown[] {
+  const out: unknown[] = [];
+  for (let i = 0; i < a.length;) {
+    let j = i + 1;
+    while (j < a.length && a[j] === a[i]) j++;
+    out.push(a[i]);
+    if (j - i > 1 && typeof a[i] === 'string') out.push(j - i); else j = i + 1;
+    i = j;
+  }
+  return out;
+}
+/** rle の逆。数は、直前の物質の個数。古いセーブ（1 個ずつ）もそのまま読める。全部で LIST_MAX 個まで */
+const LIST_MAX = 20000;
+const entsJson = (list: Ent[]) => JSON.stringify(list, function (this: unknown, k, v) { return Array.isArray(this) ? (typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v) ? round3(v) : v) : k === '' ? v : RLE_KEYS.has(k) && Array.isArray(v) && v.length > 1 ? rle(v) : slim(k, v); });
 export function serialize(w: World): string {
   const ents = entsJson([...w.ents.values()].filter((e) => e.kind !== 'part'));
   return JSON.stringify({
@@ -1911,7 +2082,18 @@ export function testOk(kind: Kind, t: unknown): t is string {
 const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const isDir = (v: unknown): v is Dir => v === 0 || v === 1 || v === 2 || v === 3;
 /** 物質の並び。知らない物質や文字でないものは外す。bang：駅の荷（搬出口から出たものは先頭に '!'） */
-const subList = (a: unknown, bang = false): string[] => (Array.isArray(a) ? a.filter((s): s is string => typeof s === 'string' && hasSub(bang && s.startsWith('!') ? s.slice(1) : s)) : []);
+const subList = (a: unknown, bang = false): string[] => {
+  if (!Array.isArray(a)) return [];
+  const out: string[] = [];
+  for (let i = 0; i < a.length && out.length < LIST_MAX; i++) {
+    const v = a[i];
+    if (typeof v !== 'string' || !hasSub(bang && v.startsWith('!') ? v.slice(1) : v)) continue;
+    // 続く数は個数（まとめて書いたもの）
+    const c = a[i + 1], n = typeof c === 'number' && Number.isInteger(c) && c > 1 ? Math.min(c, LIST_MAX - out.length) : 1;
+    for (let q = 0; q < n; q++) out.push(v);
+  }
+  return out;
+};
 /** 保存から読んだ荷。知らない物質なら null */
 function readItem(it: unknown): Item | null {
   if (!it || typeof it !== 'object' || typeof (it as Item).s !== 'string' || !hasSub((it as Item).s)) return null;

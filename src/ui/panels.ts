@@ -9,7 +9,7 @@ import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
 import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
-import { TANK_CAP, RESEARCH, credit, RAIL_BOOST, maxCars, stationCap, stationRoutes, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, setStationRole, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { TANK_CAP, RESEARCH, credit, RAIL_BOOST, maxCars, stationCap, stationDests, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, setStationRole, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { applyTestOut, canTestOut, paceOf, testOutPass, testOutQuiz } from '../engine/pace';
 import { quizFor } from '../engine/quiz';
 import { calibLine, solveList } from './review';
@@ -560,7 +560,8 @@ export function showSignal(c: PanelCtx, e: Ent, extra: HTMLElement) {
 export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
   const again = () => showStation(c, e, extra);
   const role = (id: 'in' | 'out', text: string) => h('button', { class: 'ghost' + (e.role === id ? ' picked on' : ''), type: 'button', id: `st-role-${id}`, onclick: () => { setStationRole(e, id); sfx.ok(); again(); } }, text);
-  const routes = e.role === 'in' ? stationRoutes(c.w, e) : [], route = routes[0] ?? null, to = route?.dest ?? null, laid = !!route?.custom;
+  // 行き先は、線路のつながりから決める（道筋を探すのは、いちばん近い 1 か所だけ）
+  const routes = stationDests(c.w, e).list, route = routes.length ? railOf(c.w, e, routes[0]) : null, to = route?.dest ?? null, laid = !!route?.custom;
   const speedOn = (custom: boolean) => trainSpeed(c.w) * (custom ? RAIL_BOOST : 1);
   const held = [e.tr, ...(e.xtr ?? [])].filter((t) => t?.held).length;
   const feeders = e.role === 'out' ? [...c.w.ents.values()].filter((n) => n.kind === 'station' && n.role === 'in' && n.ch === e.ch).length : 0;

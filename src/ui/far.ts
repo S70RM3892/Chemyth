@@ -8,12 +8,12 @@
  *  - 重ね書き：資源地の名前と産出物、納品所、線路の網、いまの指令の資源地、区画ごとの生産の札、縮尺。重ならないように、大事なものから置く
  * 色は、見た目（Palette）と資源地の色（ZONES）から作る。新しいスキンでも、そのまま描ける。
  */
-import { lineRuns, railRuns } from './railruns';
+import { TRAIN, lineRuns, railRuns, trainAt } from './railruns';
 import { ZONES, blobRadius, hubRect, isSea, zoneSpots, type Zone, type ZoneSpot } from '../content/map';
 import { lineColor, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
 import { isSep, sepReady } from '../content/sep';
-import { DX, DY, FLOOR_DY, at, currentGoal, floorOf, inflow, isMachine, sizeOf, stationRoutes, stationsOf, type Ent, type Route, type World } from '../engine/world';
+import { DX, DY, FLOOR_DY, at, currentGoal, floorOf, inflow, isMachine, sizeOf, railOf as railOf2, stationDests, stationVer, stationsOf, type Ent, type World } from '../engine/world';
 import { districtsOf, type District } from '../engine/districts';
 import { BRASS_DARK, mix, onThemeChange, type Palette } from './theme';
 import { sprite } from './token';
@@ -304,14 +304,43 @@ function flowRuns(w: World, fl: number): number[][] {
   flowCache = { w, n: w.ents.size, at: frameNo, fl, due: w.playMs + (fresh ? 1000 : 2000), groups };
   return groups;
 }
-/** 積む駅ごとの道筋。線路を探すのは重いので、1 秒に 1 回でよい */
-let routeCache: { w: World; tick: number; rev: number; n: number; list: { e: Ent; routes: Route[] }[] } | null = null;
-function routesOf(w: World) {
-  if (routeCache && routeCache.w === w && routeCache.rev === w.railRev && routeCache.n === w.ents.size && Math.abs(w.tick - routeCache.tick) < 60) return routeCache.list;
-  const list: { e: Ent; routes: Route[] }[] = [];
-  for (const e of stationsOf(w)) if (e.role === 'in') { const routes = stationRoutes(w, e); if (routes.length) list.push({ e, routes }); }
-  routeCache = { w, tick: w.tick, rev: w.railRev, n: w.ents.size, list };
-  return list;
+/**
+ * 横に並ぶ 1 マスのものを、帯にまとめる入れ物。add(x, y) を呼ぶと、同じ行で右隣に続くものを 1 本にのばす。
+ * out は [x, y, 長さ] の並び。並べ替えはしない（置いた順に右へ続いていればまとまる。そうでなければ、短い帯が増えるだけ）
+ */
+class Strips {
+  out: number[] = [];
+  private open = new Map<number, number>();
+  add(x: number, y: number) {
+    const i = this.open.get(y);
+    if (i !== undefined && this.out[i] + this.out[i + 2] === x) this.out[i + 2]++;
+    else { this.open.set(y, this.out.length); this.out.push(x, y, 1); }
+  }
+}
+/** 設備の多い工場（この数を超える）では、引いた視野の装置を帯にまとめて塗る */
+const CROWD_ENTS = 6000;
+/**
+ * 装置の四角を、機種の色ごとに帯にまとめたもの（1 マスの装置は横につなげ、2×2 の装置は 1 台ずつ）。
+ * 採取機の畑では、何千台を 1 台ずつ塗る代わりに、行ごとに 1 回ですむ。置く・消すが起きるまで覚えておく
+ */
+let stripCache: { w: World; rev: number; fl: number; soft: string; m: Map<string, { strips: number[]; boxes: number[] }> } | null = null;
+function machineStrips(w: World, fl: number, P: Palette): Map<string, { strips: number[]; boxes: number[] }> | null {
+  const rev = (w.ents as { rev?: number }).rev;
+  if (rev === undefined) return null;
+  if (stripCache && stripCache.w === w && stripCache.rev === rev && stripCache.fl === fl && stripCache.soft === P.soft) return stripCache.m;
+  const tmp = new Map<string, { s: Strips; boxes: number[] }>(), off = fl * FLOOR_DY;
+  for (const e of w.ents.values()) {
+    const k = e.kind;
+    if (k === 'part' || k === 'hub' || k === 'belt' || k === 'bridge' || floorOf(e.y) !== fl) continue;
+    const col = MACHINES[k as keyof typeof MACHINES]?.color ?? P.soft;
+    let g = tmp.get(col);
+    if (!g) tmp.set(col, (g = { s: new Strips(), boxes: [] }));
+    if (sizeOf(e) === 1) g.s.add(e.x, e.y - off); else g.boxes.push(e.x, e.y - off, sizeOf(e));
+  }
+  const m = new Map<string, { strips: number[]; boxes: number[] }>();
+  for (const [c, g] of tmp) m.set(c, { strips: g.s.out, boxes: g.boxes });
+  stripCache = { w, rev, fl, soft: P.soft, m };
+  return m;
 }
 let distCache: { w: World; tick: number; n: number; list: District[] } | null = null;
 function districts(w: World): District[] {
@@ -481,6 +510,10 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
   /** 稼働率の色（5 % ごと。このコマで使う分だけ作る） */
   const heatCols: string[] = [];
   const showItems = z >= 4;
+  // 設備の多い工場：装置の四角は、帯にまとめたもの（覚えてある）を塗る。止まっている・動いている印も、横に続く所は 1 本の線にまとめる。
+  // 稼働率の色分けのあいだは、装置ごとに色が違うので、これまでどおり 1 台ずつ
+  const strips = !heat && w.ents.size > CROWD_ENTS ? machineStrips(w, fl, P) : null;
+  const badS = strips ? new Strips() : null, busyS = strips ? new Strips() : null;
   for (const e of w.ents.values()) {
     const k = e.kind;
     if (k === 'part' || k === 'hub') continue;
@@ -516,12 +549,14 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
       col = heatCols[b] ??= heatColor(b / 20, light, cv, 1);
       if (cv && b / 20 < STALL) stall.push(e.x, ey, sz);
     }
-    let list = rects.get(col);
-    if (!list) rects.set(col, (list = []));
-    list.push(e.x, ey, sz);
+    if (!strips) {
+      let list = rects.get(col);
+      if (!list) rects.set(col, (list = []));
+      list.push(e.x, ey, sz);
+    }
     const needs = (isMachine(k) && !e.recipe) || (k === 'analyzer' && !e.test) || (isSep(k) && !sepReady(k, e.test)) || ((k === 'sampler' || k === 'depot') && !e.sub);
-    if (needs || (e.stuck || 0) > 2.5 || !!e.bad) bad.push(e.x + sz / 2, ey + sz / 2, sz);
-    else if (e.busy) busy.push(e.x + sz / 2, ey + sz / 2, sz);
+    if (needs || (e.stuck || 0) > 2.5 || !!e.bad) { if (badS && sz === 1) badS.add(e.x, ey); else bad.push(e.x + sz / 2, ey + sz / 2, sz); }
+    else if (e.busy) { if (busyS && sz === 1) busyS.add(e.x, ey); else busy.push(e.x + sz / 2, ey + sz / 2, sz); }
   }
   if (below.length) {
     ctx.fillStyle = light ? 'rgba(60,70,84,0.22)' : 'rgba(200,210,225,0.18)';
@@ -616,6 +651,45 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
     ctx.fillStyle = c;
     for (let i = 0; i < list.length; i += 3) { const s = Math.max(1, list[i + 2] * z - pad * 2); ctx.fillRect(sx(list[i]) + pad, sy(list[i + 1]) + pad, s, s); }
   }
+  if (strips) {
+    // 帯：見える所だけに切りつめて、縁取り（ひと回り大きい主線の色）→ 機種の色。2×2 の装置は 1 台ずつ
+    const lw = Math.max(1, z * 0.07), edge = z >= 2.5;
+    const each = (fn: (X: number, Y: number, wd: number, ht: number) => void, g: { strips: number[]; boxes: number[] }) => {
+      const a = g.strips, b = g.boxes;
+      for (let i = 0; i < a.length; i += 3) {
+        const y = a[i + 1];
+        if (y < y0 || y > y1) continue;
+        const xa = Math.max(a[i], x0), xb = Math.min(a[i] + a[i + 2], x1 + 1);
+        if (xb > xa) fn(sx(xa) + pad, sy(y) + pad, Math.max(1, (xb - xa) * z - pad * 2), Math.max(1, z - pad * 2));
+      }
+      for (let i = 0; i < b.length; i += 3) {
+        if (b[i] < x0 || b[i] > x1 || b[i + 1] < y0 || b[i + 1] > y1) continue;
+        const sd = Math.max(1, b[i + 2] * z - pad * 2);
+        fn(sx(b[i]) + pad, sy(b[i + 1]) + pad, sd, sd);
+      }
+    };
+    if (edge) {
+      ctx.globalAlpha = Math.min(1, z - 2.5); ctx.fillStyle = line;
+      for (const g of strips.values()) each((X, Y, wd, ht) => ctx.fillRect(X - lw, Y - lw, wd + lw * 2, ht + lw * 2), g);
+      ctx.globalAlpha = 1;
+    }
+    for (const [c, g] of strips) { ctx.fillStyle = c; each((X, Y, wd, ht) => ctx.fillRect(X, Y, wd, ht), g); }
+    // 状態の印：横に 3 台以上続く所は 1 本の線（止まっている＝赤、動いている＝緑）。ばらばらの所は、これまでどおりの輪と点
+    const lines = (S: Strips, into: number[], color: string, wd: number) => {
+      const a = S.out;
+      ctx.beginPath();
+      let any = false;
+      for (let i = 0; i < a.length; i += 3) {
+        const n = a[i + 2];
+        if (n < 3) { for (let q = 0; q < n; q++) into.push(a[i] + q + 0.5, a[i + 1] + 0.5, 1); continue; }
+        const Y = sy(a[i + 1] + 0.5);
+        ctx.moveTo(sx(a[i] + 0.3), Y); ctx.lineTo(sx(a[i] + n - 0.3), Y); any = true;
+      }
+      if (any) { ctx.strokeStyle = color; ctx.lineWidth = wd; ctx.lineCap = 'butt'; ctx.stroke(); }
+    };
+    if (busyS && z >= 3) lines(busyS, busy, cv ? CVD_GO : '#58e06a', Math.max(1.2, z * 0.28));
+    if (badS) lines(badS, bad, P.red, Math.max(1.5, z * 0.3));
+  }
   // 色覚の補助のとき、稼働率の色分けで止まりがちの装置には、斜めの線を 1 本
   if (stall.length && z >= 2.5) {
     ctx.strokeStyle = line; ctx.lineWidth = Math.max(1, z * 0.09); ctx.beginPath();
@@ -667,36 +741,51 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
-    for (const { e, routes } of routesOf(w)) {
-      const col = lineColor(e.ch || 1);
-      ctx.strokeStyle = col; ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
-      for (const r of routes) {
-        if (r.custom) continue;
-        const pts = r.pts;
-        ctx.beginPath();
-        pts.forEach((q, i) => (i ? ctx.lineTo(sx(q[0]), sy(q[1])) : ctx.moveTo(sx(q[0]), sy(q[1]))));
-        // 敷いた線路の上は、番線の色を細く重ねる。自動の仮線路は点線
-        if (r.custom) { ctx.globalAlpha = 0.85; ctx.lineWidth = Math.max(1.2, z * 0.1); ctx.stroke(); ctx.globalAlpha = 1; }
-        else { ctx.lineWidth = Math.max(1.5, z * 0.14); ctx.setLineDash([Math.max(4, z * 0.6), Math.max(3, z * 0.4)]); ctx.stroke(); ctx.setLineDash([]); }
+    const sver = stationVer(w);
+    for (const e of stationsOf(w)) {
+      if (e.role !== 'in') continue;
+      const ds = stationDests(w, e, sver);
+      if (!ds.list.length) continue;
+      // 自動の仮線路（線路でつながっていない駅）は点線。行き先が多いときは、近い 3 か所だけ描く
+      if (!ds.laid) {
+        ctx.strokeStyle = lineColor(e.ch || 1); ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
+        ctx.lineWidth = Math.max(1.5, z * 0.14); ctx.setLineDash([Math.max(4, z * 0.6), Math.max(3, z * 0.4)]);
+        for (let k = 0; k < ds.list.length && k < 3; k++) {
+          const d = ds.list[k];
+          if (Math.max(e.x, d.x) + 2 < x0 || Math.min(e.x, d.x) > x1 + 1 || Math.max(e.y, d.y) + 2 < y0 || Math.min(e.y, d.y) > y1 + 1) continue;
+          const pts = railOf2(w, e, d)?.pts;
+          if (!pts) continue;
+          ctx.beginPath();
+          pts.forEach((q, i) => (i ? ctx.lineTo(sx(q[0]), sy(q[1])) : ctx.moveTo(sx(q[0]), sy(q[1]))));
+          ctx.stroke();
+        }
+        ctx.setLineDash([]);
       }
       // 列車：道のりに沿った位置に、番線の色の点
-      for (const tr of [e.tr, ...(e.xtr ?? [])]) {
+      for (let k = -1, xt = e.xtr, n = xt ? xt.length : 0; k < n; k++) {
+        const tr = k < 0 ? e.tr : xt![k];
         if (!tr) continue;
-        const r = routes.find((q) => `${q.dest.x},${q.dest.y}` === tr.to) ?? routes[0], pts = r.pts;
-        if (pts.length < 2) continue;
-        const segs = pts.slice(1).map((q, i) => Math.abs(q[0] - pts[i][0]) + Math.abs(q[1] - pts[i][1]));
-        let d = Math.max(0, Math.min(1, tr.p)) * segs.reduce((a, b) => a + b, 0), i = 0;
-        while (i < segs.length - 1 && d > segs[i]) { d -= segs[i]; i++; }
-        const f = segs[i] ? Math.min(1, d / segs[i]) : 0;
-        trains.push(pts[i][0] + (pts[i + 1][0] - pts[i][0]) * f, pts[i][1] + (pts[i + 1][1] - pts[i][1]) * f, e.ch || 1, tr.held ? 1 : 0);
+        trainAt(w, e, tr);
+        trains.push(TRAIN.x, TRAIN.y, e.ch || 1, tr.held ? 1 : 0);
       }
     }
-    for (let i = 0; i < trains.length; i += 4) {
-      const X = sx(trains[i]), Y = sy(trains[i + 1]), r = Math.max(2.6, z * 0.42);
-      if (X < -r || Y < -r || X > cw + r || Y > ch + r) continue;
-      ctx.beginPath(); ctx.arc(X, Y, r, 0, Math.PI * 2);
-      ctx.fillStyle = lineColor(trains[i + 2]); ctx.fill();
-      ctx.strokeStyle = trains[i + 3] ? P.red : rail.ink; ctx.lineWidth = 1.5; ctx.stroke();
+    // 列車の点は、番線の色ごと・縁の色ごとにまとめて塗る（千本あっても、塗るのは数回）
+    {
+      const r = Math.max(2.6, z * 0.42), byCh = new Map<number, number[]>();
+      for (let i = 0; i < trains.length; i += 4) {
+        const X = sx(trains[i]), Y = sy(trains[i + 1]);
+        if (X < -r || Y < -r || X > cw + r || Y > ch + r) continue;
+        let l = byCh.get(trains[i + 2]);
+        if (!l) byCh.set(trains[i + 2], (l = []));
+        l.push(X, Y, trains[i + 3]);
+      }
+      const dots = (l: number[], held: number) => { ctx.beginPath(); for (let i = 0; i < l.length; i += 3) if (held < 0 || l[i + 2] === held) { ctx.moveTo(l[i] + r, l[i + 1]); ctx.arc(l[i], l[i + 1], r, 0, Math.PI * 2); } };
+      ctx.lineWidth = 1.5;
+      for (const [c, l] of byCh) {
+        dots(l, -1); ctx.fillStyle = lineColor(c); ctx.fill();
+        dots(l, 0); ctx.strokeStyle = rail.ink; ctx.stroke();
+        dots(l, 1); ctx.strokeStyle = P.red; ctx.stroke();
+      }
     }
   }
 

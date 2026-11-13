@@ -1,5 +1,5 @@
 // 重さの計測用の大きな工場：線路 1 万マス（駅 40 組）、ベルト 1 万（荷あり）、反応器 600。node --import tsx で実行する
-import { newWorld, step, configure, layRail, type World } from '../src/engine/world';
+import { newWorld, step, configure, layRail, slotPort, type World } from '../src/engine/world';
 import { recipeById } from '../src/content/recipes';
 export function stressWorld(): World {
   const w = newWorld();
@@ -67,6 +67,47 @@ export function farmWorld(): World {
     layRail(w, [[100, y], [249, y]]);
     put({ kind: 'station', x: 98, y: y - 1, dir: 0, ch: (r % 8) + 1, role: 'in', big: true, buf: Array(1200).fill('N2') });
     put({ kind: 'station', x: 250, y: y - 1, dir: 0, ch: (r % 8) + 1, role: 'out', big: true, buf: Array(600).fill('N2') });
+  }
+  return w;
+}
+
+/**
+ * 巨大な区画の工場（実際の大きな工場の形）：230×210 マスの区画に、1 行おきの横の線路（各 230 マス）と、行を束ねる縦の幹線。
+ * 行ごとに積む駅を 6 つ（合わせて 600 あまり）、採取機 5800 台が駅へ直接出す。降ろす駅は納品所のそばに 12。すべて同じ番線。
+ * 線路は約 2.6 万マス、列車は駅ごとに 3 編成
+ */
+export function megaWorld(): World {
+  const w = newWorld();
+  w.up = { extract: 8, belt: 6, machine: 6 };
+  w.research.push('yard', 'heavy');
+  const put = (e: Record<string, unknown>) => w.ents.set(`${e.x},${e.y}` as never, e as never);
+  const big = (e: Record<string, unknown>) => { put({ ...e, big: true }); for (const [dx, dy] of [[1, 0], [0, 1], [1, 1]]) put({ kind: 'part', x: (e.x as number) + dx, y: (e.y as number) + dy, dir: 0, ref: `${e.x},${e.y}` }); };
+  const X0 = 60, Y0 = 40, W = 230, ROWS = 105;
+  const set = new Set<string>();
+  for (let r = 0; r < ROWS; r++) for (let x = 0; x < W; x++) set.add(`${X0 + x},${Y0 + r * 2}`);
+  // 縦の幹線：区画の左の縁（3 列）。納品所の方へ上にのびる
+  for (let c = 0; c < 3; c++) for (let y = Y0 - 30; y < Y0 + ROWS * 2; y++) set.add(`${X0 - 3 + c},${y}`);
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < 3; c++) set.add(`${X0 - 1 + c},${Y0 + r * 2}`);
+  // 駅と採取機の場所は、線路から外す（線路は設備の上を通れるが、ここでは行の間に置く）
+  const D = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+  for (const k of set) { const [x, y] = k.split(',').map(Number); let m = 0; D.forEach(([dx, dy], d) => { if (set.has(`${x + dx},${y + dy}`)) m |= 1 << d; }); w.rails.set(k, m); }
+  w.railRev++;
+  let stations = 0;
+  for (let r = 0; r < ROWS; r += 1) {
+    const y = Y0 + r * 2 + 1;   // 線路の行の間の行：採取機を並べ、ところどころに駅
+    if (r % 2 === 0) continue;  // 駅は 2×2 なので、1 行おきに置く（線路の行を 1 本またぐ）
+    for (let x = 0; x < W - 2; x++) {
+      if (x % 38 === 18) { big({ kind: 'station', x: X0 + x, y, dir: 0, ch: 8, role: 'in', cars: 3, buf: Array(1200).fill('N2') }); stations++; x++; continue; }
+      if (x % 38 === 19) continue;
+      put({ kind: 'extractor', x: X0 + x, y, dir: x % 38 < 18 ? 0 : 2 });
+      put({ kind: 'extractor', x: X0 + x, y: y + 1, dir: x % 38 < 18 ? 0 : 2 });
+    }
+  }
+  for (let i = 0; i < 12; i++) {
+    const st = { kind: 'station', x: X0 - 6 - (i % 2) * 6 + (i % 2 ? 9 : 0), y: Y0 - 28 + Math.floor(i / 2) * 4, dir: 0, ch: 8, role: 'out', buf: [] };
+    big(st);
+    // 降ろした物は、正面の 2 つの口の先の廃棄口へ捨てる（列車が降ろせずに駅で待ち続けないように。本物の工場では、ベルトが運び去る）
+    for (const k of [0, 1]) { const q = slotPort({ ...st, big: true } as never, k); put({ kind: 'vent', x: q.tx, y: q.ty, dir: 0 }); }
   }
   return w;
 }

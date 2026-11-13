@@ -4,7 +4,7 @@ import { lineColor, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
 import { heightOf, TOP_H } from './three';
 import { flowTrace, JAM_SEC, markEpoch, MOVERS, stationsOf, type FlowTrace } from '../engine/world';
-import { at, floorOf, FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, stationRoutes, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type World } from '../engine/world';
+import { at, floorOf, FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, railOf, stationDests, stationVer, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type Train, type World } from '../engine/world';
 import { BRASS, BRASS_DARK, mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 import { buildChunkLab, hubLab, labAmbient, labBelts, labFrame, labHubGlow, labSelect, labZoneLabel, machineLab } from './skinLab';
@@ -20,7 +20,7 @@ import { AMINO_ORDER, aminoOf, phOf, poleAt, type AminoKey } from '../content/ph
 import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/sep';
 import { drawFar, farBegin, farEnd } from './far';
 import { bodyLite, buildChunkLite, hubLite } from './skinLite';
-import { lineRuns, railJunctions, railRuns } from './railruns';
+import { TRAIN, lineRuns, railJunctions, railRuns, trainAt } from './railruns';
 import { bodyMyth, buildChunkMyth, hubMyth, mythAmbient, mythParticle, mythUnder, mythBelts, mythFrame, mythHubGlow, mythSelect, mythZoneLabel } from './skinMyth';
 import { drawGlints, hubMeter, mapStats, noteFx } from './mapfx';
 import { newPlume, plumePaint, plumeRadius, plumeReact, PLUME_CAP, stepPlume, type Plume } from './plumephys';
@@ -866,10 +866,13 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   // 引いた視野では、細部（厚み・流れ線・影）を省く
   // 軽量スキンは、早めに簡単な絵に替える：1 マス 30 画素より引いたとき、または装置が画面に 500 台を超えて映るとき（採取機の畑など）。
   // 装置は機種の色の四角と状態の点、荷は色の点。細かい絵（反応の様子・出口の矢じり）は、寄って台数が減ったときに描く
-  let visMachines = 0;
-  for (const e of vis) if (e.kind !== 'belt' && e.kind !== 'part') visMachines++;
-  // ほかのスキンでも、装置が画面に 1200 台を超えて映るときは簡単な絵にする（1 台ずつ細かく描くと、1 コマに何百ミリ秒もかかる）
-  const crowd = visMachines > (lite ? 300 : 1200);
+  let visMachines = 0, visEx = 0;
+  for (const e of vis) if (e.kind !== 'belt' && e.kind !== 'part') { visMachines++; if (e.kind === 'extractor') visEx++; }
+  // ほかのスキンでも、装置がたくさん映るときは簡単な絵にする（1 台ずつ細かく描くと、1 コマに何百ミリ秒もかかる）。
+  // 採取機は、同じ絵を使い回せる（下の exSprite）ので別に数える：採取機のほかが 500 台、または全部で 3000 台を超えたら
+  const crowd = lite ? visMachines > 300 : visMachines - visEx > 500 || visMachines > 3000;
+  // 採取機がたくさん映るときは、1 台ずつ描かず、向きと状態ごとに 1 度描いた絵を貼る（羽根は、みな同じ向きで回る）
+  const exStamp = visEx > 120, exDpr = exStamp ? ctx.getTransform().a || 1 : 1, exPhase = Math.floor(t / EX_DT) % EX_PHASES;
   const far = z < (lite ? 30 : 15) || crowd, veryFar = z < (lite ? 22 : 11) || crowd;
   // 厚み：ベルトと配管を地面から浮かせる。まず地面に落ちる影、次に手前の側面を描き、そのあと上面を描く
   const lift = z * 0.1;
@@ -1142,7 +1145,11 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       if (G && e.busy) glow(px0 + ps / 2, py0 + ps / 2, z * sz * 1.5, glowOf(e, P), 0.4);
       continue;
     }
-    machine(ctx, P, sx(e.x + sz / 2), sy(e.y + sz / 2), z * pop * sz, z, e, t);
+    if (exStamp && e.kind === 'extractor' && pop === 1 && !e.busy) {
+      const cv = exSprite(P, z, exDpr, e.dir, (e.stuck || 0) > 2.5 || !!e.bad, !!e.off, exPhase), half = cv.width / 2 / exDpr;
+      // 画素の境目に合わせて貼る（ぼやけない）
+      ctx.drawImage(cv, Math.round((sx(e.x + 0.5) - half) * exDpr) / exDpr, Math.round((sy(e.y + 0.5) - half) * exDpr) / exDpr, half * 2, half * 2);
+    } else machine(ctx, P, sx(e.x + sz / 2), sy(e.y + sz / 2), z * pop * sz, z, e, t);
     // ---- 粒子まで拡大：うんと近づくと、装置の天面が「粒子の窓」に変わり、いま進んでいる反応の原子の組み替えが見える ----
     if (z >= ZOOM_IN && sz === 2 && e.recipe && isMachine(e.kind)) {
       const r = recipeById(e.recipe);
@@ -1382,10 +1389,13 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       const runs = railRuns(w);
       // 線は、まっすぐ続く区間ごとに 1 本（1 万マスの線路でも、区間の数だけ線を引く）。見える所にかかる区間だけ
       const seg: number[] = [], junc: number[] = [];
+      const cx0 = Math.floor(x0) - 2.5, cy0 = Math.floor(y0) - 2.5, cx1 = Math.ceil(x1) + 3.5, cy1 = Math.ceil(y1) + 3.5;
       for (let k = 0; k < runs.length; k += 4) {
         const ax = runs[k], ay = runs[k + 1], bx = runs[k + 2], by = runs[k + 3];
         if (bx < x0 - 2 || ax > x1 + 2 || by < y0 - 2 || ay > y1 + 2) continue;
-        seg.push(ax, ay, bx, by);
+        // 長い区間は、見える所だけに切りつめる（点線の枕木は、線の長さだけ手間がかかる。230 マスの直線でも、画面の幅の分だけ）。
+        // マスの中心（.5）で切るので、点線の並びはずれない
+        seg.push(Math.max(ax, cx0), Math.max(ay, cy0), Math.min(bx, cx1), Math.min(by, cy1));
       }
       const jn = railJunctions(w);
       for (let k = 0; k < jn.length; k += 2) if (jn[k] >= x0 - 2 && jn[k] <= x1 + 3 && jn[k + 1] >= y0 - 2 && jn[k + 1] <= y1 + 3) junc.push(jn[k], jn[k + 1]);
@@ -1417,60 +1427,82 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
         for (const a of [L.runs, L.stubs]) for (let k = 0; k < a.length; k += 4) {
           const ax = a[k], ay = a[k + 1], bx = a[k + 2], by = a[k + 3];
           if (Math.max(ax, bx) < x0 - 2 || Math.min(ax, bx) > x1 + 2 || Math.max(ay, by) < y0 - 2 || Math.min(ay, by) > y1 + 2) continue;
-          ctx.moveTo(sx(ax), sy(ay)); ctx.lineTo(sx(bx), sy(by));
+          // 区間（縦か横）は、見える所だけに切りつめる。駅への短い線（斜めもある）はそのまま
+          if (a === L.runs) { ctx.moveTo(sx(Math.max(ax, cx0)), sy(Math.max(ay, cy0))); ctx.lineTo(sx(Math.min(bx, cx1)), sy(Math.min(by, cy1))); }
+          else { ctx.moveTo(sx(ax), sy(ay)); ctx.lineTo(sx(bx), sy(by)); }
         }
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
     }
+    // 見える列車を先に集める（列車が千本あっても、場所を出すのは 1 本あたり決まった手間。画面の外は、ここで捨てる）
+    const seenTr: { tr: Train; x: number; y: number; dx: number; dy: number; col: string }[] = [];
+    const sver = stationVer(w);
     for (const e of stationsOf(w)) {
       if (e.role !== 'in') continue;
-      const routes = stationRoutes(w, e);
-      if (!routes.length) continue;
+      const ds = stationDests(w, e, sver);
+      if (!ds.list.length) continue;
       const col = lineColor(e.ch || 1);
-      // 画面の座標は、要る道筋の分だけ作る（自動の仮線路と、列車がいま走っている道筋）
-      const toScreen = (r: (typeof routes)[number]) => ({ r, xs: r.pts.map((q) => sx(q[0])), ys: r.pts.map((q) => sy(q[1])) });
-      ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
-      for (const r of routes) {
-        if (r.custom) continue;   // 敷いた線路の上の色は、上でまとめて描いた
-        const { xs, ys } = toScreen(r);
-        if (Math.max(...xs) < -50 || Math.min(...xs) > cw + 50 || Math.max(...ys) < -50 || Math.min(...ys) > ch + 50) continue;
-        const path = (ox: number, oy: number) => { ctx.beginPath(); xs.forEach((x, k) => (k ? ctx.lineTo(x + ox, ys[k] + oy) : ctx.moveTo(x + ox, ys[k] + oy))); };
-        // 自動の仮線路：地面の影 → 枕木 → 桁 → 路線色
-        if (!lite) { ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2; path(lift2 * 0.5, lift2); ctx.stroke(); }
-        ctx.strokeStyle = ink; ctx.lineWidth = z * 0.26; ctx.setLineDash([z * 0.07, z * 0.2]); path(0, 0); ctx.stroke(); ctx.setLineDash([]);
-        ctx.lineWidth = z * 0.13; path(0, 0); ctx.stroke();
-        ctx.strokeStyle = col; ctx.lineWidth = z * 0.07; path(0, 0); ctx.stroke();
+      // 自動の仮線路（線路でつながっていない駅）：地面の影 → 枕木 → 桁 → 路線色。行き先が多いときは、近い 3 か所だけ描く
+      // （敷いた線路の上の色は、上でまとめて描いた）
+      if (!ds.laid) {
+        ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
+        for (let k = 0; k < ds.list.length && k < 3; k++) {
+          const d = ds.list[k];
+          if (Math.max(e.x, d.x) + 3 < x0 || Math.min(e.x, d.x) - 1 > x1 || Math.max(e.y, d.y) + 3 < y0 || Math.min(e.y, d.y) - 1 > y1) continue;
+          const r = railOf(w, e, d);
+          if (!r || r.custom) continue;
+          const xs = r.pts.map((q) => sx(q[0])), ys = r.pts.map((q) => sy(q[1]));
+          const path = (ox: number, oy: number) => { ctx.beginPath(); xs.forEach((x, k2) => (k2 ? ctx.lineTo(x + ox, ys[k2] + oy) : ctx.moveTo(x + ox, ys[k2] + oy))); };
+          if (!lite) { ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2; path(lift2 * 0.5, lift2); ctx.stroke(); }
+          ctx.strokeStyle = ink; ctx.lineWidth = z * 0.26; ctx.setLineDash([z * 0.07, z * 0.2]); path(0, 0); ctx.stroke(); ctx.setLineDash([]);
+          ctx.lineWidth = z * 0.13; path(0, 0); ctx.stroke();
+          ctx.strokeStyle = col; ctx.lineWidth = z * 0.07; path(0, 0); ctx.stroke();
+        }
       }
       // 列車：それぞれの行き先の道のりに沿って進む
-      if (z >= 10) for (const tr of [e.tr, ...(e.xtr ?? [])]) {
+      if (z >= 10) for (let k = -1, xt = e.xtr, n = xt ? xt.length : 0; k < n; k++) {
+        const tr = k < 0 ? e.tr : xt![k];
         if (!tr) continue;
-        const sc = toScreen(routes.find((q) => `${q.dest.x},${q.dest.y}` === tr.to) ?? routes[0]);
-        const { xs, ys } = sc, pts = sc.r.pts;
-        const segs = pts.slice(1).map((q, k) => Math.abs(q[0] - pts[k][0]) + Math.abs(q[1] - pts[k][1]));
-        let d = Math.max(0, Math.min(1, tr.p)) * segs.reduce((x, y) => x + y, 0), a = 0;
-        while (a < segs.length - 1 && d > segs[a]) { d -= segs[a]; a++; }
-        const f = segs[a] ? Math.min(1, d / segs[a]) : 0;
-        const tx = xs[a] + (xs[a + 1] - xs[a]) * f, ty = ys[a] + (ys[a + 1] - ys[a]) * f;
+        trainAt(w, e, tr);
+        const tx = sx(TRAIN.x), ty = sy(TRAIN.y);
         if (tx < -60 || tx > cw + 60 || ty < -60 || ty > ch + 60) continue;
-        const ang = Math.atan2(ys[a + 1] - ys[a], xs[a + 1] - xs[a]) + (tr.back ? Math.PI : 0);
-        ctx.save();
-        ctx.translate(tx, ty); ctx.rotate(ang);
-        const L = z * 0.95, Wd = z * 0.46;
-        if (!lite) { ctx.fillStyle = punk ? 'rgba(0,0,0,0.4)' : P.shadow; rr(ctx, -L / 2 + z * 0.06, -Wd / 2 + z * 0.14, L, Wd, z * 0.08); ctx.fill(); }
-        rr(ctx, -L / 2, -Wd / 2, L, Wd, z * 0.08); ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = lw(0.05); ctx.stroke();
-        rr(ctx, -L / 2 + z * 0.08, -Wd / 2 + z * 0.07, L * 0.62, Wd - z * 0.14, z * 0.04); ctx.fillStyle = tr.cargo.length ? '#f3f1e8' : 'rgba(0,0,0,0.35)'; ctx.fill(); ctx.stroke();
-        // 先頭の灯り：前の列車を待って止まっているときは赤
-        ctx.fillStyle = tr.held ? P.red : punk ? '#14181d' : P.ink; ctx.fillRect(L / 2 - z * 0.2, -Wd / 2 + z * 0.06, z * 0.14, Wd - z * 0.12);
-        ctx.restore();
-        // 前照灯
-        glow(tx + Math.cos(ang) * z * 0.7, ty + Math.sin(ang) * z * 0.7, z * 1.1, tr.held ? '255,60,50' : '255,236,180', 0.6);
-        // 走っている列車は、後ろへ煙を残す
-        if (z >= 16 && !tr.held && tr.p > 0.01 && tr.p < 0.99 && particles.length < 260 && Math.random() < dt * 5) {
-          particles.push({ x: cam.x + (tx - cw / 2) / z - Math.cos(ang) * 0.4, y: cam.y + (ty - ch / 2) / z - Math.sin(ang) * 0.4, vx: -Math.cos(ang) * 0.3, vy: -0.35 - Math.random() * 0.2, age: 0, life: 0.8 + Math.random() * 0.5, color: 'smoke', r: 0.08 + Math.random() * 0.05 });
-        }
-        if (tr.cargo.length && z >= 22) { const s0 = tr.cargo[0]; ctx.drawImage(sprite(s0.startsWith('!') ? s0.slice(1) : s0), tx - z * 0.17 - Math.cos(ang) * z * 0.1, ty - z * 0.17 - Math.sin(ang) * z * 0.1, z * 0.34, z * 0.34); }
+        seenTr.push({ tr, x: tx, y: ty, dx: TRAIN.dx, dy: TRAIN.dy, col });
       }
+    }
+    const L = z * 0.95, Wd = z * 0.46;
+    if (lite || seenTr.length > 60) {
+      // 軽量スキンと、列車がたくさん見えるとき：向きに合わせた四角だけ（回さない・影なし・灯りなし）。止まって待つ列車は、先頭が赤
+      const b = Math.max(1, lw(0.05));
+      for (const t of seenTr) {
+        const hz = Math.abs(t.dx) >= Math.abs(t.dy), a = hz ? L : Wd, c = hz ? Wd : L, fx = hz ? Math.sign(t.dx) || 1 : 0, fy = hz ? 0 : Math.sign(t.dy) || 1;
+        ctx.fillStyle = ink; ctx.fillRect(t.x - a / 2 - b, t.y - c / 2 - b, a + b * 2, c + b * 2);
+        ctx.fillStyle = t.col; ctx.fillRect(t.x - a / 2, t.y - c / 2, a, c);
+        // 荷の窓（積んでいれば明るい）：後ろ寄り
+        ctx.fillStyle = t.tr.cargo.length ? '#f3f1e8' : 'rgba(0,0,0,0.35)';
+        ctx.fillRect(t.x - a * 0.3 - fx * L * 0.12, t.y - c * 0.3 - fy * L * 0.12, a * 0.6, c * 0.6);
+        // 先頭の灯り
+        ctx.fillStyle = t.tr.held ? P.red : ink;
+        const hw = z * 0.14;
+        if (hz) ctx.fillRect(t.x + fx * (L / 2 - z * 0.13) - hw / 2, t.y - Wd / 2 + z * 0.06, hw, Wd - z * 0.12); else ctx.fillRect(t.x - Wd / 2 + z * 0.06, t.y + fy * (L / 2 - z * 0.13) - hw / 2, Wd - z * 0.12, hw);
+      }
+    } else for (const t of seenTr) {
+      const { tr, x: tx, y: ty, col } = t, ang = Math.atan2(t.dy, t.dx);
+      ctx.save();
+      ctx.translate(tx, ty); ctx.rotate(ang);
+      ctx.fillStyle = punk ? 'rgba(0,0,0,0.4)' : P.shadow; rr(ctx, -L / 2 + z * 0.06, -Wd / 2 + z * 0.14, L, Wd, z * 0.08); ctx.fill();
+      rr(ctx, -L / 2, -Wd / 2, L, Wd, z * 0.08); ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = lw(0.05); ctx.stroke();
+      rr(ctx, -L / 2 + z * 0.08, -Wd / 2 + z * 0.07, L * 0.62, Wd - z * 0.14, z * 0.04); ctx.fillStyle = tr.cargo.length ? '#f3f1e8' : 'rgba(0,0,0,0.35)'; ctx.fill(); ctx.stroke();
+      // 先頭の灯り：前の列車を待って止まっているときは赤
+      ctx.fillStyle = tr.held ? P.red : punk ? '#14181d' : P.ink; ctx.fillRect(L / 2 - z * 0.2, -Wd / 2 + z * 0.06, z * 0.14, Wd - z * 0.12);
+      ctx.restore();
+      // 前照灯
+      glow(tx + Math.cos(ang) * z * 0.7, ty + Math.sin(ang) * z * 0.7, z * 1.1, tr.held ? '255,60,50' : '255,236,180', 0.6);
+      // 走っている列車は、後ろへ煙を残す
+      if (z >= 16 && !tr.held && tr.p > 0.01 && tr.p < 0.99 && particles.length < 260 && Math.random() < dt * 5) {
+        particles.push({ x: cam.x + (tx - cw / 2) / z - Math.cos(ang) * 0.4, y: cam.y + (ty - ch / 2) / z - Math.sin(ang) * 0.4, vx: -Math.cos(ang) * 0.3, vy: -0.35 - Math.random() * 0.2, age: 0, life: 0.8 + Math.random() * 0.5, color: 'smoke', r: 0.08 + Math.random() * 0.05 });
+      }
+      if (tr.cargo.length && z >= 22) { const s0 = tr.cargo[0]; ctx.drawImage(sprite(s0.startsWith('!') ? s0.slice(1) : s0), tx - z * 0.17 - Math.cos(ang) * z * 0.1, ty - z * 0.17 - Math.sin(ang) * z * 0.1, z * 0.34, z * 0.34); }
     }
   }
 
@@ -2000,6 +2032,32 @@ function token(ctx: CanvasRenderingContext2D, P: Palette, x: number, y: number, 
 
 /** 研究所スキンの装置に渡す、ここにしかない絵の道具 */
 const LAB_KIT = { glyph, poleMarks, powerMark };
+/**
+ * 採取機の絵の使い回し。採取機の畑では、同じ絵が画面に何百台も並ぶ。1 台ずつ線と面で描く代わりに、
+ * 「向き・詰まり・停止・羽根の向き（EX_PHASES とおり）」ごとに 1 度だけ小さな絵に描き、あとはそれを貼る。
+ * 拡大率・スキン・昼夜が変わったら作り直す（要る絵だけ、使うときに作る）
+ */
+const EX_PHASES = 8;
+/** 羽根は 3 枚で、120° 回ると元の形。その 1 巡り（2π/3 ÷ 毎秒 3 rad）を EX_PHASES 等分した時間 */
+const EX_DT = (Math.PI * 2) / 9 / EX_PHASES;
+let exCache: { key: string; m: Map<number, HTMLCanvasElement> } | null = null;
+function exSprite(P: Palette, z: number, dpr: number, dir: number, jam: boolean, off: boolean, phase: number): HTMLCanvasElement {
+  const key = `${P.key}|${z}|${dpr}`;
+  if (!exCache || exCache.key !== key) exCache = { key, m: new Map() };
+  const k = phase * 16 + dir * 4 + (jam ? 2 : 0) + (off ? 1 : 0);
+  let cv = exCache.m.get(k);
+  if (!cv) {
+    // 影・出口の矢じり・赤ペンの印が台の外へはみ出すので、1 マスの 1.6 倍の大きさに描く
+    const half = Math.ceil(z * 0.8 * dpr);
+    cv = document.createElement('canvas');
+    cv.width = cv.height = half * 2;
+    const g = cv.getContext('2d')!;
+    g.scale(dpr, dpr);
+    machine(g, P, half / dpr, half / dpr, z, z, { kind: 'extractor', x: 0, y: 0, dir, stuck: jam ? 9 : 0, off } as Ent, phase * EX_DT);
+    exCache.m.set(k, cv);
+  }
+  return cv;
+}
 function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, z: number, e: Ent, t: number) {
   if (P.skin === 'punk') { machinePunk(ctx, P, cx, cy, u, z, e, t); return; }
   if (P.skin === 'lab') { machineLab(ctx, P, cx, cy, u, z, e, t, LAB_KIT); return; }
