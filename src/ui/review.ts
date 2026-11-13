@@ -46,10 +46,10 @@ let actives: Active[] = [];
 const setActive = (a: Active) => { actives = [...actives.filter((x) => x.root !== a.root && x.root.isConnected), a]; };
 /**
  * 押されたキーで問いに答える。使ったら true。
- * within を渡すと、その中の問いにだけ答える（窓を開いている間は、窓の下に残った工場の札に答えない）
+ * within を渡すと、その中の問いにだけ答える（窓を開いている間は、窓の下に残った工場の札に答えない）。隠れた問いと、開いた窓の後ろ（inert）の札の問いにも答えない
  */
 export function quizKey(key: string, within?: HTMLElement | null): boolean {
-  const a = [...actives].reverse().find((x) => x.root.isConnected && !x.root.closest('[hidden]') && (!within || within.contains(x.root)));
+  const a = [...actives].reverse().find((x) => x.root.isConnected && !x.root.closest('[hidden], [inert]') && (!within || within.contains(x.root)));
   if (!a) return false;
   if (/^[1-9]$/.test(key)) { const n = Number(key) - 1; return a.choose(n) || a.conf(n); }
   if (key === 'Enter') return a.next();

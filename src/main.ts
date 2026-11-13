@@ -415,8 +415,44 @@ function boot(data: HotData) {
   // ---- モーダル ----
   const modal = $('modal'), sheet = $('sheet');
   const closeModal = () => { modal.hidden = true; sheet.replaceChildren(); selected = null; save(); cardCheck(); };
-  const showSheet = (...nodes: (Node | string | null)[]) => { sheet.replaceChildren(...nodes.filter((n): n is Node | string => n !== null)); sheet.scrollTop = 0; modal.hidden = false; };
+  // 流した位置は、窓を見せてから 0 に戻す（隠れている間に 0 にしても効かず、前の窓の位置のまま開いてしまう）
+  const showSheet = (...nodes: (Node | string | null)[]) => {
+    const was = !modal.hidden;
+    sheet.replaceChildren(...nodes.filter((n): n is Node | string => n !== null));
+    modal.hidden = false; sheet.scrollTop = 0;
+    // 開いたまま中身を替えて、押したボタンごとフォーカスが消えたら、窓へ戻す（新しく開くときは下の見張りが移す）
+    if (was && (!document.activeElement || document.activeElement === document.body)) sheet.focus({ preventScroll: true });
+  };
   modal.addEventListener('pointerdown', (ev) => { if (ev.target === modal) closeModal(); });
+  // 窓が開いている間は、窓より下にある地図・道具・札を inert にして、Tab や読み上げが後ろへ抜けないようにする。
+  // フォーカスは窓へ移し、閉じたら開く前の所へ戻す。窓はあちこちで開け閉めするので、#modal の hidden を見張って行う
+  {
+    let wasOpen = false, opener: HTMLElement | null = null;
+    const under: HTMLElement[] = [];
+    const zOf = (el: Element) => Number(getComputedStyle(el).zIndex) || 0;
+    // 知らせの札（role=status）は、押せるものがなければ、窓を開いていても読み上げられるように残す
+    const notice = (el: Element) => el.matches('[role="status"], [role="alert"]') && !el.querySelector('button, input, select, textarea, a[href], [tabindex]');
+    new MutationObserver(() => {
+      const open = !modal.hidden, a = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+      if (open) {
+        if (!wasOpen) {
+          opener = a && !modal.contains(a) ? a : null;
+          // 確かめの窓・案内のように、窓より上に重なるものは触れるまま
+          const z = zOf(modal);
+          for (const el of app.children) if (el !== modal && el instanceof HTMLElement && !el.inert && zOf(el) < z && !notice(el)) { el.inert = true; under.push(el); }
+        }
+        // フォーカスが窓の後ろ（いま触れなくした所）か、どこにもなければ、窓へ
+        if (!a || a.closest('[inert]')) sheet.focus({ preventScroll: true });
+      } else if (wasOpen) {
+        for (const el of under) el.inert = false;
+        under.length = 0;
+        // 閉じてフォーカスの行き場がなくなったら（窓の中にあった・どこにもない）、開く前の所へ戻す
+        if (opener?.isConnected && (!a || modal.contains(a))) opener.focus({ preventScroll: true });
+        opener = null;
+      }
+      wasOpen = open;
+    }).observe(modal, { attributes: true, attributeFilter: ['hidden'] });
+  }
   const closeBtn = () => h('button', { class: 'ghost', type: 'button', id: 'sheet-close', onclick: closeModal }, '閉じる');
   const sheetActions = {
     close: closeModal,
@@ -1101,6 +1137,12 @@ function boot(data: HotData) {
     if (goalEl.classList.contains('folded')) { sfx.tap(); setFold(false); return; }
     if (sandbox) showCaseBrief(); else showChapters(panel());
   };
+  // キーボードで札に移ったときも、Enter で押せる（Space は、ほかのボタンの上と同じく一時停止のまま）
+  goalEl.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' || ev.target !== goalEl || ev.isComposing || ev.repeat) return;
+    ev.preventDefault(); ev.stopPropagation();
+    goalEl.click();
+  });
   const speedBtn = $('b-speed');
   const paintSpeed = () => { speedBtn.textContent = speed === 0 ? '⏸ 停止中' : `▶ ×${speed}`; speedBtn.classList.toggle('hot', speed !== 1); $('paused').hidden = speed !== 0 || !slot; };
   speedBtn.onclick = () => { speed = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length]; paintSpeed(); sfx.tap(); };
@@ -1391,12 +1433,15 @@ function boot(data: HotData) {
     const ax = scr[0];
     // 稼働率の札を出しているときは、札の上に出す
     const ay = scr[1] - 14 - (overlay && !hub ? 26 : 0);
-    act.style.transform = `translate(${Math.round(Math.min(cw - 110, Math.max(110, ax)))}px, ${Math.round(Math.max(64, ay))}px) translate(-50%, -100%)`;
+    // 帯の幅は、選んだものと「ボタンを大きく」で変わる（隣に・‖・⇄ も入る）。測った幅で、両端が画面の内に入るように寄せる
+    const inX = (el: HTMLElement) => { const half = el.offsetWidth / 2 + 8; return Math.round(Math.min(Math.max(half, ax), Math.max(cw / 2, cw - half))); };
+    const ah = act.offsetHeight, by = Math.round(Math.max(64, ah + 8, ay));
+    act.style.transform = `translate(${inX(act)}px, ${by}px) translate(-50%, -100%)`;
     const note = hub ? '' : b2.note(selected, statusOf(selected));
     actNote.hidden = !note;
     if (note) {
       if (actNote.textContent !== note) actNote.textContent = note;
-      actNote.style.transform = `translate(${Math.round(Math.min(cw - 110, Math.max(110, ax)))}px, ${Math.round(Math.max(64, ay) - 58)}px) translate(-50%, -100%)`;
+      actNote.style.transform = `translate(${inX(actNote)}px, ${by - ah - 6}px) translate(-50%, -100%)`;
     }
   };
 

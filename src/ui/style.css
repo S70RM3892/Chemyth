@@ -1074,7 +1074,7 @@ html.big-text #clone-bar { zoom: var(--z, 1.15); }
 .st-top { align-items: center; gap: 10px; flex-wrap: wrap; }
 .st-top .seg button { min-height: 38px; padding: 4px 14px; }
 /* 折れ線グラフ（線は SVG、文字は HTML） */
-.lc .lc-plot { display: block; width: 100%; height: 96px; touch-action: none; cursor: crosshair; border-left: 1px solid var(--rule); }
+.lc .lc-plot { display: block; width: 100%; height: 96px; touch-action: pan-y; cursor: crosshair; border-left: 1px solid var(--rule); }
 .lc-grid { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 3 4; }
 .lc-base { stroke: var(--ink); stroke-width: 1; }
 .lc-rule { stroke: var(--soft); stroke-width: 1; stroke-dasharray: 2 3; }
@@ -1446,3 +1446,11 @@ html.hc[data-skin="punk"][data-theme="dark"] { --key-edge: var(--panel-soft) !im
   [data-skin="punk"] #title h1 { font-size: min(48px, 13.5cqi); }
   [data-skin="arcane"] #title h1 { font-size: min(52px, 17cqi); }
 }
+
+/* ===== fix:sheets ===== */
+/* 選んだものの帯：画面より広くなるときは折り返す（画面の端へ寄せる位置は、測った幅から main.ts で決める） */
+#act { flex-wrap: wrap; justify-content: center; max-width: calc(100% - 16px); }
+/* 電話の幅では、ボタンの横幅を少し詰めて、反応を組んだ装置の 7 つのボタンも 1 段に収める */
+@media (max-width: 440px) { #act button { min-width: 44px; padding: 0 10px; } html.big-btn #act button { min-width: 48px; } }
+/* 窓を開いたときは窓そのものへフォーカスを移す。窓には枠を出さない（中のボタンには出る） */
+#sheet:focus { outline: none; }
