@@ -9,7 +9,7 @@ import { recipeById } from '../content/recipes';
 import { DAILY_BONUS, DAILY_GOAL, dailyBonus, daysToExam, streakOf, todayCount } from '../engine/habit';
 import { answer, relearnReady, type World } from '../engine/world';
 import { buildQueue, groupsOf, partsFor, quizFor, type Quiz } from '../engine/quiz';
-import type { Confidence } from '../engine/fsrs';
+import { dayKey, type Confidence } from '../engine/fsrs';
 import { calibAdvice, hintFor, practiceIds, recordTime, snapAnswer, tagWhy, undoAnswer, UNDO_MS } from '../engine/learn';
 import { WHY_NAME, WHY_TIP, type Why } from '../engine/study';
 import { openConfig } from './config';
@@ -55,6 +55,20 @@ export function quizKey(key: string, within?: HTMLElement | null): boolean {
   if (key === 'Enter') return a.next();
   return false;
 }
+/**
+ * 答えを取り消した問い（セーブごと。id → 取り消した時刻と、そのときの答えた回数・最後に答えた時刻）。もう正しい答えを見ている。
+ * 窓を閉じて開き直しても、ほかの所（工場の札・復習の窓・今夜と今朝の 10 問）で出しても、その日のうちは選び直しとして扱う。
+ * そのあとどこかで答えたら（答えた回数・時刻が変わったら）、使わない
+ */
+const seenMarks = new WeakMap<World, Map<string, { at: number; n: number; last: number }>>();
+const seenOf = (w: World) => { let m = seenMarks.get(w); if (!m) seenMarks.set(w, (m = new Map())); return m; };
+/** 答えを取り消して、まだ答え直していない問いか（日をまたいだもの・ほかで答えたものは捨てる） */
+function seenBefore(w: World, id: string, now = Date.now()): boolean {
+  const s = seenOf(w).get(id), c = w.srs[id];
+  if (s && dayKey(s.at) === dayKey(now) && (c?.n ?? 0) === s.n && (c?.last ?? 0) === s.last) return true;
+  seenOf(w).delete(id);
+  return false;
+}
 /** 練習で出す問い。すべてを組み直す問い（前回まちがえた反応）は、選ぶ問いに替える。作れなければ null */
 function choiceQuiz(w: World, id: string): Quiz | null {
   const q = quizFor(w, id);
@@ -75,7 +89,7 @@ export function habitLine(w: World): string {
  * 問いを 1 つ描く。choose（答え）→ 自信 → 結果。full（すべてを組み直す）は、onFull で設定の画面を開き、結果を受け取る。
  * compact：工場の画面の端に出す小さな札のとき。
  * 答える前に「ヒント」を押せる（使うと、覚え具合は「たぶん」まで）。onUndo を渡すと、答えてから 5 秒の間「取り消す」を出す（押しまちがい用）。
- * 取り消して選び直すときは、もう正しい答えを見ているので（seen）、ヒントを使ったのと同じく「たぶん」までとする。
+ * 取り消して選び直すときは、もう正しい答えを見ているので（seen）、ヒントを使ったのと同じく「たぶん」までとする（その日のうちは、どこで出しても）。
  * extra：結果の 1 行目のあとに足すもの（連続正解など）
  */
 export function renderQuiz(root: HTMLElement, w: World, q: Quiz, o: { compact?: boolean; practice?: boolean; seen?: boolean; onFull: (done: (ok: boolean) => void) => void; onDone: (r: QuizResult) => void; next?: { label: string; go: () => void }; onUndo?: (r: QuizResult) => void; extra?: (r: QuizResult) => HTMLElement | null }) {
@@ -84,14 +98,15 @@ export function renderQuiz(root: HTMLElement, w: World, q: Quiz, o: { compact?: 
   const result = h('div', { class: 'answer rv-result', hidden: true });
   // 答えるまでの時間：問いを出してから、選択肢を選ぶまで
   const shownAt = Date.now();
-  // 取り消したあとの選び直しは、答えを見たあと。ヒントを使ったのと同じに扱う
-  let pickedAt = shownAt, hinted = !!o.seen && !o.practice;
+  // 取り消したあとの選び直しは、答えを見たあと。ヒントを使ったのと同じに扱う（閉じて開き直したとき・ほかの所で出したときも）
+  const seen = !o.practice && q.part !== 'full' && (!!o.seen || seenBefore(w, q.id));
+  let pickedAt = shownAt, hinted = seen;
   const finish = (ok: boolean, conf: Confidence | undefined, picked?: string) => {
     // 練習（解き直し・図鑑から）は、予定も記録も動かさない。取り消せるように、答える前の状態を控える
     const snap = !o.practice && q.part !== 'full' && o.onUndo ? snapAnswer(w, q.id) : null;
     const p0 = w.points;
     // 答えを見てからの選び直しは、思い出すのにかかった時間ではないので数えない
-    if (!o.practice) { answer(w, q.id, ok, conf, Date.now(), hinted); if (q.part !== 'full' && !o.seen) recordTime(w, q.id, pickedAt - shownAt); }
+    if (!o.practice) { answer(w, q.id, ok, conf, Date.now(), hinted); if (q.part !== 'full' && !seen) recordTime(w, q.id, pickedAt - shownAt); seenOf(w).delete(q.id); }
     const hc = !ok && conf === 'sure', lucky = ok && conf === 'guess';
     if (!ok && q.part !== 'full' && !o.practice) w.mistakes.push({ machine: q.id.startsWith('k:') ? 'quiz' : (recipeById(q.id.slice(2))?.machine ?? 'quiz'), recipe: q.id.slice(2), part: q.part === 'k' ? 'quiz' : q.part === 'coef' ? 'coefficients' : q.part === 'cond' ? 'condition' : q.part === 'pole' ? 'electrodes' : 'products', t: Date.now() });
     ok && !lucky ? sfx.ok() : sfx.bad();
@@ -121,7 +136,7 @@ export function renderQuiz(root: HTMLElement, w: World, q: Quiz, o: { compact?: 
       h('p', { class: hc ? 'rv-hc' : '' }, h('b', {}, hc ? '自信を持ってまちがえた。ここがいちばん伸びる所' : ok ? (lucky ? '当たったが、勘' : '正解') : '不正解'),
         picked !== undefined && !ok ? `　正しくは「${q.choices[0]}」` : ''),
       lucky && !o.practice ? h('p', { class: 'muted' }, '勘で当てたものは、覚えたことにしない。今日のうちに、もう一度出す。') : null,
-      hinted && !o.practice ? h('p', { class: 'muted' }, o.seen ? '答えを見てから選び直したので、覚え具合は「たぶん」までとして記録した。自信ごとの正答率には入れない。' : 'ヒントを見たので、覚え具合は「たぶん」までとして記録した。自信ごとの正答率には入れない。') : null,
+      hinted && !o.practice ? h('p', { class: 'muted' }, seen ? '答えを見てから選び直したので、覚え具合は「たぶん」までとして記録した。自信ごとの正答率には入れない。' : 'ヒントを見たので、覚え具合は「たぶん」までとして記録した。自信ごとの正答率には入れない。') : null,
       !ok && !o.practice ? h('p', { class: 'muted' }, hc ? '1 分後に、もう一度出す。紙に正しい答えを書いて、なぜ思い込んだかも書け。' : '今日のうちに、正解するまで戻ってくる。') : null,
       r ? h('p', { class: 'rv-eq' }, h('span', { class: 'muted' }, '反応式　'), h('b', {}, ...linkText(equationOf(r), [...r.inputs, ...r.outputs].map(([x]) => x), subBox)), r.accept[0] && r.accept[0] !== 'なし' ? h('span', { class: 'muted' }, `　条件：${r.accept[0]}`) : null) : null,
       h('p', { class: 'note' }, ...linkText(q.why, w.discovered, subBox)),
@@ -152,6 +167,8 @@ export function renderQuiz(root: HTMLElement, w: World, q: Quiz, o: { compact?: 
       undoBtn.onclick = () => {
         window.clearInterval(timer);
         if (!undoAnswer(w, snap)) { undoBtn.remove(); return; }
+        // 答えを見たことを覚えておく（この場の選び直しのほか、閉じてからほかの所で出したときも）
+        seenOf(w).set(q.id, { at: Date.now(), n: w.srs[q.id]?.n ?? 0, last: w.srs[q.id]?.last ?? 0 });
         o.onUndo!(res);
         sfx.tap();
         renderQuiz(root, w, q, { ...o, seen: true });
@@ -208,7 +225,7 @@ export function renderQuiz(root: HTMLElement, w: World, q: Quiz, o: { compact?: 
     finish(ok, c, picked);
   } }, keys ? h('kbd', {}, String(ci + 1)) : null, name));
   const nodes: (HTMLElement | null)[] = [head, o.practice ? h('p', { class: 'muted' }, '練習（予定は動かさない）') : null,
-    hinted ? h('p', { class: 'muted', id: 'rv-seen' }, '選び直し（答えを見たので「たぶん」まで）') : null,
+    seen ? h('p', { class: 'muted', id: 'rv-seen' }, '選び直し（答えを見たので「たぶん」まで）') : null,
     h('p', { class: 'qtext' }, q.q), hintBtn ? h('div', { class: 'row rv-hint-row' }, hintBtn) : null, hintText, opts, confRow, result];
   root.replaceChildren(...nodes.filter((x): x is HTMLElement => !!x));
   setActive({
