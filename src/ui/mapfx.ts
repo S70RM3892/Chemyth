@@ -198,9 +198,9 @@ function pillar(ctx: CanvasRenderingContext2D, G: CanvasRenderingContext2D, thre
 
 // ---------------- 稼働率の重ね表示：ベルトの毎分の数と、装置の色分け ----------------
 
-/** ベルトごとの、直近の毎分の数（見えているベルトだけ、遊んだ時間で 2 秒ごとに計り直す） */
+/** ベルトごとの、直近の毎分の数（近くの絵では見えているベルトだけ、引いた視野ではその階のベルトを、遊んだ時間で 2 秒ごとに計り直す） */
 const rates = new WeakMap<Ent, { t: number; n: number; r: number }>();
-function beltRate(w: World, e: Ent): number {
+export function beltRate(w: World, e: Ent): number {
   const n = beltPassed(e), t = w.playMs, s = rates.get(e);
   if (!s) { rates.set(e, { t, n, r: -1 }); return -1; }
   const dt = t - s.t;
@@ -272,24 +272,31 @@ export function mapStats(base: CanvasRenderingContext2D, top: CanvasRenderingCon
 }
 const light = (P: Palette) => P.name === 'light';
 
+/** 流れの線の太さの段（毎分の数 r から 0〜4）。0.5 未満は線を引かない（-1） */
+export const flowStep = (r: number) => (r < 0.5 ? -1 : r < 15 ? 0 : r < 40 ? 1 : r < 80 ? 2 : r < 160 ? 3 : 4);
+/** 段 k の線の太さ（ピクセル）。うんと引いても（far.ts の引いた視野）、段の違いが見える太さは残す */
+export const flowWidth = (z: number, k: number) => Math.min(Math.max(z * 0.95, 1.5 + k), 2 + k * 2.2);
+/** 流れの線の下に敷く、ひと回り太い縁の色 */
+export const flowEdge = (P: Palette) => (P.skin === 'punk' ? '#0b0d10' : P.ink);
+
 /**
  * 流れの多いベルトほど太い線（太さの段ごとに、まとめて 1 回で引く）。belts は見えているベルト。
- * 近くの絵（z < 15）と引いた視野（far.ts）の両方で使う。うんと引いても、段の違いが見える太さは残す
+ * 引いた視野（far.ts）は、ベルトを 1 本ずつ線で引くと重いので、同じ太さの段で続くベルトを帯にまとめて塗る
  */
-export function flowLines(ctx: CanvasRenderingContext2D, P: Palette, w: World, sx: ToScreen, sy: ToScreen, z: number, belts: readonly Ent[]) {
-  const punk = P.skin === 'punk', groups: number[][] = [[], [], [], [], []];
+function flowLines(ctx: CanvasRenderingContext2D, P: Palette, w: World, sx: ToScreen, sy: ToScreen, z: number, belts: readonly Ent[]) {
+  const groups: number[][] = [[], [], [], [], []];
   for (const e of belts) {
-    const r = beltRate(w, e);
-    if (r < 0.5) continue;
-    const k = r < 15 ? 0 : r < 40 ? 1 : r < 80 ? 2 : r < 160 ? 3 : 4, cx = sx(e.x + 0.5), cy = sy(e.y + 0.5);
+    const k = flowStep(beltRate(w, e));
+    if (k < 0) continue;
+    const cx = sx(e.x + 0.5), cy = sy(e.y + 0.5);
     groups[k].push(cx - DX[e.dir] * z * 0.5, cy - DY[e.dir] * z * 0.5, cx + DX[e.dir] * z * 0.5, cy + DY[e.dir] * z * 0.5);
   }
   ctx.lineCap = 'round';
-  for (const [pass, col] of [[1, punk ? '#0b0d10' : P.ink], [0, P.hi]] as const) {
+  for (const [pass, col] of [[1, flowEdge(P)], [0, P.hi]] as const) {
     groups.forEach((g, k) => {
       if (!g.length) return;
       ctx.strokeStyle = col; ctx.globalAlpha = pass ? 0.55 : 0.95;
-      ctx.lineWidth = Math.min(Math.max(z * 0.95, 1.5 + k), 2 + k * 2.2) + pass * 2;
+      ctx.lineWidth = flowWidth(z, k) + pass * 2;
       ctx.beginPath();
       for (let i = 0; i < g.length; i += 4) { ctx.moveTo(g[i], g[i + 1]); ctx.lineTo(g[i + 2], g[i + 3]); }
       ctx.stroke();
