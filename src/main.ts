@@ -2240,7 +2240,14 @@ function boot(data: HotData) {
       if (lastRes !== world.research.length) { lastRes = world.research.length; refreshTools(true); paintOpts(); paintFloor(); }
       const d0 = PERF ? performance.now() : 0;
       const idle = pf.saver && performance.now() - lastInput > 5 * 60000 && !shotPending;
-      if (idle && ++idleSkip % 6) { hud(); placeAct(); return; }
+      // 窓（シート）が開いているあいだは工場が止まり、地図と札は窓の下に透けて見えるだけ。描き直しも札の書きかえも 15 コマに 1 回でよい
+      //（毎コマ書きかえると、研究所スキンでは窓のうしろのぼかしも毎コマかけ直しになる）。遊んだ時間は、描かないコマも数える
+      //（次のコマは、外側の frame が先に頼んでいる）
+      const veiled = !modal.hidden && !shotPending;
+      if ((idle || veiled) && ++idleSkip % (veiled ? 15 : 6)) {
+        if (!veiled) { hud(); placeAct(); } else if (!sandbox && !document.hidden) addPlayTime(world, dt * 1000);
+        return;
+      }
       const fx = fxOn(), t3 = fx && three && gw > 0;
       const view = { dusk: palette().name === 'light' ? dusk : dusk * 0.5, floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: moving && (moving.dx || moving.dy) ? moveGhost() : tool === 'area' ? ghostCells() : toolGhost(), lift: !!moving && !!(moving.dx || moving.dy), ports: moving ? null : selPorts(), marks: sameMarks(), allPlates: pf.plates, over: b2.draw };
       if (fx) {
