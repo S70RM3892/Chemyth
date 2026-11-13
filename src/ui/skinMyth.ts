@@ -2,14 +2,14 @@
  * 幻想スキン（天空の庭・星の海）：本物らしさより、絵の華やかさ。重さは気にしない（毎コマ、グラデーションと光を惜しまず描く）。
  * - 天空の庭（明）：空に浮かぶ花園。水彩のにじむ草地、花、雲の海、金の縁の水晶、虹と花びら
  * - 星の海（暗）：星雲と星座の地、光る水晶の原、オーロラ、流れ星、蛍のような光の粒
- * - ベルトは、荷を背にのせて運ぶ大蛇。反応器は竜の鱗の皮と爪。装置は宝石の台座：切子の面、金の二重の縁、回る紋章の輪、四隅の宝玉
+ * - 生き物：ベルトは大蛇、反応器は竜（鱗・爪・頭・尾・翼）、蒸留塔にペリカン、電解槽に双頭の蛇、沈殿槽にスライム、納品所は緑の獅子 → 不死鳥。装置は宝石の台座：切子の面、金の二重の縁、回る紋章の輪、四隅の宝玉
  * - 納品所は「世界の水晶」：虹色の大水晶と、逆に回る魔法陣、まわりを巡る元素の宝玉
  * 守ること：装置の窓の中（反応の様子・物質の色）は、ほかのスキンと同じ絵（覚える中身は飾らない）。文字は読める濃さを保つ
  */
 import { ELEMENTS } from '../content/elements';
 import { ZONES, isSea, zoneAt, type Zone } from '../content/map';
 import { label, sub } from '../content/substances';
-import { currentGoal, fedTier, goalCount, goalRate, requiredOf, type Ent, type World } from '../engine/world';
+import { chaptersDone, currentGoal, fedTier, goalCount, goalRate, requiredOf, type Ent, type World } from '../engine/world';
 import { mix, MYTH_GOLD, MYTH_GOLD_DARK, MYTH_RAINBOW, type Palette } from './theme';
 import { drawElement } from './token';
 
@@ -356,6 +356,174 @@ function dragonHeadTail(ctx: CanvasRenderingContext2D, P: Palette, cx: number, c
   }
   ctx.restore();
 }
+/**
+ * 竜の翼：台座のうしろから左右へ広がる、こうもりの形の翼（骨 3 本と、そのあいだの膜。膜には鱗の色）。
+ * 動いているあいだ、ゆっくり羽ばたく。隣の設備に少しかぶる
+ */
+function dragonWings(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, color: string, line: number, busy: boolean, t: number, ph: number) {
+  const light = P.name === 'light', edge = light ? '#3a2408' : '#05030f', bone = mix(color, light ? '#3a2a14' : '#1a0c08', light ? 0.25 : 0.35);
+  const flap = busy ? Math.sin(t * 2.4 + ph) * 0.14 : 0, lw = Math.max(0.8, line * 0.6);
+  for (const sd of [-1, 1]) {
+    // 付け根は台座の肩。骨の先は、上・横・下へ
+    const bx = cx + sd * u * 0.36, by = cy - u * 0.2;
+    const tip = (a: number, len: number): [number, number] => [bx + sd * Math.cos(a + flap) * u * len, by + Math.sin(a + flap) * u * len];
+    const p1 = tip(-1.0, 0.5), p2 = tip(-0.35, 0.6), p3 = tip(0.35, 0.5), p4 = tip(0.95, 0.34);
+    // 膜：骨の先を、内へへこむ曲線でつなぐ
+    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(p1[0], p1[1]);
+    for (const [a, b] of [[p1, p2], [p2, p3], [p3, p4]] as [[number, number], [number, number]][]) ctx.quadraticCurveTo((a[0] + b[0]) / 2 - sd * u * 0.07, (a[1] + b[1]) / 2, b[0], b[1]);
+    ctx.lineTo(bx - sd * u * 0.04, by + u * 0.3); ctx.closePath();
+    const g = ctx.createLinearGradient(bx, by, bx + sd * u * 0.6, by);
+    g.addColorStop(0, mix(color, light ? '#5a3a1a' : '#2a0e0a', 0.45)); g.addColorStop(1, mix(color, light ? '#ffd9a0' : '#7a2a1a', 0.5));
+    ctx.fillStyle = g; ctx.globalAlpha = light ? 0.88 : 0.92; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = edge; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.stroke();
+    // 膜の鱗の点
+    ctx.fillStyle = light ? 'rgba(60,36,8,0.25)' : 'rgba(0,0,0,0.3)';
+    for (let i = 0; i < 9; i++) { const k = 0.25 + 0.6 * hash(i + 1, 3.7), a = -0.8 + 1.5 * hash(i + 4, 9.1); ctx.beginPath(); ctx.arc(bx + sd * Math.cos(a + flap) * u * 0.5 * k, by + Math.sin(a + flap) * u * 0.5 * k, Math.max(0.8, u * 0.012), 0, TAU); ctx.fill(); }
+    // 骨
+    ctx.lineCap = 'round';
+    for (const q of [p1, p2, p3, p4]) {
+      ctx.strokeStyle = edge; ctx.lineWidth = u * 0.03 + lw; ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(q[0], q[1]); ctx.stroke();
+      ctx.strokeStyle = bone; ctx.lineWidth = u * 0.03; ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(q[0], q[1]); ctx.stroke();
+    }
+    // 翼の先の爪
+    ctx.beginPath(); ctx.arc(p1[0], p1[1], Math.max(1, u * 0.018), 0, TAU); ctx.fillStyle = light ? '#f4ead0' : '#e8dcc0'; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 0.6; ctx.stroke();
+  }
+}
+/** ペリカンの翼：蒸留塔のうしろに、たたんだ白い翼（羽根が 4 枚ずつ）。動いているあいだ、少し開く */
+function pelicanWings(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, line: number, busy: boolean, t: number, ph: number) {
+  const light = P.name === 'light', edge = light ? '#4a3208' : '#05030f', open = busy ? 0.12 + 0.06 * Math.sin(t * 1.8 + ph) : 0;
+  for (const sd of [-1, 1]) for (let i = 3; i >= 0; i--) {
+    const a = 0.5 + i * 0.3 - open * i, bx = cx + sd * u * 0.38, by = cy - u * 0.12, L = u * (0.34 - i * 0.03);
+    const tx = bx + sd * Math.sin(a) * L * 0.75, ty = by + Math.cos(a) * L;
+    ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo(bx + sd * u * 0.16, (by + ty) / 2 - u * 0.04, tx, ty); ctx.quadraticCurveTo(bx + sd * u * 0.03, (by + ty) / 2 + u * 0.03, bx, by); ctx.closePath();
+    ctx.fillStyle = i % 2 ? (light ? '#ffffff' : '#f2f0ff') : light ? '#f6e9ee' : '#d9d2f2'; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = Math.max(0.7, line * 0.45); ctx.stroke();
+  }
+}
+/**
+ * ペリカンの頭：蒸留塔の右上にのる長い首と、大きな嘴（のど袋は桃色）。動いているあいだ、嘴の先から雫が落ちる。
+ * ペリカンは、錬金術で蒸留（くり返し蒸発させて戻す操作）のしるし
+ */
+function pelicanHead(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, half: number, line: number, busy: boolean, t: number, ph: number) {
+  const light = P.name === 'light', edge = light ? '#4a3208' : '#05030f', white = light ? '#ffffff' : '#f2f0ff', lw = Math.max(0.8, line * 0.6);
+  const nx = cx + half * 0.72, ny = cy - half * 0.9, hx = nx + u * 0.1, hy = ny - u * 0.2 + (busy ? Math.sin(t * 2 + ph) * u * 0.008 : 0);
+  // 首：S 字
+  ctx.lineCap = 'round';
+  for (const [wd, col] of [[u * 0.085 + lw * 2, edge], [u * 0.085, white]] as [number, string][]) {
+    ctx.strokeStyle = col; ctx.lineWidth = wd;
+    ctx.beginPath(); ctx.moveTo(nx, ny + u * 0.06); ctx.bezierCurveTo(nx - u * 0.1, ny - u * 0.08, nx + u * 0.16, ny - u * 0.1, hx, hy); ctx.stroke();
+  }
+  // 嘴：左下へ長く。上は橙、下ののど袋は桃色
+  const bx = hx - u * 0.3, by = hy + u * 0.17;
+  ctx.beginPath(); ctx.moveTo(hx - u * 0.03, hy + u * 0.03); ctx.quadraticCurveTo(hx - u * 0.12, hy + u * 0.2, bx, by); ctx.lineTo(hx - u * 0.05, hy - u * 0.01); ctx.closePath();
+  ctx.fillStyle = '#ff9db0'; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hx - u * 0.02, hy - u * 0.035); ctx.lineTo(bx, by); ctx.lineTo(hx - u * 0.05, hy + u * 0.02); ctx.closePath();
+  ctx.fillStyle = '#ffb347'; ctx.fill(); ctx.stroke();
+  // 頭と目、うしろの冠羽
+  ctx.beginPath(); ctx.arc(hx, hy, u * 0.065, 0, TAU); ctx.fillStyle = white; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hx + u * 0.05, hy - u * 0.03); ctx.lineTo(hx + u * 0.13, hy - u * 0.07); ctx.lineTo(hx + u * 0.06, hy + u * 0.01); ctx.closePath(); ctx.fillStyle = MYTH_GOLD; ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(hx - u * 0.015, hy - u * 0.012, Math.max(0.8, u * 0.014), 0, TAU); ctx.fillStyle = '#05030f'; ctx.fill();
+  // 雫：嘴の先から落ちて消える
+  if (busy && !calm) {
+    const k = (t * 0.9 + ph * 0.13) % 1, dy = k * k * u * 0.22, r = Math.max(1, u * 0.022) * (1 - k * 0.4);
+    ctx.globalAlpha = 1 - k * 0.7;
+    ctx.beginPath(); ctx.moveTo(bx, by + dy - r * 1.6); ctx.quadraticCurveTo(bx + r * 1.2, by + dy + r * 0.2, bx, by + dy + r); ctx.quadraticCurveTo(bx - r * 1.2, by + dy + r * 0.2, bx, by + dy - r * 1.6); ctx.closePath();
+    ctx.fillStyle = light ? '#6ecbff' : '#9fe0ff'; ctx.fill(); ctx.globalAlpha = 1;
+  }
+}
+/**
+ * 双頭の蛇：電解槽の左上と右上の角から、蛇の頭が 1 つずつ外を向く（電極が 2 つあり、それぞれ別の物が出る）。
+ * 動いているあいだ、2 つの頭のあいだを稲妻が走る
+ */
+function twinSerpent(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, half: number, color: string, line: number, busy: boolean, pulse: number, t: number, ph: number) {
+  const light = P.name === 'light', edge = light ? '#12303a' : '#05030f', skin = mix(color, light ? '#103040' : '#061820', light ? 0.3 : 0.4), lw = Math.max(0.8, line * 0.6), S = u * 0.15;
+  const heads: [number, number][] = [];
+  for (const sd of [-1, 1]) {
+    const bx = cx + sd * half * 0.78, by = cy - half * 0.86, sway = busy ? Math.sin(t * 2.6 + ph + sd) * 0.18 : 0;
+    const hx = bx + sd * u * (0.1 + sway * 0.1), hy = by - u * 0.17;
+    heads.push([hx, hy]);
+    // 首
+    ctx.lineCap = 'round';
+    for (const [wd, col] of [[u * 0.08 + lw * 2, edge], [u * 0.08, skin]] as [number, string][]) {
+      ctx.strokeStyle = col; ctx.lineWidth = wd;
+      ctx.beginPath(); ctx.moveTo(bx, by + u * 0.05); ctx.quadraticCurveTo(bx - sd * u * 0.08, by - u * 0.1, hx, hy); ctx.stroke();
+    }
+    // 頭：外上を向くひし形
+    ctx.save(); ctx.translate(hx, hy); ctx.rotate(sd > 0 ? -0.6 + sway : Math.PI + 0.6 - sway);
+    ctx.beginPath(); ctx.moveTo(-S * 0.5, 0); ctx.quadraticCurveTo(-S * 0.1, -S * 0.6, S * 0.9, 0); ctx.quadraticCurveTo(-S * 0.1, S * 0.6, -S * 0.5, 0); ctx.closePath();
+    ctx.fillStyle = skin; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw; ctx.stroke();
+    for (const q of [-1, 1]) { ctx.beginPath(); ctx.arc(S * 0.15, q * S * 0.22, Math.max(0.8, S * 0.11), 0, TAU); ctx.fillStyle = busy ? mix(MYTH_GOLD, '#bff4ff', 0.5 * pulse) : MYTH_GOLD; ctx.fill(); }
+    if (busy && !calm && Math.sin(t * 6 + ph + sd * 2) > 0.2) { ctx.strokeStyle = '#e0486a'; ctx.lineWidth = Math.max(0.7, S * 0.08); ctx.beginPath(); ctx.moveTo(S * 0.9, 0); ctx.lineTo(S * 1.25, 0); ctx.lineTo(S * 1.45, -S * 0.14); ctx.moveTo(S * 1.25, 0); ctx.lineTo(S * 1.45, S * 0.14); ctx.stroke(); }
+    ctx.restore();
+  }
+  // 稲妻：頭から頭へ、ぎざぎざの線（毎コマ形が変わる）
+  if (busy && !calm) {
+    const [a, b] = heads, n = 7, seed = Math.floor(t * 14);
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]);
+    for (let i = 1; i < n; i++) { const k = i / n; ctx.lineTo(a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k + (hash(i + seed, ph) - 0.5) * u * 0.12); }
+    ctx.lineTo(b[0], b[1]);
+    ctx.strokeStyle = light ? 'rgba(40,150,220,0.9)' : 'rgba(170,235,255,0.95)'; ctx.lineWidth = Math.max(1, u * 0.014); ctx.lineJoin = 'miter'; ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = Math.max(0.5, u * 0.005); ctx.stroke();
+    if (G) { G.strokeStyle = 'rgba(120,220,255,0.5)'; G.lineWidth = u * 0.05; G.beginPath(); G.moveTo(a[0], a[1]); G.lineTo(b[0], b[1]); G.stroke(); }
+  }
+}
+/** スライム：沈殿槽の下の縁から、機種の色のぷるぷるした体がはみ出して垂れる。目が 2 つ。動いているあいだ、ゆれる */
+function slime(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, half: number, color: string, line: number, busy: boolean, t: number, ph: number) {
+  const light = P.name === 'light', edge = light ? '#3a2a4a' : '#05030f', y0 = cy + half * 0.82, wob = busy ? Math.sin(t * 3 + ph) * u * 0.012 : 0;
+  ctx.beginPath(); ctx.moveTo(cx - half * 0.95, y0);
+  // 垂れる雫 4 つ（長さが違う）
+  const n = 4;
+  for (let i = 0; i < n; i++) {
+    const xa = cx - half * 0.95 + (i / n) * half * 1.9, xb = cx - half * 0.95 + ((i + 1) / n) * half * 1.9, d = u * (0.08 + 0.09 * hash(i + 2, 5.5)) + (i % 2 ? wob : -wob);
+    ctx.bezierCurveTo(xa + (xb - xa) * 0.1, y0 + d * 1.5, xb - (xb - xa) * 0.1, y0 + d * 1.5, xb, y0);
+  }
+  ctx.quadraticCurveTo(cx + half * 1.05, y0 - u * 0.1, cx + half * 0.7, y0 - u * 0.1); ctx.lineTo(cx - half * 0.7, y0 - u * 0.1); ctx.quadraticCurveTo(cx - half * 1.05, y0 - u * 0.1, cx - half * 0.95, y0);
+  ctx.closePath();
+  ctx.fillStyle = `rgba(${rgbOf(mix(color, '#9dffb0', 0.35))},0.82)`; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = Math.max(0.8, line * 0.6); ctx.stroke();
+  // つや
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = Math.max(0.6, u * 0.012); ctx.beginPath(); ctx.moveTo(cx - half * 0.6, y0 - u * 0.05); ctx.lineTo(cx - half * 0.2, y0 - u * 0.05); ctx.stroke();
+  // 目
+  for (const sd of [-1, 1]) {
+    const ex = cx + sd * u * 0.07, ey = y0 - u * 0.02 + wob;
+    ctx.beginPath(); ctx.arc(ex, ey, Math.max(1.2, u * 0.028), 0, TAU); ctx.fillStyle = '#ffffff'; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = Math.max(0.5, line * 0.3); ctx.stroke();
+    ctx.beginPath(); ctx.arc(ex + u * 0.006, ey + u * 0.004, Math.max(0.6, u * 0.013), 0, TAU); ctx.fillStyle = '#05030f'; ctx.fill();
+  }
+}
+/**
+ * 納品所の獣：物を飲み込む緑の獅子（錬金術で、緑礬からとる硫酸のしるし）。章を 1 つ終えるたびに、左右の翼に羽根が 1 枚ずつ増え、
+ * すべての章を終えると、赤と金の不死鳥（完成のしるし）になる。台の盤のうしろに描く
+ */
+function hubBeast(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, R: number, w: World, t: number) {
+  const light = P.name === 'light', edge = light ? '#3a2408' : '#05030f', done = chaptersDone(w.progress), n = done.filter(Boolean).length, all = done.length > 0 && (n >= done.length || !currentGoal(w));
+  const lw = Math.max(1, R * 0.018), flap = calm ? 0 : Math.sin(t * 1.3) * 0.05;
+  // 翼：羽根は、終えた章の数だけ（左右に 1 枚ずつ）。上から下へ扇に並ぶ
+  const total = Math.max(1, done.length);
+  for (const sd of [-1, 1]) for (let i = n - 1; i >= 0; i--) {
+    const a = -1.05 + (i / Math.max(1, total - 1)) * 1.7 + flap * (1 + i * 0.05), L = R * (0.95 - 0.3 * (i / total)), bx = cx + sd * R * 0.8, by = cy - R * 0.15;
+    const tx = bx + sd * Math.cos(a) * L, ty = by + Math.sin(a) * L, nx = -Math.sin(a) * R * 0.2, ny = Math.cos(a) * R * 0.2 * sd;
+    ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo((bx + tx) / 2 + nx * sd, (by + ty) / 2 + ny, tx, ty); ctx.quadraticCurveTo((bx + tx) / 2 - nx * sd, (by + ty) / 2 - ny, bx, by); ctx.closePath();
+    const col = all ? MYTH_RAINBOW[i % MYTH_RAINBOW.length] : mix('#3fae5a', MYTH_GOLD, i / total);
+    ctx.fillStyle = all ? mix(col, '#ff5a2a', 0.45) : col; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw; ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = lw * 0.5; ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke();
+  }
+  // 頭：盤の上の縁にのる
+  const hx = cx, hy = cy - R * 1.14, S = R * 0.42;
+  if (!all) {
+    // 緑の獅子：たてがみ（とげの輪）、顔、金の目、開いた口
+    ctx.beginPath();
+    for (let i = 0; i < 14; i++) { const a = (i / 14) * TAU + (calm ? 0 : Math.sin(t * 0.8) * 0.03), r = S * (i % 2 ? 1.0 : 0.72); ctx.lineTo(hx + Math.cos(a) * r, hy + Math.sin(a) * r); }
+    ctx.closePath(); ctx.fillStyle = '#2f8a44'; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw; ctx.stroke();
+    ctx.beginPath(); ctx.arc(hx, hy, S * 0.6, 0, TAU); ctx.fillStyle = '#6fd07a'; ctx.fill(); ctx.stroke();
+    for (const sd of [-1, 1]) { ctx.beginPath(); ctx.arc(hx + sd * S * 0.24, hy - S * 0.12, S * 0.1, 0, TAU); ctx.fillStyle = MYTH_GOLD; ctx.fill(); ctx.beginPath(); ctx.arc(hx + sd * S * 0.24, hy - S * 0.12, S * 0.04, 0, TAU); ctx.fillStyle = '#05030f'; ctx.fill(); }
+    ctx.beginPath(); ctx.moveTo(hx - S * 0.1, hy + S * 0.08); ctx.lineTo(hx + S * 0.1, hy + S * 0.08); ctx.lineTo(hx, hy + S * 0.2); ctx.closePath(); ctx.fillStyle = '#1d5a2c'; ctx.fill();
+    ctx.beginPath(); ctx.ellipse(hx, hy + S * 0.36, S * 0.2, S * (0.1 + (calm ? 0 : 0.04 * Math.sin(t * 2))), 0, 0, TAU); ctx.fillStyle = '#7a1420'; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 0.7; ctx.stroke();
+  } else {
+    // 不死鳥：炎の冠、赤と金の頭、金の嘴
+    for (let i = -2; i <= 2; i++) { const a = -Math.PI / 2 + i * 0.3, L = S * (1.3 - Math.abs(i) * 0.15 + (calm ? 0 : 0.08 * Math.sin(t * 4 + i))); ctx.beginPath(); ctx.moveTo(hx + Math.cos(a - 0.2) * S * 0.4, hy + Math.sin(a - 0.2) * S * 0.4); ctx.quadraticCurveTo(hx + Math.cos(a) * L * 0.7 + S * 0.1, hy + Math.sin(a) * L * 0.7, hx + Math.cos(a) * L, hy + Math.sin(a) * L); ctx.quadraticCurveTo(hx + Math.cos(a) * L * 0.6 - S * 0.1, hy + Math.sin(a) * L * 0.6, hx + Math.cos(a + 0.2) * S * 0.4, hy + Math.sin(a + 0.2) * S * 0.4); ctx.closePath(); ctx.fillStyle = i % 2 ? '#ffb347' : '#ff5a2a'; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw * 0.7; ctx.stroke(); }
+    ctx.beginPath(); ctx.arc(hx, hy, S * 0.55, 0, TAU); ctx.fillStyle = '#ff5a2a'; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = lw; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(hx - S * 0.14, hy + S * 0.05); ctx.lineTo(hx + S * 0.14, hy + S * 0.05); ctx.lineTo(hx, hy + S * 0.5); ctx.closePath(); ctx.fillStyle = MYTH_GOLD; ctx.fill(); ctx.stroke();
+    for (const sd of [-1, 1]) { ctx.beginPath(); ctx.arc(hx + sd * S * 0.22, hy - S * 0.12, S * 0.09, 0, TAU); ctx.fillStyle = '#fff4c8'; ctx.fill(); ctx.beginPath(); ctx.arc(hx + sd * S * 0.22, hy - S * 0.12, S * 0.04, 0, TAU); ctx.fillStyle = '#05030f'; ctx.fill(); }
+  }
+}
 /** 白い絵 src を、色 col で塗った絵（覚えておく） */
 const tintCache = new WeakMap<HTMLCanvasElement, Map<string, HTMLCanvasElement>>();
 function tinted(src: HTMLCanvasElement, col: string): HTMLCanvasElement {
@@ -376,6 +544,11 @@ const isDragon = (e: Ent) => e.kind === 'reactor';
 export function bodyMyth(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: number, u: number, z: number, e: Ent, t: number, color: string, line: number) {
   const light = P.name === 'light', busy = !!e.busy, tt = calm ? 0 : t, ph = e.x * 1.7 + e.y * 2.3, half = u * 0.43, cut = u * 0.13;
   const pulse = busy ? 0.6 + 0.4 * Math.sin(tt * 3 + ph) : 0.25;
+  // 台座のうしろに描く生き物の部分（竜の翼・ペリカンの翼）
+  if (z >= 14) {
+    if (isDragon(e)) dragonWings(ctx, P, cx, cy, u, color, line, busy, tt, ph);
+    else if (e.kind === 'separator') pelicanWings(ctx, P, cx, cy, u, line, busy, tt, ph);
+  }
   // 下の光：動いている装置は、機種の色と金の光に包まれる
   if (z >= 14) {
     const gr = ctx.createRadialGradient(cx, cy + u * 0.05, u * 0.2, cx, cy + u * 0.05, u * 0.72);
@@ -457,6 +630,9 @@ export function bodyMyth(ctx: CanvasRenderingContext2D, P: Palette, cx: number, 
   }
   // 竜の頭（右上の角から外を向く）と尾（左下の角から巻く）
   if (dragon && z >= 16) dragonHeadTail(ctx, P, cx, cy, u, half, color, line, busy, pulse, tt, ph);
+  else if (z >= 16 && e.kind === 'separator') pelicanHead(ctx, P, cx, cy, u, half, line, busy, tt, ph);
+  else if (z >= 16 && e.kind === 'electrolyzer') twinSerpent(ctx, P, cx, cy, u, half, color, line, busy, pulse, tt, ph);
+  else if (z >= 16 && e.kind === 'settler') slime(ctx, P, cx, cy, u, half, color, line, busy, tt, ph);
   // 巡る光の粒
   if (busy && z >= 26 && !calm) {
     for (let i = 0; i < 3; i++) {
@@ -489,6 +665,8 @@ export function hubMyth(ctx: CanvasRenderingContext2D, P: Palette, px: number, p
   const base = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * 1.35);
   base.addColorStop(0, `rgba(${P.glow},${light ? 0.4 : 0.5})`); base.addColorStop(0.7, `rgba(${light ? '255,150,210' : '90,220,255'},0.12)`); base.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = base; ctx.fillRect(cx - R * 1.4, cy - R * 1.4, R * 2.8, R * 2.8);
+  // 獣（緑の獅子 → 不死鳥）：盤のうしろ
+  if (z >= 8) hubBeast(ctx, P, cx, cy, R, w, tt);
   // 台：丸い石の盤（金の縁）
   ctx.beginPath(); ctx.arc(cx, cy + z * 0.1, R * 0.98, 0, TAU); ctx.fillStyle = mix(MYTH_GOLD_DARK, '#140a02', 0.4); ctx.fill();
   ctx.beginPath(); ctx.arc(cx, cy, R * 0.98, 0, TAU);
