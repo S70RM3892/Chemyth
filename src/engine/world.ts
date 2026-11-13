@@ -1896,6 +1896,8 @@ export function deserialize(json: string): World | null {
     w.cleared = Array.isArray(d.cleared) ? d.cleared : [];
     for (const id of Array.isArray(d.learned) ? d.learned : []) if (!w.srs[`r:${id}`] && recipeById(id)) w.srs[`r:${id}`] = migrate({ iv: 0, due: Date.now() });
     w.exams = Array.isArray(d.exams) && d.exams.length === 2 && d.exams.every((x: unknown) => typeof x === 'number' && x > 0) ? d.exams : [...EXAMS_DEFAULT];
+    // 前の版では、試験日をまたぐ予定が残ることがあった（試験の 2 日前を過ぎて答えると、2 次の後まで出ないなど）。読み込むときに直す
+    { const t = Date.now(); for (const [k, c] of Object.entries(w.srs)) c.due = capByExams(c.due, t, w.exams, k, c.last); }
     w.calib = { sure: [0, 0], maybe: [0, 0], guess: [0, 0] };
     for (const k of ['sure', 'maybe', 'guess'] as Confidence[]) { const v = d.calib?.[k]; if (Array.isArray(v) && v.length === 2) w.calib[k] = [v[0] | 0, v[1] | 0]; }
     w.relearn = Array.isArray(d.relearn) ? d.relearn.filter((x: { id?: unknown; at?: unknown }) => typeof x?.id === 'string' && typeof x?.at === 'number') : [];

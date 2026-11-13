@@ -939,7 +939,7 @@ function boot(data: HotData) {
     const md = (t: number) => { const d = new Date(t); return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; };
     // 試験日は本編の工場のもの（課題の最中でも）
     const w = home();
-    const moveExam = (i: number, days: number) => { w.exams[i] += days * 86400000; const t = Date.now(); for (const k of Object.keys(w.srs)) w.srs[k].due = capByExams(w.srs[k].due, t, w.exams, k); save(); sfx.tap(); showSleepSettings(); };
+    const moveExam = (i: number, days: number) => { w.exams[i] += days * 86400000; const t = Date.now(); for (const k of Object.keys(w.srs)) w.srs[k].due = capByExams(w.srs[k].due, t, w.exams, k, w.srs[k].last); save(); sfx.tap(); showSleepSettings(); };
     showSheet(h('header', {}, h('h2', {}, '睡眠と試験日'), closeBtn()),
       h('p', { class: 'muted' }, '就寝の 4 時間前から 1 時間前までに「今夜の 10 問」が出る。翌朝、最初に開いたときに同じ問いを出す（覚えた夜と思い出す朝の間に、睡眠をはさむ）。就寝から起床までは工場を閉める。10 代に勧められている睡眠は 8〜10 時間。'),
       locked ? h('p', { class: 'feedback bad' }, '閉店中は変えられない。朝になってから変えろ。') : null,

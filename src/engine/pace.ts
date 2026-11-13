@@ -3,7 +3,7 @@
  */
 import { CHAPTERS } from '../content/goals';
 import { productsOf, RECIPES } from '../content/recipes';
-import { firstCard, dayKey } from './fsrs';
+import { firstCard, dayKey, unseenCard } from './fsrs';
 import { partsFor, recipeQuiz, type Quiz } from './quiz';
 import type { World } from './world';
 
@@ -34,7 +34,8 @@ export function testOutQuiz(ch: number, rnd: () => number = Math.random): Quiz[]
 export const testOutPass = (right: number, total: number) => total >= 6 && right / total >= 0.9;
 /**
  * 合格した章を短くする：最後の指令だけを残す。章の反応は「覚えた」に入れ、すべて正解した反応は「思い出せた」、
- * 1 か所でもまちがえた反応は「忘れた」から復習を始める（今日のうちに戻ってくる）
+ * 1 か所でもまちがえた反応は「忘れた」から復習を始める（今日のうちに戻ってくる）。
+ * テストで出なかった反応は、思い出せたとはみなさない：まだ答えていない問いとして、いますぐ復習に出す（unseenCard）
  */
 export function applyTestOut(w: World, ch: number, results: { id: string; ok: boolean }[], now = Date.now()) {
   const goals = CHAPTERS[ch].goals.length;
@@ -42,11 +43,11 @@ export function applyTestOut(w: World, ch: number, results: { id: string; ok: bo
   w.counts[ch] = 0;
   if (!w.tested.includes(ch)) w.tested.push(ch);
   // 1 か所でもまちがえた反応は「忘れた」から始め、今日のうちに出し直す
-  const badIds = new Set(results.filter((x) => !x.ok).map((x) => x.id));
+  const badIds = new Set(results.filter((x) => !x.ok).map((x) => x.id)), asked = new Set(results.map((x) => x.id));
   for (const r of chapterRecipes(ch)) {
     const id = `r:${r.id}`, bad = badIds.has(id);
     if (!w.learned.includes(r.id)) w.learned.push(r.id);
-    if (!w.srs[id]) w.srs[id] = firstCard(bad ? 1 : 3, now);
+    if (!w.srs[id]) w.srs[id] = asked.has(id) ? firstCard(bad ? 1 : 3, now) : unseenCard(now);
     if (bad && !w.relearn.some((x) => x.id === id)) w.relearn.push({ id, at: now + 180000 });
   }
 }

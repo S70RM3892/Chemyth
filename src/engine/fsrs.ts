@@ -17,6 +17,9 @@ export const RETENTION = 0.9;
 export const RETENTIONS = [0.85, 0.9, 0.95];
 /** 安定度の下限（日）。0 に近づくと計算が不安定になるので、15 分ほどで止める（この値は FSRS の説明にはなく、ここで決めたもの） */
 const S_MIN = 0.01;
+/** 安定度の上限（日）。FSRS の実装で使われる最長の間隔（100 年）にそろえる。前の版では、試験の前に同じ日に何度も出し直して、これを大きく越えることがあった（読み込むときに縮める） */
+export const S_MAX = 36500;
+const clampS = (s: number) => Math.min(S_MAX, Math.max(S_MIN, s));
 const DAY = 86400000;
 
 export type Grade = 1 | 2 | 3 | 4;
@@ -29,7 +32,7 @@ export interface Card {
   d: number;
   /** 前に答えた時刻 */
   last: number;
-  /** 答えた回数と、忘れた回数 */
+  /** 答えた回数と、忘れた回数。n = 0 は、まだ一度も答えていない問い（unseenCard） */
   n: number;
   l: number;
   /** 間隔の目安の段（0〜5）。古い版のセーブや、メッキ・進み具合の表示に使う */
@@ -87,17 +90,23 @@ export function gradeOf(ok: boolean, conf: Confidence | undefined): Grade {
 }
 
 /**
- * 試験日をまたぐ間隔を作らない。次の試験の 2 日前を越えるなら、その手前の 10 日間に散らして出す
+ * 試験日をまたぐ間隔を作らない。試験の 2 日前を越えるなら、その手前の 10 日間に散らして出す
  * （全部が同じ日に集まらないように、問題ごとに決まった日にずらす）。
+ * 決まった日の 1 日前より後に答えたものは、その試験の前の 1 回を済ませたとみなす（1 時間ごとに出し直して、
+ * 同じ日の復習で安定度をふくらませないように）。試験の 2 日前を過ぎたら、その試験のためには動かさない。
+ * どちらのときも、次の試験（2 次）をまたがないかを見る。last は前に答えた時刻（答えた直後なら now）。
  */
-export function capByExams(due: number, now: number, exams: number[], id: string): number {
-  const next = exams.filter((e) => e > now).sort((a, b) => a - b)[0];
-  if (!next) return due;
-  const cut = next - 2 * DAY;
-  if (now >= cut || due <= cut) return due;
+export function capByExams(due: number, now: number, exams: number[], id: string, last = now): number {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return Math.max(now + 3600000, cut - (h % 10) * DAY);
+  for (const next of exams.filter((e) => e > now).sort((a, b) => a - b)) {
+    const cut = next - 2 * DAY;
+    if (due <= cut) return due;
+    const slot = cut - (h % 10) * DAY;
+    // 決まった日に出す。その日を過ぎても答えていなければ（試験日を前へ動かしたとき）、いますぐ出す
+    if (now < cut && last < slot - DAY) return Math.max(now, slot);
+  }
+  return due;
 }
 
 /** はじめて覚えたとき。10 分後に一度確かめ、その後は FSRS の間隔で出す */
@@ -106,15 +115,23 @@ export function firstCard(g: Grade, now: number): Card {
   return { due: now + 10 * 60000, s, d: initD(g), last: now, n: 1, l: g === 1 ? 1 : 0, iv: stage(s), full: g === 1 || undefined, t0: now };
 }
 
+/**
+ * まだ一度も答えていない問い（確認テストで出なかった反応など）。いますぐ出す。思い出せたとはみなさず、
+ * 「はじめて覚えた時刻」もつけない（最初に答えたときの評価で、はじめて覚えたときと同じように決める）
+ */
+export function unseenCard(now: number): Card {
+  return { due: now, s: initS(1), d: initD(3), last: now, n: 0, l: 0, iv: 0 };
+}
+
 /** 答えた結果で、次の予定を決める */
 export function review(c: Card | undefined, g: Grade, now: number, exams: number[] = [], id = '', ret = RETENTION): Card {
-  if (!c) { const f = firstCard(g, now); f.due = capByExams(now + intervalDays(f.s, ret) * DAY, now, exams, id); return f; }
+  if (!c || c.n === 0) { const f = firstCard(g, now); f.due = capByExams(now + intervalDays(f.s, ret) * DAY, now, exams, id); return f; }
   const t = Math.max(0, (now - c.last) / DAY), sameDay = dayKey(now) === dayKey(c.last);
-  const r = retrievability(t, c.s);
+  const s0 = clampS(c.s), r = retrievability(t, s0);
   let s: number;
-  if (sameDay) s = shortS(c.s, g);
-  else s = g === 1 ? forgetS(c.d, c.s, r) : recallS(c.d, c.s, r, g);
-  s = Math.max(S_MIN, s);
+  if (sameDay) s = shortS(s0, g);
+  else s = g === 1 ? forgetS(c.d, s0, r) : recallS(c.d, s0, r, g);
+  s = clampS(s);
   const d = nextD(c.d, g);
   // 忘れたものは、同じ日のうちに、もう一度出す（ここでは 10 分後。工場の画面では、正解するまで戻ってくる）
   const due = g === 1 ? now + 10 * 60000 : capByExams(now + Math.max(intervalDays(s, ret), sameDay ? 0.5 : 1) * DAY, now, exams, id);
@@ -125,7 +142,8 @@ export function review(c: Card | undefined, g: Grade, now: number, exams: number
 /** 古い版のセーブ（{ iv, due } だけ）を読み替える。段に対応する日数を、そのまま安定度にする */
 export function migrate(old: { iv?: number; due?: number } & Partial<Card>): Card {
   if (typeof old.s === 'number' && typeof old.d === 'number') {
-    return { due: old.due ?? Date.now(), s: old.s, d: old.d, last: old.last ?? Date.now(), n: old.n ?? 1, l: old.l ?? 0, iv: stage(old.s), hc: old.hc, full: old.full, t0: old.t0, b: old.b };
+    const s = clampS(old.s);
+    return { due: old.due ?? Date.now(), s, d: old.d, last: old.last ?? Date.now(), n: old.n ?? 1, l: old.l ?? 0, iv: stage(s), hc: old.hc, full: old.full, t0: old.t0, b: old.b };
   }
   const iv = Math.max(0, Math.min(5, old.iv ?? 0));
   const s = [0.01, 1, 3, 7, 16, 35][iv], due = old.due ?? Date.now();
