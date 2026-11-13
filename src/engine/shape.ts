@@ -100,18 +100,30 @@ export function xEnts(w: World, es: Ent[], how: Xform, rect?: Rect | null): XRes
   return { ok: true, removed: plan.map(([e]) => e), added: plan.map(([, c]) => c), box, snap, warn };
 }
 /**
- * ずらした・回した設備を、いまの中身のまま別の場所へ移す（元に戻す・やり直すに使う）。ents[i] を、左上が to[i] のマスへ。
- * how を付けると、向きなどをその付け替えで写す（back なら逆の付け替え）。動かす前の設備をしまっておいて戻すと、
- * 動かしたあとに流れた物・できた物・減った物が食い違う（中身が増える）ので、いま置かれている設備そのものを動かす。
- * いまはもう置かれていない設備は飛ばす。行き先が、動かすもの以外でふさがっていれば何もしない（ok が false）
+ * 元に戻す・やり直すで動かす設備。左上が from[i]（x, y, 種類）にある設備を、左上が to[i] のマスへ移す。
+ * how を付けると、向きなどをその付け替えで写す（back なら逆の付け替え）。
+ * 設備そのものではなく、場所で覚える。ずらす・回すたびに写しが置かれるので、続けて動かすと、前の手が覚えた設備はもう置かれていない
  */
-export function relocate(w: World, ents: Ent[], to: [number, number][], how?: Xform, back = false): { ok: boolean; removed: Ent[]; added: Ent[] } {
-  const plan: [Ent, Ent][] = [];
-  ents.forEach((e, i) => { if (w.ents.get(key(e.x, e.y)) === e) plan.push([e, how ? copyX(e, to[i][0], to[i][1], how, back) : { ...e, x: to[i][0], y: to[i][1] }]); });
-  const moving = new Set(plan.map(([e]) => e));
+export interface MoveSpec { from: [number, number, Kind][]; to: [number, number][]; how?: Xform; back?: boolean }
+/** removed の場所から added の場所へ動かした設備を、removed の場所へ戻す手。how で写したなら、戻すのはその逆（back） */
+export const moveSpec = (removed: Ent[], added: Ent[], how?: Xform, back = true): MoveSpec =>
+  ({ from: added.map((e) => [e.x, e.y, e.kind]), to: removed.map((e) => [e.x, e.y]), how, back });
+/**
+ * ずらした・回した設備を、いまの中身のまま別の場所へ移す（元に戻す・やり直すに使う）。動かす前の設備をしまっておいて戻すと、
+ * 動かしたあとに流れた物・できた物・減った物が食い違う（中身が増える）ので、いま置かれている設備そのものを動かす。
+ * 覚えた場所に、左上がそこにある同じ種類の設備がなければ飛ばす。行き先が、動かすもの以外でふさがっていれば何もしない（ok が false）
+ */
+export function relocate(w: World, m: MoveSpec): { ok: boolean; removed: Ent[]; added: Ent[] } {
+  const plan: [Ent, Ent][] = [], moving = new Set<Ent>();
+  m.from.forEach(([x, y, k], i) => {
+    const e = w.ents.get(key(x, y)), [tx, ty] = m.to[i];
+    if (!e || e.kind !== k || moving.has(e)) return;
+    moving.add(e);
+    plan.push([e, m.how ? copyX(e, tx, ty, m.how, m.back) : { ...e, x: tx, y: ty }]);
+  });
   for (const [, c] of plan) for (const [fx, fy] of footprint(c.x, c.y, sizeOf(c))) {
-    const o = w.ents.get(key(fx, fy)), m = o?.kind === 'part' ? w.ents.get(o.ref!) : o;
-    if (o && !(m && moving.has(m))) return { ok: false, removed: [], added: [] };
+    const o = w.ents.get(key(fx, fy)), p = o?.kind === 'part' ? w.ents.get(o.ref!) : o;
+    if (o && !(p && moving.has(p))) return { ok: false, removed: [], added: [] };
   }
   for (const [e] of plan) for (const [fx, fy] of footprint(e.x, e.y, sizeOf(e))) w.ents.delete(key(fx, fy));
   for (const [, c] of plan) restore(w, c);

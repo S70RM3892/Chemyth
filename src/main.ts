@@ -47,15 +47,15 @@ import { drawToken, elementIcon } from './ui/token';
 import { autoOpen, breakReminder, dataExtra, helpExtra, initSettings2, menuExtra, prefExtras, prefRow, started } from './ui/settings2';
 import { freeSpace, putAlbum } from './ui/slots2';
 import { initBuild2 } from './ui/build2';
-import { relocate, type Xform } from './engine/shape';
+import { moveSpec, relocate, type MoveSpec } from './engine/shape';
 import { multiOf } from './engine/world';
 
 type Placeable = Exclude<Kind, 'hub' | 'part'>;
 type Tool = 'pan' | 'erase' | 'area' | 'rail' | 'route' | Placeable;
 /** 範囲コピーした設計図。左上からのずれで持つ */
 type Op = { t: 'add'; x: number; y: number } | { t: 'del'; ent: Ent } | { t: 'dir'; x: number; y: number; dir: Dir } | { t: 'rails'; snap: [string, number | undefined][] } | { t: 'ch'; x: number; y: number; ch: number }
-  // move：いま置かれている設備 ents を、左上が to のマスへ移す（how があれば向きも付け替える。back ならその逆）。ずらす・回す・鏡を、中身ごと元に戻すのに使う
-  | { t: 'move'; ents: Ent[]; to: [number, number][]; how?: Xform; back?: boolean };
+  // move：左上が from にある、いま置かれている設備を、左上が to のマスへ移す（how があれば向きも付け替える。back ならその逆）。ずらす・回す・鏡を、中身ごと元に戻すのに使う
+  | ({ t: 'move' } & MoveSpec);
 const BUILD: Placeable[] = ['belt', 'bridge', 'tunnel', 'lift', 'splitter', 'analyzer', 'sensor', 'gate', 'station', 'extractor', 'separator', 'reactor', 'electrolyzer', 'battery', 'collector', 'settler', 'funnel', 'phoresis', 'sampler', 'depot', 'tank', 'vent'];
 /** 道具の分類。道具が多いので、棚を分けて出す */
 const GROUPS: { id: string; name: string; tools: Tool[] }[] = [
@@ -265,7 +265,7 @@ function boot(data: HotData) {
   const describe = (g: Op[] | undefined) => {
     if (!g?.length) return '';
     const mv = g.find((o) => o.t === 'move');
-    if (mv?.t === 'move') return `${mv.how === 'rot' ? '回した' : mv.how ? '鏡に映した' : 'ずらした'} ${mv.ents.length} 個`;
+    if (mv?.t === 'move') return `${mv.how === 'rot' ? '回した' : mv.how ? '鏡に映した' : 'ずらした'} ${mv.from.length} 個`;
     const adds = g.filter((o) => o.t === 'add').length, dels = g.filter((o) => o.t === 'del').length;
     if (adds && dels && adds === dels) return `ずらした ${adds} 個`;
     const kinds = [...new Set(g.map((o) => o.t))];
@@ -325,7 +325,7 @@ function boot(data: HotData) {
     const r = moveEnts(world, es, dx, dy);
     if (!r.ok) { if (!quiet) { toast(r.why, 2200); sfx.bad(); buzz(30); } return false; }
     if (!r.added.length) return true;
-    record({ t: 'move', ents: r.added, to: r.removed.map((e) => [e.x, e.y]) });
+    record({ t: 'move', ...moveSpec(r.removed, r.added) });
     if (rect) { const snap = moveRails(world, rect, dx, dy); if (snap.length) record({ t: 'rails', snap }); }
     group = null;
     if (selected && r.removed.includes(selected)) selected = r.added[r.removed.indexOf(selected)];
@@ -350,8 +350,8 @@ function boot(data: HotData) {
         if (restore(world, op.ent)) inv.push({ t: 'add', x: op.ent.x, y: op.ent.y });
       } else if (op.t === 'move') {
         // 動かす前にしまった設備ではなく、いま置かれている設備を中身ごと戻す（流れた物・できた物が二重にならない）
-        const r = relocate(world, op.ents, op.to, op.how, op.back);
-        if (r.ok && r.added.length) inv.push({ t: 'move', ents: r.added, to: r.removed.map((e) => [e.x, e.y]), how: op.how, back: !op.back });
+        const r = relocate(world, op);
+        if (r.ok && r.added.length) inv.push({ t: 'move', ...moveSpec(r.removed, r.added, op.how, !op.back) });
       } else if (op.t === 'rails') {
         inv.push({ t: 'rails', snap: op.snap.map(([k]) => [k, world.rails.get(k)] as [string, number | undefined]) });
         for (const [k, m] of op.snap) setRailMask(world, k, m);
@@ -1150,7 +1150,7 @@ function boot(data: HotData) {
     place: (k, x, y, d) => doPlace(k as Placeable, x, y, d), erase: doErase, turn: doTurn, cut: () => { group = null; },
     recordMove: (removed, added, snap, how) => {
       group = null;
-      record({ t: 'move', ents: added, to: removed.map((e) => [e.x, e.y]), how, back: true });
+      record({ t: 'move', ...moveSpec(removed, added, how) });
       if (snap.length) record({ t: 'rails', snap });
       group = null;
       if (selected && removed.includes(selected)) selected = added[removed.indexOf(selected)];
