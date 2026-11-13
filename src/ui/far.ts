@@ -16,7 +16,7 @@ import { DX, DY, FLOOR_DY, at, currentGoal, floorOf, inflow, isMachine, sizeOf, 
 import { districtsOf, type District } from '../engine/districts';
 import { BRASS_DARK, mix, onThemeChange, type Palette } from './theme';
 import { sprite } from './token';
-import { cvdOn, flowLines, heatColor, heatOn, STALL } from './mapfx';
+import { beltRate, cvdOn, flowEdge, flowStep, flowWidth, heatColor, heatOn, STALL } from './mapfx';
 import type { Camera, View } from './render';
 
 /** 引いた視野に替わる 1 マスの大きさ（CSS ピクセル）。境の前後でちらつかないよう、入るのは 7.5 より小さくなったとき、出るのは 8.5 より大きくなったとき */
@@ -255,6 +255,54 @@ function beltRuns(w: World, fl: number): Record<BK, number[]> {
   runCache = { w, n: w.ents.size, at: frameNo, fl, runs };
   return runs;
 }
+/**
+ * 稼働率の重ね表示の流れの線：太さの段（0〜4）ごとの帯（x0, y0, x1, y1 のマスの座標）。同じ向きに続くベルトの列をたどり、段が同じ所を 1 本にまとめる。
+ * 何万ものベルトを 1 本ずつ線で引くと重いので、帯にして四角で塗る。毎分の数はベルトごとに計るので、となりどうしでも少し揺れる。
+ * 段は、列の中の前・自分・後の 3 つの真ん中の値で決める（1 マスだけの揺れでは帯を切らない。流れが本当に変わる所では、そのまま切れる）。
+ * 毎分の数は遊んだ時間の 2 秒ごとにしか変わらないので、2 秒ごとに作り直す。まだ計り始めたばかりのベルト（数が出るまで 1 秒）があるときは、1 秒後に作り直す。
+ * 止めているあいだも、置き換えたベルトが分かるよう、2 秒ほど（120 コマ）で作り直す
+ */
+let flowCache: { w: World; n: number; at: number; fl: number; due: number; groups: number[][] } | null = null;
+function flowRuns(w: World, fl: number): number[][] {
+  const c = flowCache;
+  if (c && c.w === w && c.n === w.ents.size && c.fl === fl && w.playMs < c.due && frameNo - c.at < 120) return c.groups;
+  const off = fl * FLOOR_DY, groups: number[][] = [[], [], [], [], []];
+  // その階のベルトを、位置から番号で引けるようにする（位置は数の鍵。文字の鍵より軽い）
+  const pos = (x: number, y: number) => x * 4194304 + y, idx = new Map<number, number>(), list: Ent[] = [], rate: number[] = [];
+  let fresh = false;
+  for (const e of w.ents.values()) {
+    if (e.kind !== 'belt' || floorOf(e.y) !== fl) continue;
+    const r = beltRate(w, e);
+    idx.set(pos(e.x, e.y), list.length); list.push(e); rate.push(r);
+    if (r < 0) fresh = true;
+  }
+  /** (x, y) にある、向き d のベルトの番号（なければ -1） */
+  const belt = (x: number, y: number, d: number) => { const i = idx.get(pos(x, y)); return i !== undefined && list[i].dir === d ? i : -1; };
+  const line: number[] = [];
+  list.forEach((e, i0) => {
+    const d = e.dir, dx = DX[d], dy = DY[d];
+    // 列の先頭からだけたどる
+    if (belt(e.x - dx, e.y - dy, d) >= 0) return;
+    line.length = 0;
+    for (let x = e.x, y = e.y, i = i0; i >= 0; x += dx, y += dy, i = belt(x, y, d)) line.push(i);
+    let from = 0, k0 = -1;
+    for (let j = 0; j <= line.length; j++) {
+      let k = -1;
+      if (j < line.length) {
+        const a = rate[line[Math.max(0, j - 1)]], b = rate[line[j]], q = rate[line[Math.min(line.length - 1, j + 1)]];
+        k = flowStep(j === 0 || j === line.length - 1 ? b : Math.max(Math.min(a, b), Math.min(Math.max(a, b), q)));
+      }
+      if (k === k0) continue;
+      if (k0 >= 0) {
+        const s = list[line[from]], t = list[line[j - 1]];
+        groups[k0].push(s.x + 0.5 - dx * 0.5, s.y - off + 0.5 - dy * 0.5, t.x + 0.5 + dx * 0.5, t.y - off + 0.5 + dy * 0.5);
+      }
+      from = j; k0 = k;
+    }
+  });
+  flowCache = { w, n: w.ents.size, at: frameNo, fl, due: w.playMs + (fresh ? 1000 : 2000), groups };
+  return groups;
+}
 /** 積む駅ごとの道筋。線路を探すのは重いので、1 秒に 1 回でよい */
 let routeCache: { w: World; tick: number; rev: number; n: number; list: { e: Ent; routes: Route[] }[] } | null = null;
 function routesOf(w: World) {
@@ -429,8 +477,6 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
   const rects = new Map<string, number[]>();
   const items = new Map<string, number[]>();
   const bad: number[] = [], busy: number[] = [], jams: number[] = [], below: number[] = [], stall: number[] = [];
-  /** 流れの線を引くベルト（稼働率の重ね表示のとき） */
-  const flows: Ent[] = [];
   /** 稼働率の色（5 % ごと。このコマで使う分だけ作る） */
   const heatCols: string[] = [];
   const showItems = z >= 4;
@@ -448,7 +494,6 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
     if (k === 'belt' || k === 'bridge') {
       const cx = e.x + 0.5, cy = ey + 0.5;
       if (k === 'bridge') bridges.push(e.x, ey);
-      else if (view.stats) flows.push(e);
       const it = e.item ?? e.items?.find((q) => !!q);
       if (it) {
         if (showItems) {
@@ -518,11 +563,36 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
       ctx.fill();
     }
   }
+  // 稼働率の重ね表示のとき：流れの多いベルトほど太い帯（近くの絵の線と同じ色と太さ。端は四角）。
+  // 段ごとに 1 つの形にまとめて 1 回で塗る（重なった所が濃くならない）。詰まりの印は、この上に描く
+  if (view.stats) {
+    const groups = flowRuns(w, fl);
+    for (const [pass, col] of [[1, flowEdge(P)], [0, P.hi]] as const) {
+      ctx.fillStyle = col; ctx.globalAlpha = pass ? 0.55 : 0.95;
+      groups.forEach((g, k) => {
+        if (!g.length) return;
+        const half = flowWidth(z, k) / 2 + pass;
+        ctx.beginPath();
+        for (let i = 0; i < g.length; i += 4) {
+          const X0 = sx(g[i]), Y0 = sy(g[i + 1]), X1 = sx(g[i + 2]), Y1 = sy(g[i + 3]);
+          const L = Math.min(X0, X1) - half, T = Math.min(Y0, Y1) - half, R = Math.max(X0, X1) + half, B = Math.max(Y0, Y1) + half;
+          if (R > 0 && B > 0 && L < cw && T < ch) ctx.rect(L, T, R - L, B - T);
+        }
+        ctx.fill();
+      });
+    }
+    ctx.globalAlpha = 1;
+  }
   // 詰まり（稼働率の重ね表示のとき）：待っている荷のマスを、黄 → 赤で塗る。
   // 色覚の補助のときは、形でも分ける（待ち始めは枠だけ、詰まりきったら塗りつぶす。近くの絵の点線の枠と斜線の網にあたる）
   if (jams.length) {
+    // 流れの線（スキンによっては黄や橙）の上でも黄の印が埋もれないよう、外側に暗い細い縁をつける
+    const s = Math.max(2, z);
+    ctx.strokeStyle = 'rgba(20,18,16,0.7)'; ctx.lineWidth = 1; ctx.beginPath();
+    for (let i = 0; i < jams.length; i += 3) ctx.rect(sx(jams[i]) - 0.5, sy(jams[i + 1]) - 0.5, s + 1, s + 1);
+    ctx.stroke();
     for (const hot of [false, true]) {
-      const hollow = cv && !hot, s = Math.max(2, z), lw = Math.max(1, Math.min(2, z * 0.2));
+      const hollow = cv && !hot, lw = Math.max(1, Math.min(2, z * 0.2));
       ctx.beginPath();
       for (let i = 0; i < jams.length; i += 3) if ((jams[i + 2] >= 1) === hot) {
         if (hollow) ctx.rect(sx(jams[i]) + lw / 2, sy(jams[i + 1]) + lw / 2, s - lw, s - lw);
@@ -532,8 +602,6 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
       else { ctx.fillStyle = hot ? 'rgba(214,48,49,0.75)' : 'rgba(235,165,35,0.7)'; ctx.fill(); }
     }
   }
-  // 稼働率の重ね表示のとき：流れの多いベルトほど太い線（近くの絵と同じ）
-  if (flows.length) flowLines(ctx, P, w, sx, (y) => sy(y - off), z, flows);
 
   // 装置：機種の色の四角（色ごとに続けて塗る）。寄っているうちは、ひと回り大きい主線の色の四角を下に敷いて縁取りにする
   const pad = z >= 3 ? z * 0.08 : 0;
