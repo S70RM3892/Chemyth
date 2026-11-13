@@ -4,7 +4,7 @@
  *   種類：0 角丸の長方形、1 円、2 カプセル、3 面取りの八角形（工業の筐体）、4 ドーム（円で、高さが h·√(1 − ρ²)）。
  *   カプセルだけは x0, y0, x1, y1 が軸の両端で、r が半径（ほかは外の四角と、角の丸み・面取りの長さ）。
  *   層（cls）は、MAX で重ねたとき上の面の層が残るよう、下から 0 水、1 地面、2 ベルト、3 線路、4 装置、5 納品所、6 列車
- * - 今の絵の寸法（スキンごと）から、装置・ベルト・線路・列車・納品所・水の形を作る（ART。絵を描く関数の数をそのまま写した）
+ * - 今の絵の寸法（スキンごと）から、装置・ベルト・立体交差・地下ベルトの口・線路・列車・納品所・水の形を作る（ART。絵を描く関数の数をそのまま写した）
  * - 形の距離（中が負、マス）と、SH0（形を tShape に塗る）・SH1（影・くぼみの陰り・面の傾きを tShade に書く）の JS の見本。
  *   シェーダー（shapes.glsl.ts）と同じ式なので、検査はこれで確かめる
  * tShape は画面の 1/2（CSS の画素）に、画面の外の帯（影を落とす物が画面の外にあっても影が出るように）をつけた大きさ。
@@ -19,8 +19,13 @@ export const STRIDE = 8;
 export const KIND = { rect: 0, disc: 1, capsule: 2, oct: 3, dome: 4 } as const;
 /** 層（MAX で重ねたとき、上の面の層が残る順） */
 export const CLS = { water: 0, ground: 1, belt: 2, rail: 3, machine: 4, hub: 5, train: 6 } as const;
-/** 高さ（0〜1）。地面は何もない所の値。今の高さの層と同じ尺度（SPEC2 H2） */
-export const HEIGHT = { water: 0, ground: 0.1, belt: 0.24, bridge: 0.36, tunnel: 0.3, small: 0.44, big: 0.62, tank: 0.44, hub: 0.95, rail: 0.36, train: 0.5 } as const;
+/**
+ * 高さ（0〜1）。地面は何もない所の値。今の高さの層と同じ尺度（SPEC2 H2）。
+ * domeBase は研究所の反応器のドームの下に敷く、殻の外形の低い台。天面の扱い（AO_TOP 0.15）より少しだけ上
+ * （8 ビットで 41/255）なので、描いた殻の四隅（ドームの外）にくぼみの陰りが出ない。地面との差は影の 1 歩（1/12）より小さいので、
+ * 硬い光では影を落とさない（柔らかい光でだけ、縁のそばに薄い影）
+ */
+export const HEIGHT = { water: 0, ground: 0.1, belt: 0.24, bridge: 0.36, tunnel: 0.3, small: 0.44, big: 0.62, tank: 0.44, hub: 0.95, rail: 0.36, train: 0.5, domeBase: 0.16 } as const;
 /** 浮き：高架の線路と列車の下の面の高さ（その下は空いていて、低い光は下をくぐる） */
 export const LIFT = 0.3;
 
@@ -53,7 +58,10 @@ export const ART = {
   punk: { a: 0.46, c: 0.14 },
   /** 研究所の殻：shellOf() の rr(b0, b0, bw, bw, R)、bw = 0.84·sz、R = 0.12·sz（窓の角の 0.07·sz ではなく、殻の外の形） */
   shell: { size: 0.84, r: 0.12 },
-  /** 研究所の反応器：殻の半分の幅（0.42·sz）を半径とするドーム（SPEC2 H2） */
+  /**
+   * 研究所の反応器：殻の半分の幅（0.42·sz）を半径とするドーム（SPEC2 H2）。絵の反応器は殻（角丸の四角）に丸い窓なので、
+   * ドームの下に殻の外形の低い台（HEIGHT.domeBase）を敷く
+   */
   dome: 0.42,
   /** ベルトの太さ（流れているものごと）。文具 WIDTH、工業 PW、魔術 GW、研究所 labBelts の W */
   belt: {
@@ -62,8 +70,16 @@ export const ART = {
     arcane: { solid: 0.56, liquid: 0.48, gas: 0.4, none: 0.46 },
     lab: { solid: 0.58, liquid: 0.46, gas: 0.36, none: 0.52 },
   } as Record<Skin, Record<BeltState, number>>,
-  /** 橋とトンネルの口（今の高さの層の四角） */
-  bridge: 0.76, tunnel: 0.74,
+  /**
+   * 立体交差と地下ベルトの管の太さ：render.ts の「立体交差」と「地下ベルト」の輪で使う WIDTH.none（どのスキンも同じ。端は butt）。
+   * 立体交差は、マスいっぱいの縦の管（ベルトの高さ）の上を、マスいっぱいの横の管（橋の高さ）がまたぐ
+   */
+  pipe: 0.52,
+  /**
+   * 地下ベルトの坑口：render.ts の「地下ベルト」の輪の rr(−0.17z, −0.4z, 0.34z, 0.8z, 0.08z) を rotate(dir·90°) したもの
+   * （マスの中心に、流れの向きに 0.34、横に 0.8、角の丸み 0.08）。管の切れ端は、入口（先に対の口がある）は後ろ半分、出口は前半分
+   */
+  portal: { along: 0.34, across: 0.8, r: 0.08 },
   /** 納品所：hub() は内側へ 0.06 マス入った面取り 0.3 マスの八角形、hubLab() は角の丸み 0.42 マスの角丸の四角 */
   hub: { inset: 0.06, c: 0.3, r: 0.42 },
   /** 高架の線路の桁の太さ（z·0.2） */
@@ -72,14 +88,18 @@ export const ART = {
   train: { L: 0.95, W: 0.46, r: 0.08 },
 } as const;
 
-/** 装置の台（x, y は左上のマス、sz は 1 か 2）。kind は装置の種類。研究所の反応器だけドーム、タンクは台の形で低い */
+/**
+ * 装置の台（x, y は左上のマス、sz は 1 か 2）。kind は装置の種類。タンクは台の形で低い。
+ * 研究所の反応器は、殻の外形の低い台の上にドーム（2 つの形。MAX で重ねるので、ドームの所はドーム、殻の四隅は低い天面）
+ */
 export function machineShape(b: ShapeBuf, skin: Skin, kind: string, x: number, y: number, sz: number) {
   const h = kind === 'tank' ? HEIGHT.tank : sz === 2 ? HEIGHT.big : HEIGHT.small, cx = x + sz / 2, cy = y + sz / 2;
   if (skin === 'punk') {
     const a = ART.punk.a * sz;
     pushShape(b, cx - a, cy - a, cx + a, cy + a, h, KIND.oct, CLS.machine, ART.punk.c * sz);
   } else if (skin === 'lab' && kind === 'reactor') {
-    const R = ART.dome * sz;
+    const a = (ART.shell.size * sz) / 2, R = ART.dome * sz;
+    pushShape(b, cx - a, cy - a, cx + a, cy + a, HEIGHT.domeBase, KIND.rect, CLS.machine, ART.shell.r * sz);
     pushShape(b, cx - R, cy - R, cx + R, cy + R, h, KIND.dome, CLS.machine);
   } else {
     const s = skin === 'lab' ? ART.shell : ART.card, a = (s.size * sz) / 2;
@@ -98,10 +118,27 @@ export function beltShape(b: ShapeBuf, skin: Skin, st: BeltState, x: number, y: 
   pushShape(b, cx + ax, cy + ay, mx, my, HEIGHT.belt, KIND.capsule, CLS.belt, r);
   pushShape(b, mx, my, cx + bx, cy + by, HEIGHT.belt, KIND.capsule, CLS.belt, r);
 }
-/** 橋（tunnel が false）とトンネルの口 */
-export function crossShape(b: ShapeBuf, tunnel: boolean, x: number, y: number) {
-  const s = tunnel ? ART.tunnel : ART.bridge, p = (1 - s) / 2;
-  pushShape(b, x + p, y + p, x + 1 - p, y + 1 - p, tunnel ? HEIGHT.tunnel : HEIGHT.bridge, KIND.rect, CLS.belt);
+/**
+ * 立体交差（tunnel が false）と地下ベルトの口（x, y は左上のマス）。絵のとおり：
+ * - 立体交差：マスいっぱいの縦の管（ベルトの高さ）の上を、マスいっぱいの横の管（橋の高さ）がまたぐ（dir と front は使わない）
+ * - 地下ベルト：マスの中心の坑口（流れの向き dir に 0.34、横に 0.8）と、管の切れ端（太さ 0.52、マスの縁から中心まで）。
+ *   切れ端は、出口（front が true。render.ts で対の口がないとき）は前半分、入口（先に対の口がある）は後ろ半分
+ */
+export function crossShape(b: ShapeBuf, tunnel: boolean, x: number, y: number, dir: number, front: boolean) {
+  const cx = x + 0.5, cy = y + 0.5, w = ART.pipe / 2;
+  if (!tunnel) {
+    pushShape(b, x + 0.5 - w, y, x + 0.5 + w, y + 1, HEIGHT.belt, KIND.rect, CLS.belt);
+    pushShape(b, x, y + 0.5 - w, x + 1, y + 0.5 + w, HEIGHT.bridge, KIND.rect, CLS.belt);
+    return;
+  }
+  // 向き（render.ts の DX・DY と同じ：0 右、1 下、2 左、3 上）
+  const d = ((Math.round(dir) % 4) + 4) % 4, dx = d === 0 ? 1 : d === 2 ? -1 : 0, dy = d === 1 ? 1 : d === 3 ? -1 : 0;
+  // 管の切れ端：中心と、前（または後ろ）の縁の中点のあいだ。長さ 0.5、太さ 0.52
+  const s = front ? 0.25 : -0.25, mx = cx + dx * s, my = cy + dy * s;
+  pushShape(b, mx - (dx ? 0.25 : w), my - (dx ? w : 0.25), mx + (dx ? 0.25 : w), my + (dx ? w : 0.25), HEIGHT.belt, KIND.rect, CLS.belt);
+  // 坑口：流れの向きに短く、横に長い
+  const P = ART.portal, hx = (dx ? P.along : P.across) / 2, hy = (dx ? P.across : P.along) / 2;
+  pushShape(b, cx - hx, cy - hy, cx + hx, cy + hy, HEIGHT.tunnel, KIND.rect, CLS.belt, P.r);
 }
 /** 納品所（x, y は左上、s は一辺のマス数） */
 export function hubShape(b: ShapeBuf, skin: Skin, x: number, y: number, s: number) {

@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AO_FLOOR, AO_STEP, ART, CLEAR, CLS, HEIGHT, KIND, LIFT, SHADOW_STEPS, STRIDE,
+  AO_FLOOR, AO_STEP, AO_TOP, ART, BEV_K, CLEAR, CLS, HEIGHT, KIND, LIFT, SHADOW_STEPS, STRIDE,
   aoMaxFor, beltShape, crossShape, fragShape, guardOf, hubShape, machineShape, newShapes, packKC, pushShape, railShape, rasterShapes,
   sdCapsule, sdDisc, sdOctagon, sdRoundRect, sdShape, shadeAt, shadeUniforms, shapeView, sh0Uniforms, texelWorld, trainShape, unpackKC, waterShape,
   type BeltState, type RGBA, type ShapeBuf, type ShapeLight, type Skin,
 } from '../src/ui/gfx/sdf';
 import { FS_SH0, FS_SH1, SH0_ATTR, SH0_BYTES, SH0_UNIFORMS, SH1_UNIFORMS, VS_SH0, VS_SH1 } from '../src/ui/gfx/shapes.glsl';
 import { MACHINES } from '../src/content/machines';
+import { DX, DY, at, newWorld, place, tunnelPair, type Ent } from '../src/engine/world';
 
 const SKINS: Skin[] = ['note', 'punk', 'arcane', 'lab'];
 /** 決まった並びの乱数（検査を毎回同じにする） */
@@ -177,28 +178,36 @@ describe('形の距離', () => {
 });
 
 describe('今の絵と同じ形', () => {
+  /** 並びのすべての形を合わせた距離（いちばん小さいもの） */
+  const union = (b: ShapeBuf) => (x: number, y: number) => { let d = Infinity; for (let i = 0; i < b.n; i++) d = Math.min(d, sdShape(b.a, i, x, y)); return d; };
   /** 形の中心から向き (ux, uy) へ、距離が 0 になる所までの長さ（二分法） */
-  const reach = (b: ShapeBuf, i: number, cx: number, cy: number, ux: number, uy: number) => {
+  const reach = (sd: (x: number, y: number) => number, cx: number, cy: number, ux: number, uy: number) => {
     let lo = 0, hi = 3;
-    for (let k = 0; k < 60; k++) { const m = (lo + hi) / 2; if (sdShape(b.a, i, cx + ux * m, cy + uy * m) < 0) lo = m; else hi = m; }
+    for (let k = 0; k < 60; k++) { const m = (lo + hi) / 2; if (sd(cx + ux * m, cy + uy * m) < 0) lo = m; else hi = m; }
     return lo;
   };
   const kinds = Object.keys(MACHINES).filter((k) => k !== 'belt' && k !== 'bridge' && k !== 'tunnel');
-  it('MACHINES のどの装置も、4 つのスキンと 2 つの大きさで 1 つの形になり、マスに収まり、絵の寸法と 1 % 以内', () => {
+  it('MACHINES のどの装置も、4 つのスキンと 2 つの大きさで 1 つ以上の形になり、マスに収まり、合わせた外形は絵の寸法と 1 % 以内', () => {
     expect(kinds.length).toBeGreaterThanOrEqual(15);
     for (const skin of SKINS) for (const kind of kinds) for (const sz of [1, 2]) {
-      const b = newShapes(2), x = 10, y = 20, cx = x + sz / 2, cy = y + sz / 2;
+      const b = newShapes(2), x = 10, y = 20, cx = x + sz / 2, cy = y + sz / 2, a = b.a;
       machineShape(b, skin, kind, x, y, sz);
-      expect(b.n).toBe(1);
-      const a = b.a, { kind: k, cls } = unpackKC(a[5]);
-      expect(cls).toBe(CLS.machine);
-      // マスの中に収まり、中心はマスの中心
-      expect(Math.min(a[0], a[2])).toBeGreaterThanOrEqual(x); expect(Math.max(a[0], a[2])).toBeLessThanOrEqual(x + sz);
-      expect(Math.min(a[1], a[3])).toBeGreaterThanOrEqual(y); expect(Math.max(a[1], a[3])).toBeLessThanOrEqual(y + sz);
-      expect(sdShape(a, 0, cx, cy)).toBeLessThan(0);
-      // 高さ：タンクは低い、2×2 は 0.62、1×1 は 0.44
-      expect(a[4]).toBeCloseTo(kind === 'tank' ? HEIGHT.tank : sz === 2 ? HEIGHT.big : HEIGHT.small, 6);
-      const side = reach(b, 0, cx, cy, 1, 0), diag = reach(b, 0, cx, cy, Math.SQRT1_2, Math.SQRT1_2), up = reach(b, 0, cx, cy, 0, -1);
+      const dome = skin === 'lab' && kind === 'reactor';
+      // 研究所の反応器だけ 2 つ（殻の外形の低い台と、ドーム）。ほかは 1 つ
+      expect(b.n).toBe(dome ? 2 : 1);
+      for (let i = 0; i < b.n; i++) {
+        const o = i * STRIDE;
+        expect(unpackKC(b.a[o + 5]).cls).toBe(CLS.machine);
+        // マスの中に収まる
+        expect(Math.min(b.a[o], b.a[o + 2])).toBeGreaterThanOrEqual(x); expect(Math.max(b.a[o], b.a[o + 2])).toBeLessThanOrEqual(x + sz);
+        expect(Math.min(b.a[o + 1], b.a[o + 3])).toBeGreaterThanOrEqual(y); expect(Math.max(b.a[o + 1], b.a[o + 3])).toBeLessThanOrEqual(y + sz);
+      }
+      const sd = union(b), top = dome ? STRIDE : 0, { kind: k } = unpackKC(b.a[top + 5]);
+      expect(sd(cx, cy)).toBeLessThan(0);
+      // いちばん上の形の高さ：タンクは低い、2×2 は 0.62、1×1 は 0.44
+      expect(b.a[top + 4]).toBeCloseTo(kind === 'tank' ? HEIGHT.tank : sz === 2 ? HEIGHT.big : HEIGHT.small, 6);
+      // 合わせた外形：中心から右・上・斜めへの長さ
+      const side = reach(sd, cx, cy, 1, 0), diag = reach(sd, cx, cy, Math.SQRT1_2, Math.SQRT1_2), up = reach(sd, cx, cy, 0, -1);
       const near = (got: number, want: number) => expect(Math.abs(got / want - 1)).toBeLessThanOrEqual(0.01);
       near(up, side);
       if (skin === 'punk') {
@@ -206,21 +215,28 @@ describe('今の絵と同じ形', () => {
         const A = ART.punk.a * sz, C = ART.punk.c * sz;
         expect(k).toBe(KIND.oct);
         near(side, A); near(diag, ((2 * A - C) / 2) * Math.SQRT2);
-      } else if (skin === 'lab' && kind === 'reactor') {
-        // 研究所の反応器：殻の半分の幅を半径とするドーム（どの向きも同じ）
-        expect(k).toBe(KIND.dome);
-        near(side, ART.dome * sz); near(diag, ART.dome * sz);
       } else {
-        // 角丸の四角：半分の幅 0.42·sz、斜めは角の丸みの円まで
+        // 角丸の四角（研究所は殻、反応器も殻の外形）：半分の幅 0.42·sz、斜めは角の丸みの円まで
         const s = skin === 'lab' ? ART.shell : ART.card, A = (s.size * sz) / 2, R = s.r * sz;
-        expect(k).toBe(KIND.rect);
+        expect(k).toBe(dome ? KIND.dome : KIND.rect);
         near(side, A); near(diag, (A - R) * Math.SQRT2 + R);
+      }
+      if (dome) {
+        // 下の台は殻の外形そのもの（低い天面）、ドームは殻の半分の幅を半径とする円（どの向きも同じ）
+        expect(unpackKC(a[5]).kind).toBe(KIND.rect);
+        expect(a[4]).toBeCloseTo(HEIGHT.domeBase, 6); expect(a[6]).toBeCloseTo(ART.shell.r * sz, 6);
+        expect([a[2] - a[0], a[3] - a[1]].map((v) => +v.toFixed(5))).toEqual([ART.shell.size * sz, ART.shell.size * sz].map((v) => +v.toFixed(5)));
+        const d = (x: number, y: number) => sdShape(b.a, 1, x, y);
+        near(reach(d, cx, cy, 1, 0), ART.dome * sz); near(reach(d, cx, cy, Math.SQRT1_2, Math.SQRT1_2), ART.dome * sz);
       }
     }
   });
-  it('研究所の殻と文具の台は同じ外形（0.84、丸み 0.12）、反応器のドームは殻の幅いっぱい', () => {
+  it('研究所の殻と文具の台は同じ外形（0.84、丸み 0.12）、反応器のドームは殻の幅いっぱいで、下の台は天面の扱いで影をほぼ落とさない高さ', () => {
     expect(ART.shell).toEqual(ART.card);
     expect(ART.dome * 2).toBeCloseTo(ART.shell.size, 9);
+    // 8 ビットに丸めても AO_TOP より上（天面：陰りを受けない）、地面との差は影の 1 歩（1/12）より小さい
+    expect(Math.round(HEIGHT.domeBase * 255) / 255).toBeGreaterThan(AO_TOP);
+    expect(HEIGHT.domeBase - HEIGHT.ground).toBeLessThan(1 / SHADOW_STEPS);
   });
   it('ベルト：まっすぐなら 1 本、曲がるなら 2 本のカプセル。絵の曲線から 0.05 マス以内、太さは絵と同じ', () => {
     const states: BeltState[] = ['solid', 'liquid', 'gas', 'none'];
@@ -247,11 +263,73 @@ describe('今の絵と同じ形', () => {
     expect(ART.belt.arcane.gas).toBeGreaterThan(ART.belt.note.gas);
     expect(Math.max(...SKINS.map((s) => ART.belt[s].solid))).toBe(ART.belt.punk.solid);
   });
-  it('橋・トンネル・納品所・線路・列車・水も、今の絵と高さの層の寸法', () => {
-    const b = newShapes(8);
-    crossShape(b, false, 3, 3); crossShape(b, true, 5, 3);
-    expect(b.a[2] - b.a[0]).toBeCloseTo(0.76, 6); expect(b.a[4]).toBeCloseTo(HEIGHT.bridge, 6);
-    expect(b.a[STRIDE + 2] - b.a[STRIDE]).toBeCloseTo(0.74, 6); expect(b.a[STRIDE + 4]).toBeCloseTo(HEIGHT.tunnel, 6);
+  /** 並びの形を MAX で重ねたときの、点 (x, y) のいちばん上の高さ（どの形にも入らなければ null） */
+  const topAt = (b: ShapeBuf, x: number, y: number) => { let h: number | null = null; for (let i = 0; i < b.n; i++) if (sdShape(b.a, i, x, y) < 0) h = Math.max(h ?? 0, b.a[i * STRIDE + 4]); return h; };
+  /** 形がどれもマス (x, y) の中に収まる */
+  const inTile = (b: ShapeBuf, x: number, y: number) => {
+    for (let i = 0; i < b.n; i++) {
+      const o = i * STRIDE;
+      expect(Math.min(b.a[o], b.a[o + 2])).toBeGreaterThanOrEqual(x - 1e-6); expect(Math.max(b.a[o], b.a[o + 2])).toBeLessThanOrEqual(x + 1 + 1e-6);
+      expect(Math.min(b.a[o + 1], b.a[o + 3])).toBeGreaterThanOrEqual(y - 1e-6); expect(Math.max(b.a[o + 1], b.a[o + 3])).toBeLessThanOrEqual(y + 1 + 1e-6);
+      expect(unpackKC(b.a[o + 5]).cls).toBe(CLS.belt);
+    }
+  };
+  /** 絵の数（render.ts）：管の太さ WIDTH.none、坑口 rr(−0.17, −0.4, 0.34, 0.8, 0.08)（向きで回す前） */
+  const PIPE = 0.52, PORTAL = { hx: 0.17, hy: 0.4, r: 0.08 };
+  it('立体交差：マスいっぱいの縦の管（ベルトの高さ）の上を、横の管（橋の高さ）がまたぐ。四隅は地面', () => {
+    expect(ART.pipe).toBe(PIPE);
+    for (const dir of [0, 1, 2, 3]) {
+      const b = newShapes(2), x = 3, y = 7, cx = x + 0.5, cy = y + 0.5;
+      crossShape(b, false, x, y, dir, dir % 2 === 0);
+      inTile(b, x, y);
+      let n = 0;
+      for (let v = 0.01; v < 1; v += 0.02) for (let u = 0.01; u < 1; u += 0.02) {
+        const px = x + u, py = y + v, ax = Math.abs(px - cx), ay = Math.abs(py - cy);
+        // 絵の管の縁から 0.01 マス以内は調べない
+        if (Math.abs(ax - PIPE / 2) < 0.01 || Math.abs(ay - PIPE / 2) < 0.01) continue;
+        n++;
+        expect(topAt(b, px, py)).toBe(ay < PIPE / 2 ? Math.fround(HEIGHT.bridge) : ax < PIPE / 2 ? Math.fround(HEIGHT.belt) : null);
+      }
+      expect(n).toBeGreaterThan(2000);
+    }
+  });
+  it('地下ベルトの口：4 つの向きと入口・出口で、絵の坑口（流れの向きに 0.34、横に 0.8）と管の切れ端（入口は後ろ、出口は前の半分）', () => {
+    expect(ART.portal).toEqual({ along: PORTAL.hx * 2, across: PORTAL.hy * 2, r: PORTAL.r });
+    for (const dir of [0, 1, 2, 3] as const) {
+      // 本物の世界に、入口と 3 マス先の出口を置く。対の口があるかどうかは render.ts と同じく tunnelPair で
+      const w = newWorld(), x0 = 20, y0 = 20, ends: Ent[] = [];
+      for (const k of [0, 3]) { expect(place(w, 'tunnel', x0 + DX[dir] * k, y0 + DY[dir] * k, dir)).toBeNull(); ends.push(at(w, x0 + DX[dir] * k, y0 + DY[dir] * k)!); }
+      expect(ends.map((e) => !!tunnelPair(w, e))).toEqual([true, false]);
+      for (const e of ends) {
+        const pair = tunnelPair(w, e), b = newShapes(2), cx = e.x + 0.5, cy = e.y + 0.5;
+        crossShape(b, true, e.x, e.y, e.dir, !pair);
+        inTile(b, e.x, e.y);
+        // 絵：坑口は rotate(dir·90°) した角丸の四角、管の切れ端は (cx, cy) から side·0.5 先の縁まで（side は対があれば −1）、端は butt
+        const th = (e.dir * Math.PI) / 2, c = Math.cos(th), s = Math.sin(th), side = pair ? -1 : 1;
+        const portal = (px: number, py: number) => sdRoundRect((px - cx) * c + (py - cy) * s, -(px - cx) * s + (py - cy) * c, PORTAL.hx, PORTAL.hy, PORTAL.r);
+        const stub = (px: number, py: number) => {
+          const along = ((px - cx) * DX[e.dir] + (py - cy) * DY[e.dir]) * side, across = Math.abs(-(px - cx) * DY[e.dir] + (py - cy) * DX[e.dir]);
+          return Math.max(-along, along - 0.5, across - PIPE / 2);
+        };
+        let n = 0, front = 0;
+        for (let v = 0.01; v < 1; v += 0.02) for (let u = 0.01; u < 1; u += 0.02) {
+          const px = e.x + u, py = e.y + v, dp = portal(px, py), ds = stub(px, py);
+          if (Math.abs(dp) < 0.01 || Math.abs(ds) < 0.01) continue;
+          n++;
+          expect(topAt(b, px, py)).toBe(dp < 0 ? Math.fround(HEIGHT.tunnel) : ds < 0 ? Math.fround(HEIGHT.belt) : null);
+          // 流れの前の側（坑口の外）に管があるのは出口だけ
+          if (dp > 0 && ds < 0 && (px - cx) * DX[e.dir] + (py - cy) * DY[e.dir] > 0) front++;
+        }
+        expect(n).toBeGreaterThan(2000);
+        expect(front > 0).toBe(!pair);
+        // 坑口は流れの向きに短い（縦の流れなら横に長い）
+        const o = STRIDE;
+        expect(Math.abs(b.a[o + 2] - b.a[o])).toBeCloseTo(DX[e.dir] ? 0.34 : 0.8, 5);
+        expect(b.a[o + 6]).toBeCloseTo(0.08, 6);
+      }
+    }
+  });
+  it('納品所・線路・列車・水も、今の絵の寸法', () => {
     for (const skin of SKINS) {
       const h = newShapes(1);
       hubShape(h, skin, 30, 40, 4);
@@ -370,23 +448,25 @@ describe('SH1：影', () => {
     expect(low.at(-0.25, 0)[0]).toBe(0);
     expect(low.at(0, 0)[0]).toBe(0);
   });
-  /** 形どおりの影：地面の点から光の向きへ細かく歩き、光の線が形の高さより下を通れば影 */
-  function exactShadow(height: (x: number, y: number) => number, dir: [number, number], len: number, x: number, y: number) {
+  /**
+   * 形どおりの影：点（高さ h0。ふつうはその点の形の高さ、なければ地面）から光の向きへ細かく歩き、光の線が形の高さより下を通れば影
+   */
+  function exactShadow(height: (x: number, y: number) => number, dir: [number, number], len: number, x: number, y: number, h0 = Math.max(HEIGHT.ground, height(x, y))) {
     const n = Math.hypot(dir[0], dir[1]), ux = dir[0] / n, uy = dir[1] / n;
     // 光の線が、いちばん高い装置（2×2 の 0.62）より上に出たら、もう何にもかからない
-    for (let k = 1; k <= 600 && HEIGHT.ground + k / 600 < HEIGHT.big; k++) { const t = k / 600; if (HEIGHT.ground + t < height(x + ux * t * len, y + uy * t * len)) return true; }
+    for (let k = 1; k <= 600 && h0 + k / 600 < HEIGHT.big; k++) { const t = k / 600; if (h0 + t < height(x + ux * t * len, y + uy * t * len)) return true; }
     return false;
   }
   /**
    * SH1 の影（0.5 より濃い）と形どおりの影の、重なりの割合と、食いちがう点から形どおりの影の縁までのいちばん遠い距離。
-   * 縁は、となりあう格子の点で形どおりの影かどうかが変わる所（その 2 点の中点）
+   * 縁は、となりあう格子の点で形どおりの影かどうかが変わる所（その 2 点の中点）。比べるのは keep が true の点（ふつうは形の外の地面）
    */
-  function compare(s: Scene, height: (x: number, y: number) => number, dir: [number, number], len: number, r: number, step: number) {
+  function compare(s: Scene, height: (x: number, y: number) => number, dir: [number, number], len: number, r: number, step: number, keep = (x: number, y: number) => s.dist(x, y) > 0.05) {
     const n = Math.round((2 * r) / step) + 1, X = (i: number) => -r + i * step, E: boolean[] = [], A: (boolean | null)[] = [], edge: Pt[] = [];
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       const x = X(i), y = X(j);
       E.push(exactShadow(height, dir, len, x, y));
-      A.push(s.dist(x, y) > 0.05 ? s.at(x, y)[0] > 0.5 : null);
+      A.push(keep(x, y) ? s.at(x, y)[0] > 0.5 : null);
     }
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       if (i + 1 < n && E[j * n + i] !== E[j * n + i + 1]) edge.push([X(i) + step / 2, X(j)]);
@@ -405,11 +485,27 @@ describe('SH1：影', () => {
   for (const [name, dir] of DIRS) it(`丸い物は丸い影：研究所の反応器のドームの影は形どおりの影と 90 % 以上重なり、縁のずれは 3 画素以内（${name}）`, () => {
     const len = 2, R = ART.dome * 2;
     const s = scene((b) => machineShape(b, 'lab', 'reactor', -1, -1, 2), hard(dir, len), { size: 320 });
-    const dome = (x: number, y: number) => { const q = Math.hypot(x, y) / R; return q < 1 ? HEIGHT.big * Math.sqrt(1 - q * q) : 0; };
-    const c = compare(s, dome, dir, len, 2.6, 0.04);
+    // 形どおりの高さは、ドームと、その下の殻の外形の低い台の、高いほう
+    const domeOnly = (x: number, y: number) => { const q = Math.hypot(x, y) / R; return q < 1 ? HEIGHT.big * Math.sqrt(1 - q * q) : 0; };
+    const baseD = (x: number, y: number) => sdRoundRect(x, y, ART.shell.size, ART.shell.size, ART.shell.r * 2);
+    const dome = (x: number, y: number) => Math.max(baseD(x, y) < 0 ? HEIGHT.domeBase : 0, domeOnly(x, y));
+    // 比べるのは、台とドームの縁から 0.05 マスより離れた所（殻の四隅の天面も、ドームの影を受ける所として比べる）。
+    // ただし台そのものが落とす影（高さの差 0.06 の、len·0.06 の細い帯）は除く：SH1 は len/12 ずつ歩くので、
+    // 1 歩目の光の線（1/12 上）より低い段差の影は出ない（台を敷く前も、ここに影はなかった）。帯の幅は確かめる
+    const band: number[] = [];
+    const keep = (x: number, y: number) => {
+      const db = baseD(x, y);
+      if (Math.abs(db) <= 0.05 || Math.hypot(x, y) - R <= 0.05) return false;
+      const h0 = Math.max(HEIGHT.ground, dome(x, y));
+      if (exactShadow(dome, dir, len, x, y, h0) && !exactShadow(domeOnly, dir, len, x, y, h0)) { band.push(db); return false; }
+      return true;
+    };
+    const c = compare(s, dome, dir, len, 2.6, 0.04, keep);
     expect(c.n).toBeGreaterThan(150);
     expect(c.iou).toBeGreaterThanOrEqual(0.9);
     expect(c.worst).toBeLessThanOrEqual(3 * s.v.aa);
+    expect(band.length).toBeLessThan(c.n / 8);
+    for (const d of band) expect(d).toBeLessThanOrEqual((HEIGHT.domeBase - HEIGHT.ground) * len + 0.04);
   });
   it('角丸の台の影は形どおりの影とほぼ重なり、ずれは影の先の 1 歩（len/12）と 2 画素以内', () => {
     for (const [, dir] of DIRS) for (const len of [0.6, 1.2]) {
@@ -488,8 +584,28 @@ describe('SH1：くぼみの陰り（灰色の輪がない）', () => {
         if (y < -1) expect(q[0]).toBe(0);
       }
       expect(seen).toBeGreaterThan(500);
-      // 2×2 の天面に陰りはない（平均 0.02 未満どころか 0）
-      for (const [x, y] of grid(0.6, 0.05, (x, y) => s.dist(x, y) < -0.1)) expect(s.at(x, y)[1]).toBe(0);
+    }
+  });
+  /** 絵の天面（中心 0 からの位置、sz マス）：工業は八角形、ほかは角丸の四角（研究所の反応器も、描くのは殻の角丸の四角） */
+  const drawnTop = (skin: Skin, sz: number) => {
+    const c = skin === 'lab' ? ART.shell : ART.card, a = (c.size * sz) / 2;
+    return (x: number, y: number) => (skin === 'punk' ? sdOctagon(x, y, ART.punk.a * sz, ART.punk.a * sz, ART.punk.c * sz) : sdRoundRect(x, y, a, a, c.r * sz));
+  };
+  it('描いた天面には、どの縮尺でも陰りがない（研究所の反応器の殻の四隅も）。2×2 の天面の平均は縁まで含めて 0.02 未満（SPEC2 の目安）', () => {
+    for (const z of [24, 44, 80]) for (const skin of SKINS) for (const kind of ['reactor', 'separator']) {
+      const s = scene((b) => { machineShape(b, skin, kind, -1, -1, 2); card(b, skin, 1.5, -0.5); }, L, { size: 360, z });
+      const big = drawnTop(skin, 2), small = drawnTop(skin, 1);
+      // 縁から tShape の 1 画素（補間がまたぐ幅）と 0.04 マスより内側は 0
+      const inset = Math.max(0.04, s.v.aa);
+      let n = 0, sum = 0, all = 0;
+      for (const [x, y] of grid(1.0, 0.02, (x, y) => big(x, y) < 0)) {
+        const g = s.at(x, y)[1];
+        all++; sum += g;
+        if (big(x, y) < -inset) { n++; expect(g).toBe(0); }
+      }
+      expect(sum / all).toBeLessThan(0.02);
+      for (const [x, y] of grid(0.5, 0.02, (x, y) => small(x, y) < -inset)) { n++; expect(s.at(x + 2, y)[1]).toBe(0); }
+      expect(n).toBeGreaterThan(5000);
     }
   });
   it('浮いた線路のそばの地面は陰らない（線路のまわりに輪が出ない）', () => {
@@ -524,6 +640,25 @@ describe('SH1：面の傾き', () => {
     for (const x of [-0.46, -0.5, 0.46, 0.5]) expect(s.at(x, 0)[2]).toBe(0.5);
     // 遠くの開けた地面
     expect(s.at(-1.5, 1.5)).toEqual([0, 0, 0.5, 0]);
+  });
+  it('光が上（北）から来れば、上の縁が明るく下の縁が暗い。左右の縁は平ら（縦の向きを確かめる）', () => {
+    const s = scene((b) => card(b), hard([0, -1], 1));
+    expect(s.at(0, 0)[2]).toBe(0.5);
+    expect(s.at(0, -0.4)[2]).toBeGreaterThan(0.85);
+    expect(s.at(0, 0.4)[2]).toBeLessThan(0.15);
+    expect(s.at(-0.4, 0)[2]).toBeCloseTo(0.5, 6);
+    expect(s.at(0.4, 0)[2]).toBeCloseTo(0.5, 6);
+    for (const y of [-0.46, -0.5, 0.46, 0.5]) expect(s.at(0, y)[2]).toBe(0.5);
+  });
+  it('斜めの光（08:00、左上から）：左と上の縁が明るく、右と下の縁が暗い。光の向きに近い縁ほど強い', () => {
+    const dir: [number, number] = [-0.82, -0.58], s = scene((b) => card(b), hard(dir, 1));
+    const [l, t, r, d] = [s.at(-0.4, 0)[2], s.at(0, -0.4)[2], s.at(0.4, 0)[2], s.at(0, 0.4)[2]];
+    expect(l).toBeGreaterThan(t); expect(t).toBeGreaterThan(0.6);
+    expect(r).toBeLessThan(d); expect(d).toBeLessThan(0.4);
+    // 縁の段差（0.44 − 0.1）× 強さ × 光の向きの成分（8 ビットと補間のぶん 0.05 まで）
+    const n = Math.hypot(dir[0], dir[1]), step = 0.34 * BEV_K;
+    expect(Math.abs(t - 0.5 - Math.min(0.5, step * (-dir[1] / n)))).toBeLessThanOrEqual(0.05);
+    expect(Math.abs(0.5 - d - Math.min(0.5, step * (-dir[1] / n)))).toBeLessThanOrEqual(0.05);
   });
   it('ドームは光の側が明るく、なめらかに暗くなる', () => {
     const s = scene((b) => machineShape(b, 'lab', 'reactor', -1, -1, 2), hard([-1, 0], 0.6));
@@ -565,6 +700,64 @@ describe('シェーダーの文字列', () => {
     expect(FS_SH1).toContain('hT = h0 + 0.02');
     expect(FS_SH1).toContain('step(h0, 0.15)');
     expect(FS_SH1).toContain('step(0.15, h0)');
+  });
+  it('どのチャンネルを読み書きするか、どの向きかは sdf.ts の見本と同じ（見本の検査が GPU にも効くように、文字列で固定）', () => {
+    // SH0：属性 2 は形の記録の後ろ 4 つ（h、種類 + 16·層、r、浮き）。clip は (世界 − uCam)·uK
+    expect(VS_SH0).toContain('int kc = int(aPar.y + 0.5), kind = kc & 15;');
+    expect(VS_SH0).toContain('vH = vec4(aPar.x, float(kind), float(kc >> 4), aPar.w);');
+    expect(VS_SH0).toContain('gl_Position = vec4((c - uCam + vP) * uK, 0.0, 1.0);');
+    // tShape：R いちばん上の面、G 層/16（半分より多く覆う画素だけ）、B 浮いた物の下の面、A 床から積み上がった物（浮いた物は 0）
+    expect(FS_SH0).toContain('o = vec4(h, step(0.5, cov) * vH.z * 0.0625, vH.w * cov, vH.w > 0.0 ? 0.0 : h);');
+    expect(FS_SH0).toContain('h = vH.x * sqrt(max(1.0 - q * q, 0.0));');
+    // SH1：陰りと面の傾きの読みこみは R と A、影の 12 歩はどれも R・B・A を同じ式で
+    expect(FS_SH1).toContain('vec2 HA(vec2 p) { return textureLod(uShape, p, 0.0).ra; }');
+    expect(FS_SH1).toContain('float h0 = textureLod(uShape, vS, 0.0).r;');
+    const steps = [...FS_SH1.matchAll(/s = textureLod\(uShape, (vM\d\.(?:xy|zw)), 0\.0\); c = h0 \+ [0-9.]+; m = (?:min\(m, )?max\(h0 - s\.r, min\(s\.b - c, h0 - s\.a\)\) \* [0-9.]+\)?;/g)];
+    expect(steps.map((m) => m[1])).toEqual(Array.from({ length: SHADOW_STEPS }, (_, k) => `vM${k >> 1}.${k % 2 ? 'zw' : 'xy'}`));
+    // 頂点で計算する歩の位置：vM_k の xy が歩 2k + 1、zw が歩 2k + 2
+    const vm = [...VS_SH1.matchAll(/vM(\d) = s \+ d \* vec4\(vec2\(([0-9.]+)\), vec2\(([0-9.]+)\)\);/g)];
+    expect(vm).toHaveLength(SHADOW_STEPS / 2);
+    for (const m of vm) { const k = +m[1]; expect(+m[2]).toBeCloseTo((2 * k + 1) / SHADOW_STEPS, 7); expect(+m[3]).toBeCloseTo((2 * k + 2) / SHADOW_STEPS, 7); }
+    expect(VS_SH1).toContain('vS = (p * 0.5 + 0.5) * uShapeScale + uShapeOff;');
+    expect(VS_SH1).toContain('vec4 s = vS.xyxy, d = uD.xyxy;');
+    expect(FS_SH1).toContain('float shadow = uVis - uVis * clamp(uK * m + uK, 0.0, 1.0);');
+    // e・w・n・q は uv の +x・−x・+y（画面の上）・−y。陰りは A（.y）、面の傾きは 1 歩目の R（.x）
+    const xyz = ['x', 'y', 'z'];
+    for (const c of xyz) {
+      expect(FS_SH1).toContain(`e = HA(vec2(vS.x + uAOX.${c}, vS.y)); w = HA(vec2(vS.x - uAOX.${c}, vS.y)); n = HA(vec2(vS.x, vS.y + uAOY.${c})); q = HA(vec2(vS.x, vS.y - uAOY.${c}));`);
+      expect(FS_SH1).toContain(`A.${c} = max(e.y, hT) + max(w.y, hT) + max(n.y, hT) + max(q.y, hT);`);
+    }
+    expect(FS_SH1.match(/ge = e\.x; gw = w\.x; gn = n\.x; gs = q\.x;/g)).toHaveLength(1);
+    expect(FS_SH1.indexOf('ge = e.x;')).toBeLessThan(FS_SH1.indexOf('uAOX.y'));
+    expect(FS_SH1).toContain('float ao = clamp(dot(A, uAOW) - hT * uAOS, 0.0, uAOMax) * step(h0, 0.15);');
+    expect(FS_SH1).toContain('float up = step((ge + gw + gn + gs) * 0.25, h0);');
+    expect(FS_SH1).toContain('float bevel = 0.5 + up * clamp(dot(vec2(ge - gw, gn - gs), uBev), -0.5, 0.5);');
+    expect(FS_SH1).toContain('o = vec4(shadow, ao, bevel, step(0.15, h0));');
+  });
+  it('sh0Uniforms：画素の中心の世界の位置を (世界 − uCam)·uK で clip にすると、ちょうどその画素の中心（行は下から）', () => {
+    // 画面の大きさが奇数、カメラが 0 でない所でも
+    for (const [cw, ch, z, len, cx, cy] of [[1181, 821, 44, 1.6, 12.3, -4.5], [333, 247, 37, 0.7, -3.25, 8.75], [64, 48, 80, 2.5, 0.4, 0.1]]) {
+      const v = shapeView(cw, ch, z, len, cx, cy), u = sh0Uniforms(v);
+      expect(u.uAA * u.uInvAA).toBeCloseTo(1, 12);
+      expect(u.uAA).toBeCloseTo(v.aa, 12);
+      for (const [i, j] of [[0, 0], [v.W - 1, 0], [0, v.H - 1], [v.W - 1, v.H - 1], [17, 5], [Math.floor(v.W / 2), Math.floor(v.H / 3)]]) {
+        const [wx, wy] = texelWorld(v, i, j);
+        expect((((wx - u.uCam[0]) * u.uK[0] + 1) / 2) * v.W - 0.5).toBeCloseTo(i, 6);
+        expect((((wy - u.uCam[1]) * u.uK[1] + 1) / 2) * v.H - 0.5).toBeCloseTo(j, 6);
+      }
+    }
+  });
+  it('shadeUniforms と texelWorld：画面の点（tShade の uv）から tShape の画素をたどると、同じ世界の位置', () => {
+    for (const [cw, ch, z, len, cx, cy] of [[1181, 821, 44, 1.6, 12.3, -4.5], [333, 247, 37, 0.7, -3.25, 8.75]]) {
+      const v = shapeView(cw, ch, z, len, cx, cy), U = shadeUniforms(v, hard([0, -1], len));
+      for (const [su, sv] of [[0.5, 0.5], [0, 0], [1, 1], [0.13, 0.91], [0.77, 0.2]]) {
+        // 画面の uv（v は上が正）の世界の位置
+        const wx = cx + (su - 0.5) * (cw / z), wy = cy - (sv - 0.5) * (ch / z);
+        const tu = su * U.uShapeScale[0] + U.uShapeOff[0], tv = sv * U.uShapeScale[1] + U.uShapeOff[1];
+        const [gx, gy] = texelWorld(v, tu * v.W - 0.5, tv * v.H - 0.5);
+        expect(gx).toBeCloseTo(wx, 6); expect(gy).toBeCloseTo(wy, 6);
+      }
+    }
   });
   /** `uniform <型> a, b;` の名前 */
   const uniforms = (src: string) => [...src.matchAll(/uniform\s+\w+\s+([^;]+);/g)].flatMap((m) => m[1].split(',').map((s) => s.trim())).sort();
