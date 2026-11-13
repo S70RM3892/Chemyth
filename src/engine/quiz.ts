@@ -20,14 +20,18 @@ export interface Quiz { id: string; part: Part; topic: string; q: string; choice
 const shuffle = <T>(a: T[], rnd: () => number) => { const b = [...a]; for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
 const join = (list: string[]) => list.map(label).join(' + ');
 const uniq = (list: string[], not: string) => [...new Set(list)].filter((x) => x !== not && x.trim() !== '');
-/** 物質を指すことば（式・名前・別名） */
-const wordsOf = (s: string) => { const x = sub(s); return [label(s), x.name, ...(x.aliases ?? [])].filter((t): t is string => !!t); };
+/** 名前の（）の外と中（「炭化カルシウム（カーバイド）」→ 炭化カルシウム・カーバイド）。2 文字以上のものだけ */
+const nameParts = (n: string) => n.split(/[（）]/).map((t) => t.trim()).filter((t) => t.length >= 2);
+/** 物質の名前にも別名（式の書き方）にもない慣用名で、反応の名前に出てくるもの。過リン酸石灰は Ca(H₂PO₄)₂ と CaSO₄ の混合物 */
+const COMMON: Record<string, string[]> = { '(NH4)2SO4': ['硫安'], 'Ca(H2PO4)2': ['過リン酸石灰'] };
+/** 物質を指すことば（式・名前とその（）の外と中・別名・慣用名） */
+const wordsOf = (s: string) => { const x = sub(s); return [label(s), x.name, ...nameParts(x.name), ...(x.aliases ?? []), ...(COMMON[s] ?? [])].filter((t): t is string => !!t); };
 /**
  * 反応の名前に、その物質を指すことばが入っているか（名前を見せると答えが分かる）。
- * 原料の名前の一部としてだけ出てくるもの（「硫酸銅(II)水溶液」の「硫酸」や「銅」、「海水」の「水」）は数えない。
+ * 原料の名前（（）の外と中も）の一部としてだけ出てくるもの（「硫酸銅(II)水溶液」の「硫酸」や「銅」、「海水」の「水」）は数えない。
  */
 export function nameTells(r: Recipe, ids: string[]): boolean {
-  const name = r.name, ins = r.inputs.map(([s]) => sub(s).name);
+  const name = r.name, ins = r.inputs.flatMap(([s]) => [sub(s).name, ...nameParts(sub(s).name)]);
   const at = (w: string) => { const out: number[] = []; for (let i = name.indexOf(w); i >= 0; i = name.indexOf(w, i + 1)) out.push(i); return out; };
   // name の i 文字目からの len 文字が、原料の名前の中に収まっているか
   const inside = (i: number, len: number) => ins.some((n) => at(n).some((j) => j <= i && i + len <= j + n.length));
@@ -35,6 +39,18 @@ export function nameTells(r: Recipe, ids: string[]): boolean {
 }
 /** 生成物の名前のもとになった条件（加硫 → 加硫ゴム）。問いやヒントに出すと、答えが分かる */
 export const condsInProducts = (r: Recipe) => r.accept.filter((c) => productsOf(r).some(([s]) => wordsOf(s).some((w) => w.includes(c))));
+/**
+ * 文（反応の名前・反応式）に、正解の条件が入っているか。そのまま入っているときのほか、
+ * 条件を ・ や（）で区切った語と 3 文字以上つながって重なるときも数える（「…水溶液の電気分解（白金電極）」と「水溶液・白金電極」、
+ * 「食塩水の電気分解（イオン交換膜法）」と「飽和食塩水（陽イオン交換膜）」）。
+ * 原料の名前・式の中にある重なり（ペプチド → ペプチダーゼ）は数えない。酵素の名前が基質から来ていることは、覚えることそのもの
+ */
+export function condTells(r: Recipe, t: string): boolean {
+  if (r.accept.some((c) => t.includes(c))) return true;
+  const ins = r.inputs.flatMap(([s]) => [sub(s).name, label(s)]);
+  const runs = (p: string) => Array.from({ length: Math.max(0, p.length - 2) }, (_, i) => p.slice(i, i + 3));
+  return r.accept.some((c) => c.split(/[・（）｜+\s]+/).flatMap(runs).some((w) => t.includes(w) && !ins.some((n) => n.includes(w))));
+}
 
 /** その反応で問えるところ */
 export function partsFor(r: Recipe): Part[] {
@@ -92,8 +108,8 @@ export function recipeQuiz(r: Recipe, part: Part, rnd: () => number): Quiz | nul
     const used = RECIPES.filter((x) => x.machine === r.machine && x !== r).flatMap((x) => x.accept).filter((o) => opts.includes(o));
     const wrong = [...pick3(used, r.accept[0]), ...pick3(opts, r.accept[0])].filter((x, i, a) => a.indexOf(x) === i).slice(0, 3);
     if (wrong.length < 3) return null;
-    // 名前に条件が入っているとき（石炭の乾留・油脂のけん化など）は、名前の代わりに反応式で問う。式にも入っているとき（加硫ゴム）は、原料だけで問う
-    const tells = (t: string) => r.accept.some((c) => t.includes(c)), eq = equationOf(r);
+    // 名前に条件が入っているとき（石炭の乾留・油脂のけん化・…水溶液の電気分解（白金電極）など）は、名前の代わりに反応式で問う。式にも入っているとき（加硫ゴム）は、原料だけで問う
+    const tells = (t: string) => condTells(r, t), eq = equationOf(r);
     const what = !tells(r.name) ? r.name : !tells(eq) ? eq : `${join(r.inputs.map(([s]) => s))} → ？`;
     return { id, part, topic, q: `「${what}」の${CONDITIONS[r.machine].label}は？`, choices: [r.accept[0], ...wrong], why };
   }
