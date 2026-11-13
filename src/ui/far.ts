@@ -8,7 +8,7 @@
  *  - 重ね書き：資源地の名前と産出物、納品所、線路の網、いまの指令の資源地、区画ごとの生産の札、縮尺。重ならないように、大事なものから置く
  * 色は、見た目（Palette）と資源地の色（ZONES）から作る。新しいスキンでも、そのまま描ける。
  */
-import { railRuns } from './railruns';
+import { lineRuns, railRuns } from './railruns';
 import { ZONES, blobRadius, hubRect, isSea, zoneSpots, type Zone, type ZoneSpot } from '../content/map';
 import { lineColor, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
@@ -656,10 +656,22 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
       ctx.strokeStyle = rail.ink; ctx.lineWidth = Math.max(2, z * 0.26); ctx.stroke(p);
       ctx.strokeStyle = rail.core; ctx.lineWidth = Math.max(0.8, z * 0.1); ctx.stroke(p);
     }
+    // 敷いた線路の上の番線の色は、道筋の重なりを 1 回にまとめて描く（駅が多いと、道筋は積む駅 × 降ろす駅の数だけある）
+    ctx.lineCap = 'butt'; ctx.globalAlpha = 0.85; ctx.lineWidth = Math.max(1.2, z * 0.1);
+    for (const L of lineRuns(w)) {
+      ctx.strokeStyle = lineColor(L.ch); ctx.beginPath();
+      for (const a of [L.runs, L.stubs]) for (let i = 0; i < a.length; i += 4) {
+        if (Math.max(a[i], a[i + 2]) < x0 || Math.min(a[i], a[i + 2]) > x1 + 1 || Math.max(a[i + 1], a[i + 3]) < y0 || Math.min(a[i + 1], a[i + 3]) > y1 + 1) continue;
+        ctx.moveTo(sx(a[i]), sy(a[i + 1])); ctx.lineTo(sx(a[i + 2]), sy(a[i + 3]));
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
     for (const { e, routes } of routesOf(w)) {
       const col = lineColor(e.ch || 1);
       ctx.strokeStyle = col; ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
       for (const r of routes) {
+        if (r.custom) continue;
         const pts = r.pts;
         ctx.beginPath();
         pts.forEach((q, i) => (i ? ctx.lineTo(sx(q[0]), sy(q[1])) : ctx.moveTo(sx(q[0]), sy(q[1]))));

@@ -20,7 +20,7 @@ import { AMINO_ORDER, aminoOf, phOf, poleAt, type AminoKey } from '../content/ph
 import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/sep';
 import { drawFar, farBegin, farEnd } from './far';
 import { bodyLite, buildChunkLite, hubLite } from './skinLite';
-import { railJunctions, railRuns } from './railruns';
+import { lineRuns, railJunctions, railRuns } from './railruns';
 import { bodyMyth, buildChunkMyth, hubMyth, mythAmbient, mythParticle, mythUnder, mythBelts, mythFrame, mythHubGlow, mythSelect, mythZoneLabel } from './skinMyth';
 import { drawGlints, hubMeter, mapStats, noteFx } from './mapfx';
 import { newPlume, plumePaint, plumeRadius, plumeReact, PLUME_CAP, stepPlume, type Plume } from './plumephys';
@@ -1379,26 +1379,41 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       ctx.strokeStyle = punk ? (light ? '#c9ced3' : '#8a939c') : lab ? (light ? '#dfe7ec' : '#6c8194') : light ? '#e9e6da' : '#aeb6c2'; ctx.lineWidth = Math.max(1, z * 0.1); path(0, 0); ctx.stroke();
       if (!far && !lite) { ctx.strokeStyle = ink; ctx.lineWidth = Math.max(0.8, z * 0.03); path(0, 0); ctx.stroke(); }
       // 分岐点：転てつ器の印
-      for (let k = 0; k < junc.length; k += 2) {
-        ctx.beginPath(); ctx.arc(sx(junc[k]), sy(junc[k + 1]), z * 0.2, 0, Math.PI * 2);
-        ctx.fillStyle = P.hi; ctx.fill(); ctx.strokeStyle = ink; ctx.lineWidth = lw(0.05); ctx.stroke();
+      // まとめて 1 回で塗る。線路の束（隣どうしが全部つながっている所）では分岐点が何千にもなるので、多いときと軽量スキンでは小さな四角に
+      if (junc.length) {
+        const many = lite || junc.length > 400, jr = z * (many ? 0.12 : 0.2);
+        ctx.beginPath();
+        for (let k = 0; k < junc.length; k += 2) { const jx = sx(junc[k]), jy = sy(junc[k + 1]); if (many) ctx.rect(jx - jr, jy - jr, jr * 2, jr * 2); else { ctx.moveTo(jx + jr, jy); ctx.arc(jx, jy, jr, 0, Math.PI * 2); } }
+        ctx.fillStyle = P.hi; ctx.fill();
+        if (!many) { ctx.strokeStyle = ink; ctx.lineWidth = lw(0.05); ctx.stroke(); }
       }
+      // 番線の色：列車が通る線路の上に、細く重ねる（どの番線がどこを通るかがわかる）。道筋の重なりは 1 回にまとめてある
+      ctx.lineCap = 'butt'; ctx.globalAlpha = 0.75; ctx.lineWidth = Math.max(1, z * 0.045);
+      for (const L of lineRuns(w)) {
+        ctx.strokeStyle = lineColor(L.ch);
+        ctx.beginPath();
+        for (const a of [L.runs, L.stubs]) for (let k = 0; k < a.length; k += 4) {
+          const ax = a[k], ay = a[k + 1], bx = a[k + 2], by = a[k + 3];
+          if (Math.max(ax, bx) < x0 - 2 || Math.min(ax, bx) > x1 + 2 || Math.max(ay, by) < y0 - 2 || Math.min(ay, by) > y1 + 2) continue;
+          ctx.moveTo(sx(ax), sy(ay)); ctx.lineTo(sx(bx), sy(by));
+        }
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
     }
     for (const e of stationsOf(w)) {
       if (e.role !== 'in') continue;
       const routes = stationRoutes(w, e);
       if (!routes.length) continue;
       const col = lineColor(e.ch || 1);
-      const screen = routes.map((r) => ({ r, xs: r.pts.map((q) => sx(q[0])), ys: r.pts.map((q) => sy(q[1])) }));
+      // 画面の座標は、要る道筋の分だけ作る（自動の仮線路と、列車がいま走っている道筋）
+      const toScreen = (r: (typeof routes)[number]) => ({ r, xs: r.pts.map((q) => sx(q[0])), ys: r.pts.map((q) => sy(q[1])) });
       ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
-      for (const { r, xs, ys } of screen) {
+      for (const r of routes) {
+        if (r.custom) continue;   // 敷いた線路の上の色は、上でまとめて描いた
+        const { xs, ys } = toScreen(r);
         if (Math.max(...xs) < -50 || Math.min(...xs) > cw + 50 || Math.max(...ys) < -50 || Math.min(...ys) > ch + 50) continue;
         const path = (ox: number, oy: number) => { ctx.beginPath(); xs.forEach((x, k) => (k ? ctx.lineTo(x + ox, ys[k] + oy) : ctx.moveTo(x + ox, ys[k] + oy))); };
-        if (r.custom) {
-          // 敷いた線路の上に、この駅の番線の色を細く重ねる（どの駅がどこを通るかがわかる）
-          ctx.globalAlpha = 0.75; ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, z * 0.045); path(0, 0); ctx.stroke(); ctx.globalAlpha = 1;
-          continue;
-        }
         // 自動の仮線路：地面の影 → 枕木 → 桁 → 路線色
         if (!lite) { ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2; path(lift2 * 0.5, lift2); ctx.stroke(); }
         ctx.strokeStyle = ink; ctx.lineWidth = z * 0.26; ctx.setLineDash([z * 0.07, z * 0.2]); path(0, 0); ctx.stroke(); ctx.setLineDash([]);
@@ -1408,7 +1423,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       // 列車：それぞれの行き先の道のりに沿って進む
       if (z >= 10) for (const tr of [e.tr, ...(e.xtr ?? [])]) {
         if (!tr) continue;
-        const sc = screen.find((q) => `${q.r.dest.x},${q.r.dest.y}` === tr.to) ?? screen[0];
+        const sc = toScreen(routes.find((q) => `${q.dest.x},${q.dest.y}` === tr.to) ?? routes[0]);
         const { xs, ys } = sc, pts = sc.r.pts;
         const segs = pts.slice(1).map((q, k) => Math.abs(q[0] - pts[k][0]) + Math.abs(q[1] - pts[k][1]));
         let d = Math.max(0, Math.min(1, tr.p)) * segs.reduce((x, y) => x + y, 0), a = 0;

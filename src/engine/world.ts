@@ -429,6 +429,30 @@ function stationTouch(w: World, e: Ent): string[] {
   return out;
 }
 const routeCache = new WeakMap<World, { rev: number; m: Map<string, Route | null> }>();
+/** 最後にたどった駅からの木（1 つだけ覚える）。prev：ひとつ手前のマス、order：届いた順（近い順） */
+let lastTree: { w: World; rev: number; ax: number; ay: number; prev: Map<string, string | null>; order: Map<string, number> } | null = null;
+function treeOf(w: World, a: Ent) {
+  if (lastTree && lastTree.w === w && lastTree.rev === w.railRev && lastTree.ax === a.x && lastTree.ay === a.y) return lastTree;
+  const prev = new Map<string, string | null>(), order = new Map<string, number>();
+  let queue = stationTouch(w, a), n = 0;
+  for (const k of queue) prev.set(k, null);
+  while (queue.length) {
+    const next: string[] = [];
+    for (const k of queue) {
+      order.set(k, n++);
+      const m = w.rails.get(k)!, c = k.indexOf(','), x = +k.slice(0, c), y = +k.slice(c + 1);
+      for (let d = 0; d < 4; d++) {
+        if (!((m >> d) & 1)) continue;
+        // 隣からもつながっているときだけ進む（片側だけのつながりは、描かれないので走らない）
+        const nk = `${x + DX[d]},${y + DY[d]}`;
+        if (!prev.has(nk) && ((w.rails.get(nk) || 0) >> ((d + 2) % 4)) & 1) { prev.set(nk, k); next.push(nk); }
+      }
+    }
+    queue = next;
+  }
+  lastTree = { w, rev: w.railRev, ax: a.x, ay: a.y, prev, order };
+  return lastTree;
+}
 /** 駅 a から駅 b まで、敷いた線路をたどるいちばん短い道筋。つながっていなければ null */
 export function railRoute(w: World, a: Ent, b: Ent): Route | null {
   let c = routeCache.get(w);
@@ -437,29 +461,16 @@ export function railRoute(w: World, a: Ent, b: Ent): Route | null {
   const hit = c.m.get(ck);
   if (hit !== undefined) return hit ? (hit.dest === b ? hit : { ...hit, dest: b }) : null;
   let found: Route | null = null;
-  const starts = w.rails.size ? stationTouch(w, a) : [], goals = new Set(starts.length ? stationTouch(w, b) : []);
-  if (starts.length && goals.size) {
-    // 幅優先で探す
-    const prev = new Map<string, string | null>();
-    let queue = starts.slice(), end: string | null = null;
-    for (const k of starts) prev.set(k, null);
-    search: while (queue.length) {
-      const next: string[] = [];
-      for (const k of queue) {
-        if (goals.has(k)) { end = k; break search; }
-        const m = w.rails.get(k)!, [x, y] = k.split(',').map(Number);
-        for (let d = 0; d < 4; d++) {
-          if (!((m >> d) & 1)) continue;
-          // 隣からもつながっているときだけ進む（片側だけのつながりは、描かれないので走らない）
-          const nk = `${x + DX[d]},${y + DY[d]}`;
-          if (!prev.has(nk) && ((w.rails.get(nk) || 0) >> ((d + 2) % 4)) & 1) { prev.set(nk, k); next.push(nk); }
-        }
-      }
-      queue = next;
-    }
+  // 駅 a から届く線路を、幅優先で 1 度だけたどっておく（同じ駅から、同じ番線の降ろす駅すべてへの道筋を続けて聞かれる。行き先ごとにたどり直さない）
+  const goals = w.rails.size ? stationTouch(w, b) : [];
+  if (goals.length) {
+    const tr = treeOf(w, a);
+    // いちばん先に届いたマス（いちばん近い。同じ近さなら、たどった順）
+    let end: string | null = null, best = Infinity;
+    for (const g of goals) { const o = tr.order.get(g); if (o !== undefined && o < best) { best = o; end = g; } }
     if (end) {
       const tiles: [number, number][] = [];
-      for (let k: string | null = end; k; k = prev.get(k) ?? null) tiles.unshift(k.split(',').map(Number) as [number, number]);
+      for (let k: string | null = end; k; k = tr.prev.get(k) ?? null) tiles.unshift(k.split(',').map(Number) as [number, number]);
       const full: [number, number][] = [[a.x + 1, a.y + 1], ...tiles.map(([x, y]) => [x + 0.5, y + 0.5] as [number, number]), [b.x + 1, b.y + 1]];
       // 描くときは曲がり角だけ残す
       const pts = full.filter((q, i) => i === 0 || i === full.length - 1 || !((full[i - 1][0] === q[0] && q[0] === full[i + 1][0]) || (full[i - 1][1] === q[1] && q[1] === full[i + 1][1])));
@@ -483,10 +494,19 @@ export function railOf(w: World, e: Ent, to?: Ent): Route | null {
 }
 /** 積む駅 e の行き先すべて。敷いた線路でつながる降ろす駅があれば、そこだけへ送る（分岐点で枝分かれする）。
  *  1 つもつながっていなければ、同じ番線のすべての降ろす駅へ、自動の仮線路で送る */
+const routesCache = new WeakMap<World, { rev: number; ver: number; m: Map<Ent, Route[]> }>();
 export function stationRoutes(w: World, e: Ent): Route[] {
+  // 線路と駅の顔ぶれが変わるまで、駅ごとの道筋を覚えておく（毎コマ・毎歩、駅の数 × 行き先の数だけ探し直さない）
+  const ver = stationVer(w);
+  let c = routesCache.get(w);
+  if (!c || c.rev !== w.railRev || c.ver !== ver) { c = { rev: w.railRev, ver, m: new Map() }; routesCache.set(w, c); }
+  const hit = c.m.get(e);
+  if (hit) return hit;
   const ts = stationTargets(w, e);
   const laid = ts.map((d) => railRoute(w, e, d)).filter((r): r is Route => !!r);
-  return laid.length ? laid : ts.map((d) => autoRoute(e, d));
+  const out = laid.length ? laid : ts.map((d) => autoRoute(e, d));
+  c.m.set(e, out);
+  return out;
 }
 
 export const key = (x: number, y: number) => `${x},${y}`;
@@ -1041,13 +1061,19 @@ export function tunnelPair(w: World, e: Ent): Ent | null {
 let stationEpoch = 0;
 /** 工場を 1 歩進める前と、1 コマ描く前に呼ぶ（駅の一覧を選び直す合図） */
 export const markEpoch = () => { stationEpoch++; };
-const stationCache = new WeakMap<World, { epoch: number; size: number; list: Ent[]; sig: string[] }>();
+const stationCache = new WeakMap<World, { epoch: number; size: number; list: Ent[]; sig: string[]; ver: number }>();
+let stationVerNo = 0;
+/** 駅の顔ぶれ（場所・向き・番線）が変わるたびに変わる番号 */
+export const stationVer = (w: World) => { stationsOf(w); return stationCache.get(w)!.ver; };
 export function stationsOf(w: World): Ent[] {
   const c = stationCache.get(w);
   if (c && c.epoch === stationEpoch && c.size === w.ents.size && c.list.every((n, i) => w.ents.get(key(n.x, n.y)) === n && c.sig[i] === `${n.role}|${n.ch}`)) return c.list;
   const list: Ent[] = [];
   for (const n of w.ents.values()) if (n.kind === 'station') list.push(n);
-  stationCache.set(w, { epoch: stationEpoch, size: w.ents.size, list, sig: list.map((n) => `${n.role}|${n.ch}`) });
+  const sig = list.map((n) => `${n.role}|${n.ch}`);
+  // 顔ぶれが前と同じなら、番号は変えない（道筋の覚え書きをそのまま使える）
+  const same = !!c && c.list.length === list.length && list.every((n, i) => c.list[i] === n && c.sig[i] === sig[i]);
+  stationCache.set(w, { epoch: stationEpoch, size: w.ents.size, list, sig, ver: same ? c!.ver : ++stationVerNo });
   return list;
 }
 export function stationTargets(w: World, e: Ent): Ent[] {

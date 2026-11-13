@@ -23,3 +23,23 @@ if (process.argv[1]?.endsWith('stress.mjs')) {
   for (let i = 0; i < N; i++) step(w, 1 / 60);
   console.log('step ms', ((performance.now() - t0) / N).toFixed(3));
 }
+
+/**
+ * 線路の束の工場：隣どうしが全部つながった 5 列の縦の束 × 4 と、3 行の横の束 × 6（約 1 万マス、分岐点は数千）。
+ * 同じ番線の積む駅 40・降ろす駅 40（道筋は 1600 本）。実際の大きな工場に近い形
+ */
+export function denseWorld(): World {
+  const w = newWorld();
+  const put = (e: Record<string, unknown>) => w.ents.set(`${e.x},${e.y}` as never, e as never);
+  const set = new Set<string>();
+  for (let b = 0; b < 4; b++) for (let c = 0; c < 5; c++) for (let y = -150; y < 150; y++) set.add(`${-40 + b * 20 + c},${y}`);
+  for (let b = 0; b < 6; b++) for (let r = 0; r < 3; r++) for (let x = -150; x < 150; x++) set.add(`${x},${-140 + b * 50 + r}`);
+  const D = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+  for (const k of set) { const [x, y] = k.split(',').map(Number); let m = 0; D.forEach(([dx, dy], d) => { if (set.has(`${x + dx},${y + dy}`)) m |= 1 << d; }); w.rails.set(k, m); }
+  w.railRev++;
+  for (let i = 0; i < 40; i++) {
+    put({ kind: 'station', x: -42, y: -148 + i * 7, dir: 0, ch: 8, role: 'in', big: true, buf: Array(20).fill('N2') });
+    put({ kind: 'station', x: 25, y: -146 + i * 7, dir: 0, ch: 8, role: 'out', big: true, buf: [] });
+  }
+  return w;
+}
