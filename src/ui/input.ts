@@ -5,8 +5,9 @@ export interface InputHandlers {
   begin(): void;
   /** 指を動かさずに離した */
   tap(tx: number, ty: number): void;
-  /** なぞり始め・なぞり中に新しいマスへ入った。prev は直前のマス */
-  stroke(tx: number, ty: number, prev: [number, number] | null): void;
+  /** なぞり始め・なぞり中に新しいマスへ入った。prev は直前のマス。
+   *  なぞり始め（prev が null）のときだけ、g に指の下の地面のマスを添える（立体表示では、箱の天面のマスとは違うことがある） */
+  stroke(tx: number, ty: number, prev: [number, number] | null, g?: [number, number]): void;
   /** このマスからなぞり始めたら、地図を動かすか、なぞり書きにするか */
   mode(tx: number, ty: number): 'pan' | 'stroke';
   /** 指を動かさずに押し続けた。true を返すと、そこからは地図を動かさず、なぞり書き（stroke）として扱う。
@@ -148,7 +149,13 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
       clearTimeout(holdTimer);
       const st = toTile(start.x, start.y);
       panning = h.mode(st[0], st[1]) === 'pan';
-      if (!panning) { last = st; h.stroke(st[0], st[1], null); }
+      if (!panning) {
+        last = st;
+        const g = groundTile(start.x, start.y);
+        h.stroke(st[0], st[1], null, g);
+        // なぞり始めで、ずらし始めた（地面で測るようになった）なら、続きは指の下の地面のマスから数える
+        if (h.groundMode?.()) last = g;
+      }
     }
     if (panning) {
       const now = performance.now(), el = Math.max(1, now - lastMove);
@@ -234,5 +241,11 @@ export function attachInput(cv: HTMLCanvasElement, cam: Camera, h: InputHandlers
       clamp();
     },
     stop() { vx = vy = 0; },
+    /** 1 本指でなぞっている途中なら打ち切る（Esc）。指を離すまで、続きのなぞりも、離したときの終わりの知らせも出さない。打ち切ったら true */
+    cancel() {
+      if (!start || !moved || panning) return false;
+      start = null; at = null; last = null;
+      return true;
+    },
   };
 }

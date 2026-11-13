@@ -123,14 +123,17 @@ export function initBuild2(c: B2Ctx) {
   const LOCK_SVG = (on: boolean) => `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="${on ? 'M8 11V8a4 4 0 0 1 8 0v3' : 'M8 11V8a4 4 0 0 1 7.6-1.8'}"></path></svg>`;
   const lockBtn = h('button', { type: 'button', id: 'b-lock', title: '操作のロック：見るだけにする（置く・消す・ずらすを止める）', ariaLabel: '操作のロック' });
   lockBtn.innerHTML = LOCK_SVG(false);
-  const lockNote = () => { if (performance.now() - lockTold > 1500) { lockTold = performance.now(); c.toast('ロック中（見るだけ）。右上の鍵を押すと外れる。', 1800); sfx.bad(); } };
-  const setLock = (on: boolean) => {
+  /** 外し方：集中表示では上の帯（鍵のある所）が隠れているので、まず表示を戻す */
+  const unlockHow = () => (c.app.classList.contains('focus') ? '右上の「表示を戻す」で上の帯を出して、鍵を押すと外れる' : '右上の鍵を押すと外れる');
+  const lockNote = () => { if (performance.now() - lockTold > 1500) { lockTold = performance.now(); c.toast(`ロック中（見るだけ）。${unlockHow()}。`, 1800); sfx.bad(); } };
+  const setLock = (on: boolean, quiet = false) => {
     lock = on;
     lockBtn.innerHTML = LOCK_SVG(on);
     lockBtn.classList.toggle('hot', on);
     lockBtn.setAttribute('aria-pressed', String(on));
     c.app.classList.toggle('locked', on);
     if (on) { routeA = null; preview = null; c.pick('pan'); }
+    if (quiet) return;
     c.toast(on ? 'ロックした。見るだけになる（置く・消す・ずらす・回すはできない）。もう一度押すと外れる。' : 'ロックを外した。', 2600);
     sfx.tap();
   };
@@ -554,7 +557,9 @@ export function initBuild2(c: B2Ctx) {
     // ロック
     locked: () => lock,
     lockNote,
-    LOCKED: 'ロック中は置けない（見るだけ）。右上の鍵を押すと外れる。',
+    get LOCKED() { return `ロック中は置けない（見るだけ）。${unlockHow()}。`; },
+    /** ノートや課題の工場を開いたとき：ロックは外れている */
+    unlock: () => { if (lock) setLock(false, true); },
     /** その道具を選べるか（ロック中は「見る」だけ） */
     canPick: (id: string) => { if (lock && id !== 'pan') { lockNote(); return false; } return true; },
     /** 道具を選んだあと：最近の道具を更新し、ほかの道具の途中の状態を片づける */
