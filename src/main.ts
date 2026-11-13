@@ -44,7 +44,7 @@ import { showReview, renderQuiz, calibLine, quizKey } from './ui/review';
 import { showWeek, todayExtras } from './ui/learn2';
 import { logNight } from './engine/learn';
 import { conflictSlots, flushAccount, initAccount, onAccountChange, slotErased, syncState } from './ui/account';
-import { applySkin, applyTheme } from './ui/theme';
+import { applySkin, applyTheme, onThemeChange, skinName } from './ui/theme';
 import { showRanking, submitScore } from './ui/ranking';
 import { drawToken, elementIcon } from './ui/token';
 import { autoOpen, breakReminder, dataExtra, helpExtra, initSettings2, menuExtra, prefExtras, prefRow, started } from './ui/settings2';
@@ -183,7 +183,9 @@ function boot(data: HotData) {
   const glowCtx = glowCv.getContext('2d')!, maskCtx = maskCv.getContext('2d')!;
   /** 高さの層（最高画質の、平らな表示）：地面 0.1、水 0、ベルト・装置・納品所ほど高い。影とくぼみの陰りを作る */
   const heightCv = document.createElement('canvas'), heightCtx = heightCv.getContext('2d')!;
-  const fxOn = () => !!post && gfxHigh && !post.lost();
+  /** 軽量スキン：WebGL を使わず、地図は等倍の細かさ、毎秒 30 コマ（重い端末と電池のため） */
+  const lite = () => skinName() === 'lite';
+  const fxOn = () => !!post && gfxHigh && !post.lost() && !lite();
   /** WebGL の絵が失われて、戻ってくるのを待っているあいだ。このあいだは画質と立体表示を変えない（「使えない」と決めつけない） */
   const glWait = () => !!post?.lost();
   // ---- 立体表示：地面の絵と、装置の天面の絵を別々に描き、WebGL で箱と影をつけて、傾いたカメラで見る ----
@@ -198,7 +200,7 @@ function boot(data: HotData) {
   const boxes: number[] = [], slabs: number[] = [];
   let boxBuf = new Float32Array(8 * 256);
   const applyGfx = () => {
-    if (gfxHigh && !post) { try { post = createPost(glCv); } catch { post = null; } if (!post) gfxHigh = false; }
+    if (gfxHigh && !post && !lite()) { try { post = createPost(glCv); } catch { post = null; } if (!post) gfxHigh = false; }
     glCv.hidden = !fxOn();
     // 立体表示では、WebGL の絵が下、#cv はその上の透明な層（縁の道しるべと花火）になる
     if (threeOn()) { if (cv.previousElementSibling !== glCv) cv.before(glCv); } else if (glCv.previousElementSibling !== cv) cv.after(glCv);
@@ -207,7 +209,7 @@ function boot(data: HotData) {
     if (post && !fxOn()) post.sleep(); else if (post && !threeOn()) post.drop3d();
   };
   const resize = () => {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = lite() ? 1 : Math.min(window.devicePixelRatio || 1, 2);
     cw = cv.clientWidth; ch = cv.clientHeight;
     cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -230,6 +232,9 @@ function boot(data: HotData) {
   };
   new ResizeObserver(resize).observe(cv);
   applyGfx();
+  // スキンを替えたら、描き方（WebGL を使うか、地図の細かさ）を合わせ直す
+  let skinWas = skinName();
+  onThemeChange(() => { if (skinName() === skinWas) return; skinWas = skinName(); applyGfx(); resize(); });
   resize();
   // WebGL の絵が失われたら（iPad が裏で GPU を取り上げたときなど）、#gl を隠して平らな絵で続ける。
   // preventDefault で、ブラウザに戻すよう頼む（毎回。標準の画質で眠っている段が失われたときも）
@@ -836,6 +841,7 @@ function boot(data: HotData) {
         item('m-sound', soundOn() ? '音：あり' : '音：なし', () => { setSound(!soundOn()); store.setMeta({ sound: soundOn() }); sfx.tap(); showMenu(); }),
         item('m-gfx', glWait() ? `画質：${!gfxHigh ? '標準' : gfxTier === 2 ? '最高' : '高'}（画面の描き直しを待っている）` : fxOn() ? (gfxTier === 2 ? '画質：最高（影・光の筋・水面・色調。押すと「高」）' : '画質：高（光・発光・ゆらぎ。押すと「標準」）') : post || store.meta().gfx !== 'plain' ? '画質：標準（軽い。押すと「最高」）' : '画質：標準（この端末では高画質を使えない）', () => {
           // 最高 → 高 → 標準 → 最高
+          if (lite()) { toast('軽量スキンは、いつも標準の画質（光・影・立体表示なし）。ほかのスキンにすると、画質を選べる。', 4000); return; }
           if (glWait()) { toast('画面の描き直しを待っている。少ししてからもう一度。', 2600); return; }
           slowFrames = 0;
           if (fxOn() && gfxTier === 2) gfxTier = 1;
@@ -847,6 +853,7 @@ function boot(data: HotData) {
         }),
         item('m-mini', miniOn ? '全体の小地図：あり（右下。押すとその場所へ移る）' : '全体の小地図：なし', () => { miniOn = !miniOn; store.setMeta({ minimap: miniOn }); paintMini(); sfx.tap(); showMenu(); }),
         item('m-3d', glWait() ? `立体表示：${three && gfxHigh ? 'オン' : 'オフ'}（画面の描き直しを待っている）` : threeOn() ? '立体表示：オン（傾いた視点・箱・影）' : '立体表示：オフ（真上からの平らな表示）', () => {
+          if (lite()) { toast('軽量スキンでは、立体表示を使えない。', 2600); return; }
           if (glWait()) { toast('画面の描き直しを待っている。少ししてからもう一度。', 2600); return; }
           three = !threeOn(); slowFrames = 0;
           if (three && !fxOn()) { gfxHigh = true; }
@@ -2420,6 +2427,7 @@ function boot(data: HotData) {
    * 1 コマ。途中で不具合が起きても、次のコマは必ず予約する（止めると、地図も時間も止まったまま、開き直しても戻らない）。
    * 工場を進める所・視点・描く所・画面の札・操作の帯は、別々に守る。工場が動かなくても地図は描き、描けなくても選んで撤去できるように
    */
+  let liteFlip = false, liteCarry = 0;
   const frame = (now: number) => {
     requestAnimationFrame(frame);
     const dt = Math.min(0.1, (now - prev) / 1000);
@@ -2427,8 +2435,11 @@ function boot(data: HotData) {
     let drawn = true;
     try { simFrame(now, dt); } catch (err) { frameFault(err, now); }
     try { viewFrame(dt); } catch (err) { frameFault(err, now); }
-    try { drawn = drawFrame(now, dt); } catch (err) { frameFault(err, now); unwindDraw(); }
-    try { hudFrame(dt, drawn); } catch (err) { frameFault(err, now); }
+    // 軽量スキンは、描くのを 2 コマに 1 回にする（工場と視点は毎コマ進める。飛ばしたコマの時間は、次に描くコマへ足す）
+    if (lite() && !shotPending && (liteFlip = !liteFlip)) { liteCarry += dt; return; }
+    const dd = dt + liteCarry; liteCarry = 0;
+    try { drawn = drawFrame(now, dd); } catch (err) { frameFault(err, now); unwindDraw(); }
+    try { hudFrame(dd, drawn); } catch (err) { frameFault(err, now); }
     try { actFrame(now, drawn); } catch (err) { frameFault(err, now); }
   };
   requestAnimationFrame(frame);
@@ -2464,10 +2475,11 @@ function boot(data: HotData) {
   window.addEventListener('unhandledrejection', onCrash);
   window.addEventListener('pagehide', () => { save(); saveCam(); });
   // 更新のお知らせ：新しい版で、はじめて工場を開いたときに 1 度だけ
-  const NEWS = '2026-11-matter';
+  const NEWS = '2026-11-skins';
   const showNews = () => {
     store.setMeta({ news: NEWS });
     showSheet(h('header', {}, h('h2', {}, '更新のお知らせ'), closeBtn()),
+      h('p', {}, h('b', {}, 'スキンを 2 つ足した（タイトルかメニューの見た目で選ぶ）。'), '「軽量」（白い紙／黒い紙）は、飾りをすべて省いた、いちばん軽い見た目：影・光・立体表示なし、地図は等倍の細かさで毎秒 30 コマ、黒い紙は真っ黒の地。重い端末や、電池を長く持たせたいときに。「幻想」（天空の庭／星の海）は、重さを気にしない飾りの見た目：光の川のベルト、宝石の台座の装置、虹色の大水晶の納品所、オーロラと流れ星、花びらと虹。どちらも、装置の中の反応の絵と物質の色は、ほかのスキンと同じ。'),
       h('p', {}, h('b', {}, '光と影を、見た目ごとの「部屋の光」にした。'), NOTICE),
       h('p', {}, h('b', {}, '装置の中と煙を、本物の見え方にした。'), '加熱のバーナーは青い炎（橙の炎は不完全燃焼の色）。硫黄と CO は青い炎で燃え、炭は赤熱し、黄リンは明るい炎と白煙。約 525 ℃より熱い炉は、その温度の色に光る（融解塩の電解・石灰窯）。水の電気分解の泡は H₂ : O₂ = 2 : 1。廃棄口の気体は、無色なら輪、Cl₂ は黄緑で低くたまり、H₂ は昇り、NO は空気中で赤褐色に。NH₃ と HCl が出会うと白煙。'),
       h('p', {}, h('b', {}, '選んだ装置の反応式の札に、もう 2 行。'), '絵に見えているもののわけ（炎の色・熱で光る温度・指示薬など）と、熱化学の表にある反応の、状態をつけた式と ΔH（kJ、整数に丸める。発熱は負）。捕集装置は、その集め方を選ぶわけ（水への溶けやすさと、空気との重さ）。図鑑の物質の札にも、見た目の場面ごとの色・保存のしかた・ΔH が出る。'),

@@ -3,10 +3,13 @@
  *  工業：ライト＝光の炉（白い鋼板、安全色、差し込む日光）、ダーク＝闇の炉（煤けた鉄、溶けた橙、火の粉と走査線）。
  *  魔術：ライト＝羊皮紙の実験録（セピアのインク、真鍮、青く光る液）、ダーク＝夜の書斎（藍の闇、真鍮、青い灯）。
  *  研究所：ライト＝白の研究棟（白い陶板の床、銀とガラスの装置、青緑の立体映像）、ダーク＝深夜のラボ（青緑と赤紫の灯を映す黒い床）。
+ *  軽量：飾りをすべて省いた、白い紙と黒い紙（影・ぼかし・光・動く飾りなし。重い端末と電池のため）。
+ *  幻想：天空の庭（空に浮かぶ花園、虹と金の光）と、星の海（星雲と水晶、オーロラ）。本物らしさより絵の華やかさ。
  *  画面部品（CSS）と地図（canvas）で同じ色を使う */
 export type ThemeName = 'light' | 'dark';
 export type ThemeChoice = 'auto' | ThemeName;
-export type Skin = 'note' | 'punk' | 'arcane' | 'lab';
+export type Skin = 'note' | 'punk' | 'arcane' | 'lab' | 'lite' | 'myth';
+export const SKINS: Skin[] = ['note', 'punk', 'arcane', 'lab', 'lite', 'myth'];
 
 export interface Palette {
   key: string;
@@ -37,6 +40,8 @@ export interface Palette {
 const HAND = '"Klee One", "Hiragino Maru Gothic ProN", "Yu Gothic", sans-serif';
 const HEAVY = '"Dela Gothic One", "Hiragino Sans", "Yu Gothic", sans-serif';
 const SERIF = '"Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif';
+/** 軽量スキンは、端末にある書体だけを使う（読み込む書体の描き分けを省く） */
+const SYSTEM = 'system-ui, -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif';
 const SANS = '"Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", sans-serif';
 /** 魔術スキンの真鍮の色（明るい面・縁） */
 export const BRASS = '#b8913f', BRASS_DARK = '#6b4f1f';
@@ -88,7 +93,34 @@ export const PALETTES: Record<string, Palette> = {
     plate: '#131c27', shadow: 'rgba(0,0,0,0.6)', edge: 'rgba(3,7,12,0.92)', glow: '46,240,224', font: SANS,
     line: { solid: '#283444', liquid: '#0d4b5e', gas: '#3a2d58', none: '#202a37' },
   },
+  // 軽量・白い紙：塗りと線だけ。影は透明
+  'lite-light': {
+    key: 'lite-light', skin: 'lite', name: 'light', paper: '#ffffff', grid: '#ececec', gridBold: '#d2d2d2', ink: '#111111', soft: '#5a5a5a', red: '#c8281e', hi: '#ffd400',
+    plate: '#ffffff', shadow: 'rgba(0,0,0,0)', edge: '#111111', glow: '255,212,0', font: SYSTEM,
+    line: { solid: '#eadfc6', liquid: '#cfe6f5', gas: '#e6e2f4', none: '#e9e9e9' },
+  },
+  // 軽量・黒い紙：真っ黒の地（有機 EL の画面では、黒い所は電気を使わない）
+  'lite-dark': {
+    key: 'lite-dark', skin: 'lite', name: 'dark', paper: '#000000', grid: '#161616', gridBold: '#2c2c2c', ink: '#f2f2f2', soft: '#a8a8a8', red: '#ff6b5e', hi: '#ffd84a',
+    plate: '#171717', shadow: 'rgba(0,0,0,0)', edge: '#000000', glow: '255,216,74', font: SYSTEM,
+    line: { solid: '#4a4232', liquid: '#1f4458', gas: '#3a3654', none: '#2a2a2a' },
+  },
+  // 幻想・天空の庭：空に浮かぶ花園。淡い空色の地、藍のインク、金と虹の光
+  'myth-light': {
+    key: 'myth-light', skin: 'myth', name: 'light', paper: '#e6f1ff', grid: 'rgba(90,80,190,0.07)', gridBold: 'rgba(90,80,190,0.16)', ink: '#2a2356', soft: '#5b548c', red: '#d93a78', hi: '#ffb52e',
+    plate: '#fffdf7', shadow: 'rgba(70,56,150,0.24)', edge: '#2a2356', glow: '255,200,110', font: SERIF,
+    line: { solid: '#f6dcae', liquid: '#aee6ff', gas: '#e6d6ff', none: '#dde6f6' },
+  },
+  // 幻想・星の海：星雲の闇に、水晶とオーロラ
+  'myth-dark': {
+    key: 'myth-dark', skin: 'myth', name: 'dark', paper: '#0a0620', grid: 'rgba(160,140,255,0.05)', gridBold: 'rgba(160,140,255,0.13)', ink: '#f4ecff', soft: '#b5a8dc', red: '#ff6fa3', hi: '#6ef3ff',
+    plate: '#1d1544', shadow: 'rgba(0,0,0,0.6)', edge: 'rgba(4,2,14,0.9)', glow: '150,130,255', font: SERIF,
+    line: { solid: '#4d3c2c', liquid: '#12406e', gas: '#3d2c72', none: '#251b4d' },
+  },
 };
+/** 幻想スキンの金（明るい面・縁）と、虹の 6 色 */
+export const MYTH_GOLD = '#f2c35a', MYTH_GOLD_DARK = '#8a5f17';
+export const MYTH_RAINBOW = ['#ff6b9d', '#ffb347', '#ffe66d', '#7dffb0', '#6ecbff', '#b48cff'];
 /** 研究所スキンの差し色（赤紫）。暗いテーマの灯と、立体映像の二色目に使う */
 export const LAB_MAGENTA = '255,79,216';
 
@@ -99,7 +131,7 @@ export function themeName(): ThemeName {
   const a = root.dataset.theme;
   return a === 'dark' || a === 'light' ? a : media.matches ? 'dark' : 'light';
 }
-export const skinName = (): Skin => (root.dataset.skin === 'punk' ? 'punk' : root.dataset.skin === 'arcane' ? 'arcane' : root.dataset.skin === 'lab' ? 'lab' : 'note');
+export const skinName = (): Skin => { const s = root.dataset.skin as Skin | undefined; return s && SKINS.includes(s) ? s : 'note'; };
 export const palette = (): Palette => PALETTES[`${skinName()}-${themeName()}`];
 
 /** 明暗の選択を反映する。auto は端末（または表示している側）の設定に従う */
@@ -108,7 +140,7 @@ export function applyTheme(choice: ThemeChoice) {
   else root.dataset.theme = choice;
 }
 export function applySkin(skin: Skin) {
-  if (skin === 'punk' || skin === 'arcane' || skin === 'lab') root.dataset.skin = skin;
+  if (skin !== 'note' && SKINS.includes(skin)) root.dataset.skin = skin;
   else delete root.dataset.skin;
 }
 

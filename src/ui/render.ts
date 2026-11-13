@@ -19,6 +19,8 @@ import { washById } from '../content/extract';
 import { AMINO_ORDER, aminoOf, phOf, poleAt, type AminoKey } from '../content/phoresis';
 import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/sep';
 import { drawFar, farBegin, farEnd } from './far';
+import { bodyLite, buildChunkLite, hubLite } from './skinLite';
+import { bodyMyth, buildChunkMyth, hubMyth, mythAmbient, mythBelts, mythFrame, mythHubGlow, mythSelect, mythZoneLabel } from './skinMyth';
 import { drawGlints, hubMeter, mapStats, noteFx } from './mapfx';
 import { newPlume, plumePaint, plumeRadius, plumeReact, PLUME_CAP, stepPlume, type Plume } from './plumephys';
 import { emissionOf, exhaustOf, plateNotes, plumeable } from './matterfx';
@@ -77,6 +79,8 @@ const mod = (a: number, n: number) => ((a % n) + n) % n;
 function buildChunk(P: Palette, cx: number, cy: number): HTMLCanvasElement {
   if (P.skin === 'punk') return buildChunkPunk(P, cx, cy);
   if (P.skin === 'lab') return buildChunkLab(P, cx, cy, TS, CH);
+  if (P.skin === 'lite') return buildChunkLite(P, cx, cy, TS, CH);
+  if (P.skin === 'myth') return buildChunkMyth(P, cx, cy, TS, CH);
   const cv = document.createElement('canvas');
   cv.width = cv.height = SIZE;
   const g = cv.getContext('2d')!;
@@ -513,7 +517,7 @@ const hatch = (c: CanvasRenderingContext2D, x: number, y: number, s: number, col
  * place：輪が広がる、erase：設備の形が薄れて消える、move：行き先で輪が広がる。x, y は設備の左上（階のずれを含む座標）
  */
 export function burst(x: number, y: number, size: number, kind: 'place' | 'erase' | 'move') {
-  if (calm) return;
+  if (calm || palette().skin === 'lite') return;
   const n = 6 + size * 4, cx = x + size / 2, cy = y + size / 2;
   for (let i = 0; i < n; i++) {
     const a = (i / n) * Math.PI * 2 + Math.random() * 0.4, sp = 0.7 + Math.random() * 0.6;
@@ -613,7 +617,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   const keep = particles.length;
   FONT_HAND = P.font;
   FONT_SMALL = P.skin === 'punk' ? FONT_UI : P.font;
-  const punk = P.skin === 'punk', arcane = P.skin === 'arcane', lab = P.skin === 'lab', light = P.name === 'light';
+  const punk = P.skin === 'punk', arcane = P.skin === 'arcane', lab = P.skin === 'lab', lite = P.skin === 'lite', myth = P.skin === 'myth', light = P.name === 'light';
 
   ctx.fillStyle = P.paper;
   ctx.fillRect(0, 0, cw, ch);
@@ -634,6 +638,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   // ---- 光と効果の層（WebGL の合成段があるときだけ）----
   const G = view.fx?.glow ?? null, M = view.fx?.mask ?? null;
   if (lab) labFrame(G, M, !!three, calm);
+  if (myth) mythFrame(G, calm);
   /** 光の点：中心が明るく、外へ消える。rgb は '255,200,80' の形 */
   const shine = (c2: CanvasRenderingContext2D | null, x: number, y: number, r: number, rgb: string, a: number) => {
     if (!c2 || r <= 0 || x < -r || y < -r || x > cw + r || y > ch + r) return;
@@ -670,7 +675,12 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       const sz = sizeOf(e), pad = sz === 2 ? 0.1 : 0.13;
       put(sz === 2 ? 0.62 : k === 'tunnel' ? 0.3 : 0.44, e.x + pad, e.y + pad, sz - pad * 2, sz - pad * 2);
     }
-    if (!off) { const hr = hubRect(w.hubSize); put(0.95, hr.x + 0.06, hr.y + 0.06, hr.s - 0.12, hr.s - 0.12); }
+    if (!off) {
+      const hr = hubRect(w.hubSize);
+      // 幻想の納品所は丸い盤（低い）なので、影も丸く
+      if (myth) { HT.fillStyle = 'rgb(110,110,110)'; HT.beginPath(); HT.arc(sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), hr.s * z * 0.49, 0, Math.PI * 2); HT.fill(); }
+      else put(0.95, hr.x + 0.06, hr.y + 0.06, hr.s - 0.12, hr.s - 0.12);
+    }
     HT.globalCompositeOperation = 'source-over';
   }
   if (M && !off && z >= 9) {
@@ -744,6 +754,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   ctx.textBaseline = 'alphabetic';
   for (const sp of zoneSpots(x0, y0, x1, y1)) {
     const zn = ZONES[sp.zone], lx = sp.cx, ly = sp.cy;
+    if (myth) { mythZoneLabel(ctx, P, zn.name, z >= 20 ? `${sub(zn.resource).name}・${zn.form}` : '', sx(lx), gy(ly), z, zn.tint[1]); continue; }
     if (lab) { labZoneLabel(ctx, P, zn.name, z >= 20 ? `${sub(zn.resource).name}・${zn.form}` : '', sx(lx), gy(ly), z, zn.tint[1]); continue; }
     if (punk) {
       // 鉱区の標識板
@@ -855,7 +866,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   // 厚み：ベルトと配管を地面から浮かせる。まず地面に落ちる影、次に手前の側面を描き、そのあと上面を描く
   const lift = z * 0.1;
   ctx.lineCap = 'round';
-  if (!far && !lab) {
+  if (!far && !lab && !lite && !myth) {
     ctx.save();
     ctx.translate(lift * 0.7, lift * 1.7);
     ctx.strokeStyle = punk ? `rgba(0,0,0,${light ? 0.2 : 0.42})` : P.shadow;
@@ -869,6 +880,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     ctx.restore();
   }
   if (lab) labBelts(ctx, P, z, t, beltSpeed(w), belts, pass, far, veryFar, sx, sy);
+  else if (myth) mythBelts(ctx, P, z, t, beltSpeed(w), belts, pass, far, veryFar, sx, sy);
   else if (punk) {
     // 工業：固体はゴムのベルトに鋼の側板、液体と気体は継ぎ手のある配管
     const PW = { solid: 0.62, liquid: 0.44, gas: 0.3, none: 0.5 };
@@ -1129,7 +1141,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       // 装置の中身（液や沈殿の色）は覚える対象なので、光で色が変わらないように守る（効果の層の緑）
       if (M && sz > 1) { M.fillStyle = 'rgb(0,255,0)'; M.beginPath(); M.arc(mcx, mcy, z * sz * 0.4, 0, Math.PI * 2); M.fill(); }
       if (e.busy) {
-        glow(mcx, mcy, z * sz * 1.3, glowOf(e, P), 0.3 + 0.05 * Math.sin(t * 5 + e.x));
+        // 幻想の装置は、台座が自分の光の輪を持つ（窓の中を照らさないよう、作業灯は弱く）
+        glow(mcx, mcy, z * sz * 1.3, glowOf(e, P), myth ? 0.08 : 0.3 + 0.05 * Math.sin(t * 5 + e.x));
         const em = emissionOf(e.recipe);
         if (em) { if (em.a > 0) glow(mcx, mcy + z * sz * 0.2, z * sz * 0.75, em.rgb, em.a); heat(mcx, mcy - z * sz * 0.55, z * sz * 0.85, em.shimmer); }
       }
@@ -1178,7 +1191,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     // 稼働中の装置は、蒸気や火花を出す
     if (e.busy && z >= 20 && particles.length < 260 && Math.random() < dt * (e.kind === 'electrolyzer' || e.kind === 'battery' ? 5 : 1.6)) {
       const r1 = Math.random(), r2 = Math.random();
-      if (e.kind === 'electrolyzer' || e.kind === 'battery') particles.push({ x: e.x + sz / 2 + (r1 - 0.5) * 0.9, y: e.y + sz / 2 + (r2 - 0.5) * 0.5, vx: (r2 - 0.5) * 1.6, vy: -0.6 - r1 * 0.9, age: 0, life: 0.28 + r1 * 0.2, color: 'spark', r: 0.05 });
+      if (lite && (e.kind === 'electrolyzer' || e.kind === 'battery')) { /* 軽量：火花は出さない */ }
+      else if (e.kind === 'electrolyzer' || e.kind === 'battery') particles.push({ x: e.x + sz / 2 + (r1 - 0.5) * 0.9, y: e.y + sz / 2 + (r2 - 0.5) * 0.5, vx: (r2 - 0.5) * 1.6, vy: -0.6 - r1 * 0.9, age: 0, life: 0.28 + r1 * 0.2, color: 'spark', r: 0.05 });
       else {
         // 気体が生じる反応だけ、その気体を出す（見え方は廃棄口と同じ決まり）。熱する・燃える・発熱の大きい反応の出口は熱いので、はじめは昇る。
         // 発熱の大きい反応（CaO と水など）は湯気。気体の生じない反応は何も出さない（色のついた煙を飾りで出さない）
@@ -1294,9 +1308,10 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   }
   // 納品所の口は、赤く脈打つ光。熱で上の空気がゆらぐ（研究所は、炉心の青緑の光の輪と、回る光の弧）
   if (G && !off && lab) labHubGlow(G, P, sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), hr.s, z, t);
-  if (G && !off && !lab) { const hx2 = sx(hr.x + hr.s / 2), hy2 = sy(hr.y + hr.s / 2); glow(hx2, hy2, hr.s * z * 0.95, '255,70,40', 0.4 + 0.1 * Math.sin(t * 2.3)); heat(hx2, hy2 - hr.s * z * 0.5, hr.s * z * 0.6, 0.5); }
+  if (G && !off && myth) mythHubGlow(G, P, sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), hr.s, z, t);
+  if (G && !off && !lab && !myth) { const hx2 = sx(hr.x + hr.s / 2), hy2 = sy(hr.y + hr.s / 2); glow(hx2, hy2, hr.s * z * 0.95, '255,70,40', 0.4 + 0.1 * Math.sin(t * 2.3)); heat(hx2, hy2 - hr.s * z * 0.5, hr.s * z * 0.6, 0.5); }
   // 高画質の飾り：納品所のまわりを、光の弧が 2 重に回る（光の層だけに描くので、標準の画質は変わらない）
-  if (G && !off && z >= 10 && !lab) {
+  if (G && !off && z >= 10 && !lab && !myth) {
     const hx2 = sx(hr.x + hr.s / 2), hy2 = sy(hr.y + hr.s / 2), R1 = (hr.s / 2 + 0.45) * z, R2 = (hr.s / 2 + 0.7) * z;
     G.lineCap = 'round'; G.lineWidth = Math.max(1.5, z * 0.08);
     for (let k = 0; k < 3; k++) { const a = t * 0.7 + k * 2.094; G.strokeStyle = `rgba(${P.glow},${light ? 0.3 : 0.55})`; G.beginPath(); G.arc(hx2, hy2, R1, a, a + 0.85); G.stroke(); }
@@ -1593,6 +1608,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     const e = view.selected;
     use(T && sizeOf(e) === 2 ? T : base);
     if (lab) labSelect(ctx, P, sx(e.x + sizeOf(e) / 2), sy(e.y + sizeOf(e) / 2), sizeOf(e), z, t);
+    else if (myth) mythSelect(ctx, P, sx(e.x + sizeOf(e) / 2), sy(e.y + sizeOf(e) / 2), sizeOf(e), z, t);
     else if (punk) {
       // 照準の角
       const cx0 = sx(e.x + sizeOf(e) / 2), cy0 = sy(e.y + sizeOf(e) / 2), r = z * (sizeOf(e) * 0.5 + 0.1 + 0.03 * Math.sin(t * 6)), L = z * 0.2;
@@ -1697,7 +1713,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
 
   use(base);
   if (punk) ambient(ctx, P, cw, ch, t, dt, sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), z);
-  if (!punk && !arcane && !lab) ambientNote(ctx, G, P, cw, ch, t, dt);
+  if (!punk && !arcane && !lab && !lite && !myth) ambientNote(ctx, G, P, cw, ch, t, dt);
+  if (myth) mythAmbient(ctx, P, cw, ch, t, dt);
   if (lab) labAmbient(ctx, P, cw, ch, t, dt);
   if (arcane) ambientArcane(ctx, G, P, cw, ch, t, dt);
   if (arcane) {
@@ -1920,7 +1937,8 @@ function token(ctx: CanvasRenderingContext2D, P: Palette, x: number, y: number, 
   const d = z * 0.78;
   if (flat) { ctx.drawImage(sprite(s), x - d / 2, y - d / 2, d, d); return; }
   // 物質はベルトの上に乗っている：下に影を落とし、少し持ち上げて描く（研究所では、青緑の光の上に浮かせる）
-  const lab = P.skin === 'lab';
+  const lab = P.skin === 'lab' || P.skin === 'myth';
+  if (P.skin === 'lite') { ctx.drawImage(sprite(s), x - d / 2, y - d / 2, d, d); return; }
   ctx.fillStyle = P.skin === 'punk' ? 'rgba(0,0,0,0.38)' : lab ? `rgba(${P.glow},${P.name === 'light' ? 0.32 : 0.45})` : 'rgba(20,30,50,0.2)';
   ctx.beginPath(); ctx.ellipse(x + (lab ? 0 : d * 0.05), y + d * 0.36, d * 0.3, d * 0.1, 0, 0, Math.PI * 2); ctx.fill();
   ctx.drawImage(sprite(s), x - d / 2, y - d / 2 - d * (lab ? 0.17 : 0.09), d, d);
@@ -1966,7 +1984,9 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
       ctx.fillStyle = P.ink;
       for (const [bx, by] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) { ctx.beginPath(); ctx.arc(cx + bx * u * 0.37, cy + by * u * 0.37, u * 0.022, 0, Math.PI * 2); ctx.fill(); }
     }
-  } else {
+  } else if (P.skin === 'lite') bodyLite(ctx, P, cx, cy, u, info.color, line);
+  else if (P.skin === 'myth') bodyMyth(ctx, P, cx, cy, u, z, e, t, info.color, line);
+  else {
   // 台：紙に貼った札。影はずらしたベタ
   // 厚み：地面の影 → 機種の色の側面 → 上面
   const th = (u / sizeOf(e)) * 0.13;
@@ -2781,6 +2801,8 @@ const hasSubLook = (id: string) => { try { return sub(id).state === 'solid'; } c
  *  外周に並ぶ元素の印は、その元素を飲み込むと灯る */
 function hub(ctx: CanvasRenderingContext2D, P: Palette, px: number, py: number, z: number, size: number, w: World, t: number) {
   if (P.skin === 'lab') { hubLab(ctx, P, px, py, z, size, w, t); return; }
+  if (P.skin === 'myth') { hubMyth(ctx, P, px, py, z, size, w, t); return; }
+  if (P.skin === 'lite') { hubLite(ctx, P, px, py, z, size, w); return; }
   const s = z * size, lv = Math.max(0, [2, 4, 6, 8].indexOf(size)), punk = P.skin === 'punk', light = P.name === 'light';
   const cxh = px + s / 2, cyh = py + s / 2, line = Math.max(1.5, z * 0.05), m = z * 0.06, c = z * 0.3;
   const INK = punk ? '#07090b' : P.ink;

@@ -1459,3 +1459,165 @@ html.hc[data-skin="punk"][data-theme="dark"] { --key-edge: var(--panel-soft) !im
 /* ===== fix:move-2 ===== */
 /* 行き先を待っている間は、⇲ の帯を小地図や復習の札より手前に出す（道具の帯の上に留めたとき、隠れないように） */
 #app.arming #act { z-index: 4; }
+
+/* =====================================================================
+   軽量スキン（白い紙・黒い紙）：影・ぼかし・グラデーション・動く飾り・読み込む書体を使わない。
+   色は白と黒と、赤・黄の 2 色だけ。黒い紙は真っ黒の地（有機 EL の画面では、黒い所は電気を使わない）
+   ===================================================================== */
+:root[data-skin="lite"] {
+  --paper: #ffffff; --card: #ffffff; --card-2: #f0f0f0; --ink: #111111; --soft: #5a5a5a; --rule: rgba(0, 0, 0, 0.22);
+  --red: #c8281e; --hi: #ffd400; --hi-soft: #fff3b0; --ok: #1f7a3d; --shadow: transparent; --on-ink: #ffffff;
+  --font-ui: system-ui, -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif;
+  --font-hand: system-ui, -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --bw: 1px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-skin="lite"]:not([data-theme="light"]) {
+    --paper: #000000; --card: #121212; --card-2: #1e1e1e; --ink: #f2f2f2; --soft: #a8a8a8; --rule: rgba(255, 255, 255, 0.24);
+    --red: #ff6b5e; --hi: #ffd84a; --hi-soft: #3a3210; --ok: #7fd693; --on-ink: #000000;
+    color-scheme: dark;
+  }
+}
+:root[data-skin="lite"][data-theme="dark"] {
+  --paper: #000000; --card: #121212; --card-2: #1e1e1e; --ink: #f2f2f2; --soft: #a8a8a8; --rule: rgba(255, 255, 255, 0.24);
+  --red: #ff6b5e; --hi: #ffd84a; --hi-soft: #3a3210; --ok: #7fd693; --on-ink: #000000;
+  color-scheme: dark;
+}
+[data-skin="lite"] *, [data-skin="lite"] *::before, [data-skin="lite"] *::after {
+  box-shadow: none !important; text-shadow: none !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+  animation: none !important; transition: none !important; filter: none !important;
+}
+[data-skin="lite"] #goal { transform: none; }
+[data-skin="lite"] #goal::after { transform: none; }
+[data-skin="lite"] #toast { transform: translateX(-50%); }
+[data-skin="lite"] :is(#goal, #cover, #sheet, #bar, #act, #rvcard, .primary, .ghost, .chip) { border-radius: 2px; }
+[data-skin="lite"] #cover::before { display: none; }
+[data-skin="lite"] #cover { padding-left: 26px; }
+[data-skin="lite"] .note-only { display: none; }
+[data-skin="lite"] #cover .kicker::before { content: "受験化学 ／ 軽量"; }
+[data-skin="lite"] #title h1 span { background: var(--hi); color: #111111; padding: 0 0.12em; }
+[data-skin="lite"] #modal { background: color-mix(in srgb, var(--paper) 70%, transparent); }
+
+/* =====================================================================
+   幻想スキン（天空の庭・星の海）：金の縁、虹のめぐる光、すりガラスの板、またたく星。重さは気にしない。
+   文字は、藍（明）と淡い菫（暗）で、地の上で 4.5:1 より濃く保つ
+   ===================================================================== */
+:root[data-skin="myth"] {
+  --paper: #e6f1ff; --card: #fffdf7; --card-2: #f1e9ff; --ink: #2a2356; --soft: #5b548c; --rule: rgba(90, 70, 170, 0.24);
+  --red: #c4266a; --hi: #ffb52e; --hi-soft: #ffeec4; --ok: #1d8a63; --shadow: rgba(70, 56, 150, 0.22); --on-ink: #fffdf7;
+  --gold: #f2c35a; --gold-dark: #8a5f17; --glow: 255, 200, 110; --accent: 217, 58, 120;
+  --glass: rgba(255, 253, 247, 0.78); --rainbow: linear-gradient(90deg, #ff6b9d, #ffb347, #ffe66d, #7dffb0, #6ecbff, #b48cff, #ff6b9d);
+  --sky: radial-gradient(120% 90% at 20% 0%, #fff6d8 0%, transparent 55%), radial-gradient(90% 80% at 90% 10%, #ffd9ec 0%, transparent 60%), linear-gradient(180deg, #cfe6ff 0%, #e9f3ff 55%, #f6ecff 100%);
+  --font-hand: "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-skin="myth"]:not([data-theme="light"]) {
+    --paper: #0a0620; --card: #1a1340; --card-2: #261c58; --ink: #f4ecff; --soft: #b5a8dc; --rule: rgba(170, 150, 255, 0.26);
+    --red: #ff7fae; --hi: #6ef3ff; --hi-soft: #14365a; --ok: #7dffb0; --shadow: rgba(0, 0, 0, 0.6); --on-ink: #0a0620;
+    --glow: 150, 130, 255; --accent: 110, 243, 255; --glass: rgba(22, 15, 58, 0.76);
+    --sky: radial-gradient(110% 80% at 15% 0%, rgba(120, 80, 255, 0.5) 0%, transparent 60%), radial-gradient(90% 70% at 95% 15%, rgba(255, 70, 170, 0.32) 0%, transparent 60%), radial-gradient(80% 60% at 50% 110%, rgba(50, 210, 255, 0.28) 0%, transparent 60%), #0a0620;
+    color-scheme: dark;
+  }
+}
+:root[data-skin="myth"][data-theme="dark"] {
+  --paper: #0a0620; --card: #1a1340; --card-2: #261c58; --ink: #f4ecff; --soft: #b5a8dc; --rule: rgba(170, 150, 255, 0.26);
+  --red: #ff7fae; --hi: #6ef3ff; --hi-soft: #14365a; --ok: #7dffb0; --shadow: rgba(0, 0, 0, 0.6); --on-ink: #0a0620;
+  --glow: 150, 130, 255; --accent: 110, 243, 255; --glass: rgba(22, 15, 58, 0.76);
+  --sky: radial-gradient(110% 80% at 15% 0%, rgba(120, 80, 255, 0.5) 0%, transparent 60%), radial-gradient(90% 70% at 95% 15%, rgba(255, 70, 170, 0.32) 0%, transparent 60%), radial-gradient(80% 60% at 50% 110%, rgba(50, 210, 255, 0.28) 0%, transparent 60%), #0a0620;
+  color-scheme: dark;
+}
+@property --myth-a { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+@keyframes myth-spin { to { --myth-a: 360deg; } }
+@keyframes myth-flow { to { background-position: 200% 0; } }
+@keyframes myth-twinkle { 0%, 100% { opacity: 0.35; transform: scale(0.8) rotate(0deg); } 50% { opacity: 1; transform: scale(1.15) rotate(45deg); } }
+@keyframes myth-float { 0%, 100% { translate: 0 0; } 50% { translate: 0 -5px; } }
+@keyframes myth-rise { from { opacity: 0; translate: 0 10px; filter: blur(4px); } }
+[data-skin="myth"] body { letter-spacing: 0.02em; }
+[data-skin="myth"] .note-only { display: none; }
+[data-skin="myth"] #cover .kicker::before { content: "化学幻想譚 ／ 受験化学"; }
+[data-skin="myth"] #aspect { display: block; font-family: var(--font-hand); font-weight: 700; font-size: 14px; letter-spacing: 0.4em; background: var(--rainbow); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: myth-flow 6s linear infinite; }
+[data-skin="myth"] #aspect span { display: none !important; }
+[data-skin="myth"] #aspect::before { content: "✦ 天空の庭 ✦"; }
+:root[data-skin="myth"][data-theme="dark"] #aspect::before { content: "✦ 星の海 ✦"; }
+@media (prefers-color-scheme: dark) { :root[data-skin="myth"]:not([data-theme="light"]) #aspect::before { content: "✦ 星の海 ✦"; } }
+
+/* ---- 板：すりガラスに、金の二重の縁。まわりを虹の光がゆっくり巡る ---- */
+[data-skin="myth"] :is(#goal, #bar, #act, #rvcard, #sheet, #cover, #toast, #tip, #paused, #clone-bar, #area-act) {
+  background: var(--glass); backdrop-filter: blur(14px) saturate(1.5); -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  border: 1.5px solid var(--gold-dark); border-radius: 14px; color: var(--ink);
+  box-shadow: inset 0 0 0 1.5px var(--gold), inset 0 0 0 3px color-mix(in srgb, var(--gold-dark) 45%, transparent), inset 0 1px 0 4px rgba(255, 255, 255, 0.12), 0 10px 34px var(--shadow), 0 0 26px rgba(var(--glow), 0.28);
+}
+[data-skin="myth"] #cover { position: relative; }
+[data-skin="myth"] #cover::after {
+  content: ""; position: absolute; inset: -3px; border-radius: 16px; padding: 2px; pointer-events: none;
+  background: conic-gradient(from var(--myth-a), #ff6b9d, #ffb347, #ffe66d, #7dffb0, #6ecbff, #b48cff, #ff6b9d);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  opacity: 0.75; animation: myth-spin 9s linear infinite; filter: drop-shadow(0 0 6px rgba(var(--glow), 0.7));
+}
+[data-skin="myth"] #goal { border-radius: 14px; rotate: none; transform: none; animation: myth-float 6s ease-in-out infinite; }
+[data-skin="myth"] #goal.folded { animation: none; }
+[data-skin="myth"] #sheet { animation: myth-rise 0.35s ease-out; padding: 24px 28px 28px; }
+[data-skin="myth"] #sheet h2, [data-skin="myth"] #goal b, [data-skin="myth"] header h2 { font-family: var(--font-hand); letter-spacing: 0.08em; }
+[data-skin="myth"] #sheet h2::before { content: "✦ "; color: var(--hi); }
+[data-skin="myth"] #modal { background: color-mix(in srgb, var(--paper) 55%, transparent); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+[data-skin="myth"] #toast { rotate: none; color: var(--ink); border-color: var(--gold-dark); }
+
+/* ---- ボタン：宝石。押せるものは金の縁、主なものは虹が流れる ---- */
+[data-skin="myth"] :is(.ghost, .chip, .key, .stepper, .seg, #topbtns button, #opts button, #marks button) {
+  background: linear-gradient(160deg, color-mix(in srgb, var(--card) 92%, #fff), var(--card-2)); color: var(--ink);
+  border: 1.5px solid var(--gold-dark); border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--gold), inset 0 1px 0 2px rgba(255, 255, 255, 0.18), 0 4px 14px var(--shadow);
+  transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+[data-skin="myth"] :is(.ghost, .chip, #topbtns button, #opts button):hover { transform: translateY(-2px); box-shadow: inset 0 0 0 1px var(--gold), 0 8px 22px var(--shadow), 0 0 18px rgba(var(--glow), 0.6); }
+[data-skin="myth"] :is(.ghost, .chip, #topbtns button, .primary, .tool):active { transform: translateY(1px) scale(0.97); }
+[data-skin="myth"] .primary {
+  background: var(--rainbow); background-size: 200% 100%; animation: myth-flow 5s linear infinite; color: #2a1d06; font-family: var(--font-hand); letter-spacing: 0.12em;
+  border: 1.5px solid var(--gold-dark); border-radius: 999px; text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.75), inset 0 -10px 16px rgba(255, 255, 255, 0.25), 0 8px 24px var(--shadow), 0 0 24px rgba(var(--glow), 0.6);
+}
+[data-skin="myth"] .danger { background: linear-gradient(160deg, #ff9cc2, var(--red)); color: #2a0614; border: 1.5px solid var(--gold-dark); border-radius: 999px; box-shadow: inset 0 0 0 1px var(--gold), 0 6px 18px color-mix(in srgb, var(--red) 40%, transparent); }
+[data-skin="myth"] :is(.chip.on, .ghost.picked, .ghost.on, #topbtns button.hot, #opts button.on, .seg button.on) {
+  background: linear-gradient(160deg, color-mix(in srgb, var(--hi) 55%, var(--card)), color-mix(in srgb, var(--hi) 22%, var(--card))); color: var(--ink);
+  border-color: var(--gold-dark); box-shadow: inset 0 0 0 1.5px var(--gold), 0 0 18px color-mix(in srgb, var(--hi) 70%, transparent);
+}
+[data-skin="myth"] .ghost.warn, [data-skin="myth"] .ghost.wrong { color: var(--red); border-color: var(--red); }
+[data-skin="myth"] #bar { border-radius: 18px; padding: 5px; }
+[data-skin="myth"] .tool { border-radius: 12px; transition: transform 0.15s ease, background 0.2s ease; }
+[data-skin="myth"] .tool:hover { transform: translateY(-3px); }
+[data-skin="myth"] .tool.on { background: linear-gradient(160deg, color-mix(in srgb, var(--hi) 50%, transparent), color-mix(in srgb, var(--hi) 14%, transparent)); box-shadow: inset 0 0 0 1.5px var(--gold), 0 0 16px color-mix(in srgb, var(--hi) 65%, transparent); }
+[data-skin="myth"] #tip b { box-shadow: none; background: var(--rainbow); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: myth-flow 6s linear infinite; }
+[data-skin="myth"] #goal-fold { border-color: var(--gold-dark); border-radius: 8px; }
+[data-skin="myth"] :is(.bar, .meter) { border-radius: 999px; overflow: hidden; border-color: var(--gold-dark); }
+[data-skin="myth"] :is(.bar, .meter) i { background: var(--rainbow); background-size: 200% 100%; animation: myth-flow 4s linear infinite; }
+[data-skin="myth"] .card { border-color: var(--rule); border-radius: 10px; }
+[data-skin="myth"] .formula { font-family: var(--font-mono); }
+[data-skin="myth"] ::selection { background: color-mix(in srgb, var(--hi) 55%, transparent); }
+
+/* ---- 表紙：空（明）と星雲（暗）。またたく星、虹の題字 ---- */
+[data-skin="myth"] #title { background: var(--sky); }
+[data-skin="myth"] #title::before, [data-skin="myth"] #title::after {
+  content: "✦　　　　✧　　　✦　　✧　　　　　✦　　　✧　　✦　　　　✧"; position: absolute; left: 0; right: 0; top: 7%; text-align: center; white-space: nowrap; overflow: hidden;
+  font-size: 22px; letter-spacing: 0.6em; color: var(--gold); pointer-events: none; animation: myth-twinkle 3.2s ease-in-out infinite; text-shadow: 0 0 12px rgba(var(--glow), 0.9);
+}
+[data-skin="myth"] #title::after { top: auto; bottom: 8%; font-size: 16px; animation-delay: -1.6s; color: rgb(var(--accent)); }
+[data-skin="myth"] #cover { padding: 34px 34px 30px; border-radius: 22px; }
+[data-skin="myth"] #cover::before { display: none; }
+[data-skin="myth"] #cover::after { border-radius: 24px; }
+[data-skin="myth"] #title h1 {
+  font-family: var(--font-hand); font-weight: 800; letter-spacing: 0.1em;
+  background: var(--rainbow); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: myth-flow 7s linear infinite;
+  filter: drop-shadow(0 2px 0 color-mix(in srgb, var(--gold-dark) 70%, transparent)) drop-shadow(0 0 18px rgba(var(--glow), 0.7));
+}
+[data-skin="myth"] #title h1 span { box-shadow: none; }
+@media (max-width: 640px) { [data-skin="myth"] #cover { container-type: inline-size; padding: 26px 18px 22px; } [data-skin="myth"] #title h1 { font-size: min(52px, 17cqi); } }
+/* 動きを減らす設定では、巡る光と題字の流れを止める */
+html.calm[data-skin="myth"] *, html.calm[data-skin="myth"] *::before, html.calm[data-skin="myth"] *::after { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { [data-skin="myth"] *, [data-skin="myth"] *::before, [data-skin="myth"] *::after { animation: none !important; } }
+/* 幻想：指令の札の印は、金の紋章に */
+[data-skin="myth"] #goal::after { content: "✦"; border: 1.5px solid var(--gold-dark); color: var(--gold-dark); background: radial-gradient(circle, var(--hi-soft), transparent 70%); box-shadow: inset 0 0 0 1.5px var(--gold), 0 0 14px rgba(var(--glow), 0.6); font-size: 22px; transform: none; animation: myth-twinkle 4s ease-in-out infinite; opacity: 1; }
+:root[data-skin="myth"][data-theme="dark"] #goal::after { color: var(--gold); }
+@media (prefers-color-scheme: dark) { :root[data-skin="myth"]:not([data-theme="light"]) #goal::after { color: var(--gold); } }

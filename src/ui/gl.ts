@@ -840,6 +840,13 @@ const LOOKS: Record<string, Look> = {
   'lab-light': { shadow: 0.18, ao: 0.24, bevel: 0.32, sunColor: [1.0, 1.01, 1.03], god: 0.1, streak: 0.1, streakDir: 0, streakTint: [0.6, 0.95, 1.0], cloud: 0, waterRefl: 0.32, sky: [0.78, 0.92, 0.96], sat: 1.04, contrast: 0.08, shadowTint: [0.93, 0.98, 1.05], hiTint: [0.99, 1.0, 1.02], reflect: 0.3 },
   // 深夜のラボ：暗がりは青緑、明るい所は赤紫に寄せる。灯から光の筋と横に長いレンズの筋、黒い床に灯と装置が映る
   'lab-dark': { shadow: 0.2, ao: 0.5, bevel: 0.42, sunColor: [0.9, 1.0, 1.08], god: 0.42, streak: 0.4, streakDir: 0, streakTint: [0.45, 0.95, 1.0], cloud: 0, waterRefl: 0.26, sky: [0.08, 0.28, 0.36], sat: 1.12, contrast: 0.18, shadowTint: [0.9, 1.0, 1.1], hiTint: [1.05, 0.97, 1.05], reflect: 0.55 },
+  // 軽量：WebGL は使わないが、表は欠かさない（方眼ノートと同じ、上乗せなし）
+  'lite-light': { shadow: 0, ao: 0, bevel: 0, sunColor: [1, 1, 1], god: 0, streak: 0, streakDir: 0, streakTint: [1, 1, 1], cloud: 0, waterRefl: 0, sky: [1, 1, 1], sat: 1, contrast: 0, shadowTint: [1, 1, 1], hiTint: [1, 1, 1] },
+  'lite-dark': { shadow: 0, ao: 0, bevel: 0, sunColor: [1, 1, 1], god: 0, streak: 0, streakDir: 0, streakTint: [1, 1, 1], cloud: 0, waterRefl: 0, sky: [1, 1, 1], sat: 1, contrast: 0, shadowTint: [1, 1, 1], hiTint: [1, 1, 1] },
+  // 天空の庭：金の日差し、虹色の光の筋、星形のきらめき。影は菫色、明るい所は金に寄せ、色は濃く
+  'myth-light': { shadow: 0.36, ao: 0.34, bevel: 0.55, sunColor: [1.08, 1.0, 0.9], god: 0.2, streak: 0.3, streakDir: 1, streakTint: [1.0, 0.86, 0.6], cloud: 0.12, waterRefl: 0.5, sky: [0.62, 0.8, 1.0], sat: 1.16, contrast: 0.1, shadowTint: [0.94, 0.93, 1.08], hiTint: [1.05, 1.0, 0.93], reflect: 0.2 },
+  // 星の海：水晶と星の光が大きくにじみ、光の筋と星形のきらめきが強い。影は藍、明るい所は桃色に寄せる。暗い地に灯が映る
+  'myth-dark': { shadow: 0.18, ao: 0.46, bevel: 0.5, sunColor: [0.9, 0.92, 1.15], god: 0.6, streak: 0.6, streakDir: 1, streakTint: [0.7, 0.75, 1.0], cloud: 0, waterRefl: 0.4, sky: [0.3, 0.2, 0.6], sat: 1.22, contrast: 0.2, shadowTint: [0.88, 0.92, 1.14], hiTint: [1.08, 0.96, 1.06], reflect: 0.5 },
 };
 /** 「高」の画質では、最高画質の上乗せを使わない（色調だけは同じにしない：前の見た目のまま） */
 export const PLAIN_LOOK: Look = { shadow: 0, ao: 0, bevel: 0, sunColor: [1, 1, 1], god: 0, streak: 0, streakDir: 0, streakTint: [1, 1, 1], cloud: 0, waterRefl: 0, sky: [1, 1, 1], sat: 1, contrast: 0, shadowTint: [1, 1, 1], hiTint: [1, 1, 1], reflect: 0 };
@@ -855,5 +862,10 @@ const BASE: Record<string, Pick<PostParams, 'ambient' | 'spill' | 'bloom' | 'bri
   // 研究所：澄んだ強めの発光、粒子はごく少なく、色のにじみはほぼなし。夜は灯がよく広がり、明るい所も光る
   'lab-light': { ambient: 1.0, spill: 0.28, bloom: 0.62, bright: 0, threshold: 1, vignette: 0.12, grain: 0.006, scan: 0, aberration: 0, relief: 0.22, glint: 0.4, tint: [0.985, 1.0, 1.02] },
   'lab-dark': { ambient: 0.78, spill: 1.15, bloom: 0.95, bright: 0.22, threshold: 0.8, vignette: 0.3, grain: 0.012, scan: 0, aberration: 0.0003, relief: 0.3, glint: 0.42, tint: [0.97, 1.0, 1.04] },
+  'lite-light': { ambient: 1, spill: 0, bloom: 0, bright: 0, threshold: 1, vignette: 0, grain: 0, scan: 0, aberration: 0, relief: 0, glint: 0, tint: [1, 1, 1] },
+  'lite-dark': { ambient: 1, spill: 0, bloom: 0, bright: 0, threshold: 1, vignette: 0, grain: 0, scan: 0, aberration: 0, relief: 0, glint: 0, tint: [1, 1, 1] },
+  // 幻想：光は大きくにじみ、明るい所も光る。水面はよくきらめく
+  'myth-light': { ambient: 1.0, spill: 0.32, bloom: 0.6, bright: 0, threshold: 1, vignette: 0.16, grain: 0.008, scan: 0, aberration: 0.0004, relief: 0.3, glint: 0.8, tint: [1.01, 1.0, 1.02] },
+  'myth-dark': { ambient: 0.76, spill: 1.2, bloom: 0.95, bright: 0.2, threshold: 0.82, vignette: 0.4, grain: 0.012, scan: 0, aberration: 0.0009, relief: 0.36, glint: 0.9, tint: [0.98, 0.98, 1.06] },
 };
 export const POST_PRESETS: Record<string, Omit<PostParams, 'time'>> = Object.fromEntries(Object.keys(BASE).map((k) => [k, { reflect: 0, ...BASE[k], ...LOOKS[k], ...FRAME }]));
