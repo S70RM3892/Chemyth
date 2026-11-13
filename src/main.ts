@@ -1697,10 +1697,17 @@ function boot(data: HotData) {
           b2.bpThumb(bp.stamps),
           h('span', { class: 'stack' }, (() => { const inp = h('input', { class: 'bp-name', type: 'text', id: `bp-name-${i}`, value: bp.name, maxLength: 30, ariaLabel: '設計図の名前' }); inp.onchange = () => { bp.name = inp.value.trim().slice(0, 30) || bp.name; saveLibrary(l); }; return inp; })(), h('span', { class: 'muted' }, `装置 ${n((b) => BIG.includes(b.kind))}・ベルト類 ${n((b) => b.kind === 'belt' || b.kind === 'bridge' || b.kind === 'tunnel')}・ほか ${n((b) => !BIG.includes(b.kind) && b.kind !== 'belt' && b.kind !== 'bridge' && b.kind !== 'tunnel')}`)),
           ...b2.bpOrder(l, i, () => { saveLibrary(l); showLibrary(); }),
-          h('button', { class: 'primary', type: 'button', id: `bp-use-${i}`, onclick: () => { blueprint = bp.stamps.map((b) => ({ ...b })); ghost = null; areaA = areaB = null; closeModal(); pick('area', true); } }, '使う'),
+          h('button', { class: 'primary', type: 'button', id: `bp-use-${i}`, onclick: () => useLibrary(bp.stamps) }, '使う'),
           h('button', { class: 'ghost', type: 'button', id: `bp-out-${i}`, onclick: () => showLibrary({ mode: 'out', text: encodeBlueprint(bp.name, bp.stamps) }) }, '書き出す'),
           h('button', { class: 'ghost warn', type: 'button', id: `bp-del-${i}`, onclick: () => b2.ask(`設計図「${bp.name}」を消す？`, 'この端末から消える。元には戻せない。', '消す', () => { l.splice(i, 1); saveLibrary(l); showLibrary(); }) }, '消す'));
       })) : h('p', {}, 'まだ保存した設計図はない。'));
+  };
+  /** 保存しておいた設計図を使う。前の版で読み込んだものや書き換えられたものもあるので、確かめてから持つ（この版では置けない設備は外す。見本を描くところで止まらないように） */
+  const useLibrary = (stamps: Stamp[]) => {
+    const ok = stamps.map((b) => cleanStamp(b)).filter((b): b is Stamp => !!b), bad = stamps.length - ok.length;
+    if (!ok.length) { closeModal(); toast('この設計図には、この版で置ける設備がない。', 4000); sfx.bad(); return; }
+    blueprint = ok; ghost = null; areaA = areaB = null; closeModal(); pick('area', true);
+    if (bad) toast(`${bad} 個は、この版では置けない設備だったので外した。`, 4000);
   };
   $('area-lib').onclick = () => showLibrary();
   $('area-cancel').onclick = () => { blueprint = null; ghost = null; areaA = areaB = null; paintArea(); };
@@ -1708,12 +1715,13 @@ function boot(data: HotData) {
   function pasteAt(x: number, y: number) {
     if (!blueprint) return;
     group = null;
-    let ok = 0;
+    let ok = 0, bad = 0;
     // 大きい装置から先に置く（ベルトに場所を取られないように）
     for (const b0 of [...blueprint].sort((p, q) => sizeOfKind(q.kind) - sizeOfKind(p.kind))) {
       // 保存しておいた設計図も、貼る前に確かめる（前の版で読み込んだ、知らない物質の設定などで地図が止まらないように）
       const b = cleanStamp(b0);
-      if (!b || doPlace(b.kind, x + b.dx, y + b.dy, b.dir)) continue;
+      if (!b) { bad++; continue; }
+      if (doPlace(b.kind, x + b.dx, y + b.dy, b.dir)) continue;
       ok++;
       const placed = at(world, x + b.dx, y + b.dy)!;
       const r = recipeById(b.recipe);
@@ -1722,7 +1730,9 @@ function boot(data: HotData) {
       placed.sub = b.sub;
       if (b.kind === 'station') { placed.ch = b.ch ?? 1; placed.role = b.role ?? 'in'; }
     }
-    if (ok < blueprint.length) toast(`${blueprint.length} 個のうち ${ok} 個を置いた。残りは場所がふさがっていた。`); else toast(`${ok} 個を置いた。続けて別の場所にも置ける。`, 1800);
+    // 置けなかったわけは、場所がふさがっていたものと、この版では置けないものとを分けて言う
+    const busy = blueprint.length - ok - bad;
+    if (ok < blueprint.length) toast(`${blueprint.length} 個のうち ${ok} 個を置いた。${busy ? (bad ? `${busy} 個は場所がふさがっていた。` : '残りは場所がふさがっていた。') : ''}${bad ? `${bad} 個は、この版では置けない設備だったので外した。` : ''}`, bad ? 4000 : 2600); else toast(`${ok} 個を置いた。続けて別の場所にも置ける。`, 1800);
     ok ? sfx.place() : sfx.bad();
     ghost = null;
     paintArea();
