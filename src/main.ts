@@ -33,6 +33,7 @@ import { setSound, setVolume, sfx, soundOn, unlockAudio } from './ui/sound';
 import { musicOn, musicTick, setMusic, setMusicVolume } from './ui/music';
 import { fmtDate, fmtTime, initTitle, skinButtons, slotName, store, themeButtons } from './ui/title';
 import { SLEEP_DEFAULT, duskOf, eveningWindow, hhmm, isClosed, minutesToBed, morningDue, nightDone, nightSetIds, windDown, type SleepCfg } from './engine/sleep';
+import { runOf, type SetRun } from './engine/study';
 import { capByExams, dayKey } from './engine/fsrs';
 import { buildQueue, partnerOf, quizFor } from './engine/quiz';
 import { addPlayTime, canTestOut } from './engine/pace';
@@ -395,7 +396,7 @@ function boot(data: HotData) {
 
   // ---- モーダル ----
   const modal = $('modal'), sheet = $('sheet');
-  const closeModal = () => { modal.hidden = true; sheet.replaceChildren(); selected = null; save(); };
+  const closeModal = () => { modal.hidden = true; sheet.replaceChildren(); selected = null; save(); cardCheck(); };
   const showSheet = (...nodes: (Node | string | null)[]) => { sheet.replaceChildren(...nodes.filter((n): n is Node | string => n !== null)); sheet.scrollTop = 0; modal.hidden = false; };
   modal.addEventListener('pointerdown', (ev) => { if (ev.target === modal) closeModal(); });
   const closeBtn = () => h('button', { class: 'ghost', type: 'button', id: 'sheet-close', onclick: closeModal }, '閉じる');
@@ -843,30 +844,36 @@ function boot(data: HotData) {
   const sleepCfg = (): SleepCfg => ({ ...SLEEP_DEFAULT, ...(store.meta().sleep ?? {}) });
   const closedNow = () => { const ext = store.meta().ext; if (ext && ext.until > Date.now()) return false; return isClosed(sleepCfg(), new Date()); };
   let dusk = prefs().dusk ? duskOf(new Date()) : 0;
-  /** 問いを順に出す（今夜・今朝の 10 問）。終わったら finish(正解数) */
-  const runSet = (title: string, lead: string, ids: string[], finish: (right: number) => void) => {
-    let right = 0;
+  /**
+   * 問いを順に出す（今夜・今朝の 10 問）。終わったら finish(正解数, 出した問い)。
+   * 途中で閉じたら、どこまで答えたかをセーブに残し、次に開いたときは続きから出す（答えた問いを、もう一度数えない）
+   */
+  const runSet = (title: string, lead: string, kind: SetRun['kind'], day: string, ids0: string[], finish: (right: number, ids: string[]) => void) => {
+    const run = runOf(world.study, kind, day), ids = run ? run.ids : ids0;
+    let right = run ? run.got : 0;
+    const mark = (i: number) => { world.study.run = { kind, day, ids, i, got: right }; };
     const step = (i: number) => {
       const id = ids[i];
-      if (!id) { finish(right); return; }
-      const q = quizFor(world, id, Math.random, world.srs[id]?.full ? undefined : undefined);
+      if (!id) { world.study.run = null; finish(right, ids); return; }
+      const q = quizFor(world, id);
       if (!q) { step(i + 1); return; }
       const body = h('div', { class: 'rv-body' });
       showSheet(h('header', {}, h('h2', {}, title), closeBtn()), h('p', { class: 'muted' }, `${lead}　${i + 1} / ${ids.length}`), body);
       renderQuiz(body, world, q, {
         // 正解の数は onDone で数える（組み直しも onDone を通る）
         onFull: (done) => { const r = recipeById(id.slice(2))!; showSheet(); openConfig(sheet, world, { kind: r.machine, x: -1, y: -1, dir: 0 }, sheetActions, { recipe: r, done: (ok) => { done(ok); step(i + 1); } }); },
-        onDone: (r) => { if (r.ok && r.conf !== 'guess') right++; save(); },
-        onUndo: (r) => { if (r.ok && r.conf !== 'guess') right--; save(); },
+        onDone: (r) => { if (r.ok && r.conf !== 'guess') right++; mark(i + 1); save(); },
+        onUndo: (r) => { if (r.ok && r.conf !== 'guess') right--; mark(i); save(); },
         next: { label: i + 1 < ids.length ? '次へ' : '結果', go: () => step(i + 1) },
       });
     };
-    step(0);
+    if (run && run.i > 0) toast(`${title}：途中から続ける（${run.i} 問は答えてある）。`, 2400);
+    step(run ? run.i : 0);
   };
   const showNightSet = () => {
-    const ids = nightSetIds(world, Date.now());
-    if (!ids.length) { toast('今日覚えたもの・まちがえたものが、まだない。', 2400); return; }
-    runSet('今夜の 10 問', '今日覚えたもの・まちがえたもの。明日の朝、同じ問いを出す', ids, (right) => {
+    const today = dayKey(Date.now()), ids = nightSetIds(world, Date.now());
+    if (!ids.length && !runOf(world.study, 'night', today)) { toast('今日覚えたもの・まちがえたものが、まだない。', 2400); return; }
+    runSet('今夜の 10 問', '今日覚えたもの・まちがえたもの。明日の朝、同じ問いを出す', 'night', today, ids, (right, ids) => {
       world.night = { day: dayKey(Date.now()), ids, got: right };
       logNight(world);
       save();
@@ -879,7 +886,7 @@ function boot(data: HotData) {
   const showMorningSet = () => {
     const n = world.night;
     if (!n) return;
-    runSet('今朝の 10 問', `昨夜の問い（昨夜は ${n.ids.length} 問中 ${n.got} 問正解）`, n.ids, (right) => {
+    runSet('今朝の 10 問', `昨夜の問い（昨夜は ${n.ids.length} 問中 ${n.got} 問正解）`, 'morning', n.day, n.ids, (right) => {
       n.morning = right;
       logNight(world);
       save();
@@ -953,9 +960,19 @@ function boot(data: HotData) {
     return buildQueue(world, now, 8, []).find((id) => !recent.includes(id) && quizFor(world, id)) ?? null;
   };
   const hideCard = () => { rvCard.hidden = true; lastCardAt = performance.now(); };
+  /** 札に出している問いと、出したときの覚え具合（答えた回数・最後に答えた時刻）。札で答えたら done */
+  let cardOn: { id: string; n: number; last: number; done: boolean } | null = null;
+  const cardMark = (id: string) => { const c = world.srs[id]; return { n: c?.n ?? 0, last: c?.last ?? 0 }; };
+  /** 札の問いを、札で答える前に、ほかの所（復習の窓・今夜の 10 問）で答えたら、札を下げる（同じ問いを 2 度数えない） */
+  const cardCheck = () => {
+    if (rvCard.hidden || !cardOn || cardOn.done) return;
+    const m = cardMark(cardOn.id);
+    if (m.n !== cardOn.n || m.last !== cardOn.last) hideCard();
+  };
   const showCard = (id: string) => {
     const q = quizFor(world, id);
     if (!q) return;
+    cardOn = { id, ...cardMark(id), done: false };
     recentCards.push(id); if (recentCards.length > 30) recentCards.shift();
     rvCard.hidden = false;
     rvLeft.textContent = `残り ${reviewCount(world)}`;
@@ -967,8 +984,8 @@ function boot(data: HotData) {
         openConfig(sheet, world, { kind: r.machine, x: -1, y: -1, dir: 0 }, sheetActions, { recipe: r, done: (ok) => { done(ok); closeModal(); } });
         sheet.prepend(h('p', { class: 'muted' }, '前回まちがえた反応：すべてを組み直す'));
       },
-      onDone: () => { rvLeft.textContent = `残り ${reviewCount(world)}`; $('due').textContent = reviewCount(world) ? String(reviewCount(world)) : ''; save(); },
-      onUndo: () => { rvLeft.textContent = `残り ${reviewCount(world)}`; $('due').textContent = reviewCount(world) ? String(reviewCount(world)) : ''; save(); },
+      onDone: () => { if (cardOn) cardOn.done = true; rvLeft.textContent = `残り ${reviewCount(world)}`; $('due').textContent = reviewCount(world) ? String(reviewCount(world)) : ''; save(); },
+      onUndo: () => { if (cardOn) cardOn.done = false; rvLeft.textContent = `残り ${reviewCount(world)}`; $('due').textContent = reviewCount(world) ? String(reviewCount(world)) : ''; save(); },
       next: { label: '次の問い', go: () => { const n = nextCardId(); if (n) showCard(n); else { hideCard(); toast('いま出す問いは、もうない。', 1800); } } },
     });
   };
@@ -1081,8 +1098,8 @@ function boot(data: HotData) {
   document.addEventListener('keydown', (ev) => {
     const tag = (ev.target as HTMLElement | null)?.tagName;
     if (!slot || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ev.isComposing) return;
-    // 復習の問い（窓でも札でも）：数字で選び、Enter で次へ
-    if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && quizKey(ev.key)) { ev.preventDefault(); return; }
+    // 復習の問い（窓でも札でも）：数字で選び、Enter で次へ。窓を開いている間は、窓の中の問いだけ（下に残った札には答えない）
+    if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && quizKey(ev.key, modal.hidden ? null : sheet)) { ev.preventDefault(); return; }
     const k = ev.key, low = k.length === 1 ? k.toLowerCase() : k;
     if (!modal.hidden) { if (k === 'Escape') { ev.preventDefault(); closeModal(); } return; }
     if (!closingEl.hidden) return;
@@ -2215,6 +2232,7 @@ function boot(data: HotData) {
       if (shotPending) takeShot();
       if (++miniTick % 20 === 0) paintMini();
       if (miniTick % 30 === 0) cardTick(performance.now());
+      cardCheck();
       if (++sleepTick % 60 === 0) sleepCheck();
       if (!sandbox && !document.hidden) addPlayTime(world, dt * 1000);
       if (PERF) { PERF.draw.push(performance.now() - d0); if (PERF.draw.length > 600) { PERF.draw.shift(); PERF.step.shift(); } }
