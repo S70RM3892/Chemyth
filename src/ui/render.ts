@@ -32,6 +32,7 @@ export interface View { /** 夕暮れ（実際の時刻。0 昼〜1 夜） */ du
   /** 選んだ設備の出口と入口（d は物が流れる向き） */ ports?: { x: number; y: number; d: number; out: boolean }[] | null;
   /** 選んだ装置と同じ反応の装置（印をつける） */ marks?: Ent[] | null;
   /** 反応式の札を、うんと近づかなくても出す */ allPlates?: boolean;
+  /** 1 枚だけ描く絵（アルバムの写真、タイトルの小さな絵）。画面の煙や光（粒子・光の効果）は描かず、進めず、消さない。世界の出来事（w.fx）も、画面のために残しておく */ still?: boolean;
   /** 上に重ねて描くもの（src/ui/build2.ts）。base は地面の層、top は天面の層（平らな表示では同じ） */ over?: (base: CanvasRenderingContext2D, top: CanvasRenderingContext2D, sx: (x: number) => number, sy: (y: number) => number, z: number, t: number, view: View) => void }
 
 // 方眼ノートに描いた工場の図面。輪郭線と斜線で描き、ぼかしや発光は使わない
@@ -566,8 +567,8 @@ function districts(w: World): District[] {
 export function draw(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: World, cam: Camera, t: number, dt: number, view: View) {
   if (view.three || !farBegin(ctx, cam, t, cw, ch)) drawNear(ctx, cw, ch, w, cam, t, dt, view);
   else {
-    // 引いた視野では煙や土ぼこりを描かないので、出来事はためずに捨てる
-    w.fx.length = 0; particles.length = 0;
+    // 引いた視野では煙や土ぼこりを描かないので、出来事はためずに捨てる（写真などは、画面の分を消さない）
+    if (!view.still) { w.fx.length = 0; particles.length = 0; }
     drawFar(ctx, cw, ch, w, cam, t, view, palette());
     // 旗や名前の札など、上に重ねるもの（build2.ts）は、引いた視野でも小さな印として出す
     const z = cam.z, off = (view.floor || 0) * FLOOR_DY;
@@ -593,7 +594,10 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   const gy = (y: number) => (y - cam.y) * z + ch / 2;
   const sy = (y: number) => (y - off - cam.y) * z + ch / 2;
   SIG = w.sig;
-  spawn(w, P);
+  // 写真などの 1 枚だけの絵では、出来事を受け取らない（受け取ると、画面に出るはずの光の柱や粒子を、写真の側で使い切ってしまう）
+  if (!view.still) spawn(w, P);
+  /** 1 枚だけの絵を描く前の粒子の数（描くあいだに足された煙は、画面のものではないので捨てる） */
+  const keep = particles.length;
   FONT_HAND = P.font;
   FONT_SMALL = P.skin === 'punk' ? FONT_UI : P.font;
   const punk = P.skin === 'punk', arcane = P.skin === 'arcane', lab = P.skin === 'lab', light = P.name === 'light';
@@ -1395,8 +1399,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     }
   }
 
-  // ---- 稼働率の色分けと、ベルトの毎分の数（統計の重ね表示のあいだ） ----
-  mapStats(ctx, P, w, !!view.stats, sx, sy, z, inView);
+  // ---- 稼働率の色分けと、ベルトの毎分の数（統計の重ね表示のあいだ）。立体表示では、地面に描くもの（1 マスの装置・ベルト）と天面に描くものを分ける ----
+  mapStats(base, ctx, P, w, !!view.stats, sx, sy, z, inView);
   // ---- 稼働率の札：装置の上に、直近の稼働率と止まっている理由を出す ----
   if (view.stats && z >= 13) {
     const GOOD = '#2f8f55', WARN = '#c9821a';
@@ -1588,7 +1592,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   // ---- 粒子 ----
   if (T) use(T);
   ctx.textAlign = 'center';
-  for (let i = particles.length - 1; i >= 0; i--) {
+  if (view.still) particles.length = Math.min(particles.length, keep);
+  for (let i = view.still ? -1 : particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.age += dt;
     if (p.age >= p.life) { particles.splice(i, 1); continue; }
@@ -1635,7 +1640,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   }
   ctx.globalAlpha = 1;
   // ---- 光の効果（納品の光の尾・反応の光・列車の到着・指令の光の柱） ----
-  drawGlints(ctx, G, P, sx, sy, z, dt, cw, ch, three ? { screen: three.screen, project: three.project } : null);
+  if (!view.still) drawGlints(ctx, G, P, sx, sy, z, dt, cw, ch, three ? { screen: three.screen, sh: three.sh, project: three.project } : null);
 
   use(base);
   if (punk) ambient(ctx, P, cw, ch, t, dt, sx(hr.x + hr.s / 2), sy(hr.y + hr.s / 2), z);

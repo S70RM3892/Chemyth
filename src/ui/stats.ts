@@ -9,7 +9,7 @@ import { label, sub } from '../content/substances';
 import { PERIODS, balanceOf, bottlenecks, deliverySeries, hourTrend, machineTypes, periodName, statsCsv, stockSeries, stopReasons, type Neck, type Period } from '../engine/flow';
 import { ACHIEVEMENTS } from '../engine/achieve';
 import { fold, lineChart, saveText, setStatsUi, stackBar, stampOf, statsUi } from './charts';
-import { heatOn, setHeat } from './mapfx';
+import { cvdOn, heatOn, setHeat } from './mapfx';
 import { showChain } from './chain';
 import { showGoalLog } from './goals';
 import { showAchievements } from './achieve';
@@ -281,7 +281,7 @@ export function showStats(c: StatsCtx) {
         h('span', { class: 'state' }, h('i', {}, '？'), `未設定 ${f.unset} 台`))),
     fold('neck', '詰まりの元（押すとその場所へ）', true, ...necks(c)),
     h('div', { class: 'row' }, toggle, heat),
-    heatOn() ? h('p', { class: 'muted' }, '色分け：緑はよく動いている、黄は半分ほど、赤は止まりがち。近づくと割合も出る。') : null,
+    heatOn() ? h('p', { class: 'muted' }, cvdOn() ? '色分け：青はよく動いている、黄は半分ほど、橙に斜線は止まりがち。近づくと割合も出る。' : '色分け：緑はよく動いている、黄は半分ほど、赤は止まりがち。近づくと割合も出る。') : null,
     c.overlay() ? h('p', { class: 'muted' }, '重ね表示：装置の上に稼働率、詰まっているマスに色、ベルトに毎分の数（引いた視点では、流れの多いベルトほど太い線）。') : null,
     fold('chart', '納品数の推移', true, deliveryChart(w, per)),
     fold('balance', '物質ごとの収支', true, ...balanceTable(w, per)),

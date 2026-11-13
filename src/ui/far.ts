@@ -16,6 +16,7 @@ import { DX, DY, FLOOR_DY, at, currentGoal, floorOf, inflow, isMachine, sizeOf, 
 import { districtsOf, type District } from '../engine/districts';
 import { BRASS_DARK, mix, onThemeChange, type Palette } from './theme';
 import { sprite } from './token';
+import { cvdOn, flowLines, heatColor, heatOn, STALL } from './mapfx';
 import type { Camera, View } from './render';
 
 /** 引いた視野に替わる 1 マスの大きさ（CSS ピクセル）。境の前後でちらつかないよう、入るのは 7.5 より小さくなったとき、出るのは 8.5 より大きくなったとき */
@@ -87,6 +88,20 @@ export function farEnd(ctx: CanvasRenderingContext2D, cw: number, ch: number, ca
 // ---- 色と形（見た目ごとに作ってためておく）----
 /** 輪郭の色。近くの絵に合わせる（工業は黒い鋼の縁、魔術は真鍮の暗い縁、ほかは主線の色） */
 const edgeOf = (P: Palette) => (P.skin === 'punk' ? '#0b0d10' : P.skin === 'arcane' ? (P.name === 'light' ? BRASS_DARK : '#07060d') : P.ink);
+/** ベルトの縁の色。研究所は、近くの絵（skinLab.ts のベルト）と同じ銀（夜は黒）の縁 */
+const rimOf = (P: Palette) => (P.skin === 'lab' ? (P.name === 'light' ? '#7f8c97' : '#02060b') : edgeOf(P));
+/** 線路の色（桁と、中の 2 本のレール）。近くの絵（render.ts の貨物線）と同じ */
+const railOf = (P: Palette) => {
+  const light = P.name === 'light', punk = P.skin === 'punk', lab = P.skin === 'lab';
+  return { ink: punk ? '#0b0d10' : lab && !light ? '#03070c' : P.ink, core: punk ? (light ? '#c9ced3' : '#8a939c') : lab ? (light ? '#dfe7ec' : '#6c8194') : light ? '#e9e6da' : '#aeb6c2' };
+};
+/** 2 階を見ているときに地面を覆う床板の色。近くの絵と同じ */
+const floorCover = (P: Palette) => {
+  const light = P.name === 'light';
+  return P.skin === 'punk' ? (light ? 'rgba(196,201,206,0.82)' : 'rgba(15,18,22,0.84)') : P.skin === 'lab' ? (light ? 'rgba(226,234,240,0.84)' : 'rgba(6,11,18,0.86)') : light ? 'rgba(240,242,236,0.84)' : 'rgba(22,26,34,0.84)';
+};
+/** 色覚の補助のとき、動いている装置の印の色（render.ts と同じ青） */
+const CVD_GO = '#2f7fd8';
 const looks = new Map<string, { fill: string; rim: string }>();
 const labels = new Map<string, { cv: HTMLCanvasElement; w: number; h: number }>();
 const subColors = new Map<string, string>();
@@ -339,7 +354,9 @@ function haloText(ctx: CanvasRenderingContext2D, P: Palette, text: string, x: nu
 
 /** 1 マスが cam.z ピクセルの引いた視野を描く */
 export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: World, cam: Camera, t: number, view: View, P: Palette) {
-  const z = cam.z, light = P.name === 'light', ink = edgeOf(P);
+  const z = cam.z, light = P.name === 'light', ink = edgeOf(P), rail = railOf(P);
+  // 装置の縁取りは主線の色（近くの絵の、引いたときの装置と同じ）。色覚の補助と、稼働率の色分け（統計の切り替え）
+  const line = P.skin === 'punk' ? '#0b0d10' : P.ink, cv = cvdOn(), heat = heatOn();
   frameNo++;
   const fl = view.floor || 0, off = fl * FLOOR_DY;
   const sx = (x: number) => (x - cam.x) * z + cw / 2, sy = (y: number) => (y - cam.y) * z + ch / 2;
@@ -395,8 +412,7 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
   ctx.globalAlpha = 1;
   if (off) {
     // 2 階：地面を床板で覆う（近くの絵と同じ色）
-    const punk = P.skin === 'punk';
-    ctx.fillStyle = punk ? (light ? 'rgba(196,201,206,0.82)' : 'rgba(15,18,22,0.84)') : light ? 'rgba(240,242,236,0.84)' : 'rgba(22,26,34,0.84)';
+    ctx.fillStyle = floorCover(P);
     ctx.fillRect(0, 0, cw, ch);
   }
 
@@ -405,7 +421,11 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
   const runs = beltRuns(w, fl), bridges: number[] = [];
   const rects = new Map<string, number[]>();
   const items = new Map<string, number[]>();
-  const bad: number[] = [], busy: number[] = [], jams: number[] = [], below: number[] = [];
+  const bad: number[] = [], busy: number[] = [], jams: number[] = [], below: number[] = [], stall: number[] = [];
+  /** 流れの線を引くベルト（稼働率の重ね表示のとき） */
+  const flows: Ent[] = [];
+  /** 稼働率の色（5 % ごと。このコマで使う分だけ作る） */
+  const heatCols: string[] = [];
   const showItems = z >= 4;
   for (const e of w.ents.values()) {
     const k = e.kind;
@@ -421,6 +441,7 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
     if (k === 'belt' || k === 'bridge') {
       const cx = e.x + 0.5, cy = ey + 0.5;
       if (k === 'bridge') bridges.push(e.x, ey);
+      else if (view.stats) flows.push(e);
       const it = e.item ?? e.items?.find((q) => !!q);
       if (it) {
         if (showItems) {
@@ -434,7 +455,14 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
       }
       continue;
     }
-    const sz = sizeOf(e), col = MACHINES[k as keyof typeof MACHINES]?.color ?? P.soft;
+    const sz = sizeOf(e);
+    let col = MACHINES[k as keyof typeof MACHINES]?.color ?? P.soft;
+    if (heat && ((isMachine(k) && !!e.recipe) || k === 'extractor')) {
+      // 稼働率の色分け：近くの絵（mapfx.ts）と同じ色で、機種の色の代わりに塗る（色は 5 % ごとにまとめる）
+      const b = Math.round(Math.max(0, Math.min(1, e.u ?? (k === 'extractor' ? 1 : 0))) * 20);
+      col = heatCols[b] ??= heatColor(b / 20, light, cv, 1);
+      if (cv && b / 20 < STALL) stall.push(e.x, ey, sz);
+    }
     let list = rects.get(col);
     if (!list) rects.set(col, (list = []));
     list.push(e.x, ey, sz);
@@ -464,7 +492,7 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
   for (let i = 0; i < bridges.length; i += 2) { const cx = bridges[i] + 0.5, cy = bridges[i + 1] + 0.5; cross.push(cx - 0.5, cy, cx + 0.5, cy, cx, cy - 0.5, cx, cy + 0.5); }
   const lane = (k: BK) => (k === 'none' && cross.length ? runs.none.concat(cross) : runs[k]);
   if (edgeK > 0) {
-    ctx.globalAlpha = edgeK; ctx.fillStyle = ink;
+    ctx.globalAlpha = edgeK; ctx.fillStyle = rimOf(P);
     for (const k of KINDS) strip(lane(k), Math.max(1, z * WIDTH[k]) / 2 + Math.max(1.2, z * 0.045));
     ctx.globalAlpha = 1;
   }
@@ -483,21 +511,28 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
       ctx.fill();
     }
   }
-  // 詰まり（稼働率の重ね表示のとき）：待っている荷のマスを、黄 → 赤で塗る
+  // 詰まり（稼働率の重ね表示のとき）：待っている荷のマスを、黄 → 赤で塗る。
+  // 色覚の補助のときは、形でも分ける（待ち始めは枠だけ、詰まりきったら塗りつぶす。近くの絵の点線の枠と斜線の網にあたる）
   if (jams.length) {
     for (const hot of [false, true]) {
-      ctx.fillStyle = hot ? 'rgba(214,48,49,0.75)' : 'rgba(235,165,35,0.7)';
+      const hollow = cv && !hot, s = Math.max(2, z), lw = Math.max(1, Math.min(2, z * 0.2));
       ctx.beginPath();
-      for (let i = 0; i < jams.length; i += 3) if ((jams[i + 2] >= 1) === hot) ctx.rect(sx(jams[i]), sy(jams[i + 1]), Math.max(2, z), Math.max(2, z));
-      ctx.fill();
+      for (let i = 0; i < jams.length; i += 3) if ((jams[i + 2] >= 1) === hot) {
+        if (hollow) ctx.rect(sx(jams[i]) + lw / 2, sy(jams[i + 1]) + lw / 2, s - lw, s - lw);
+        else ctx.rect(sx(jams[i]), sy(jams[i + 1]), s, s);
+      }
+      if (hollow) { ctx.strokeStyle = 'rgba(235,165,35,0.95)'; ctx.lineWidth = lw; ctx.stroke(); }
+      else { ctx.fillStyle = hot ? 'rgba(214,48,49,0.75)' : 'rgba(235,165,35,0.7)'; ctx.fill(); }
     }
   }
+  // 稼働率の重ね表示のとき：流れの多いベルトほど太い線（近くの絵と同じ）
+  if (flows.length) flowLines(ctx, P, w, sx, (y) => sy(y - off), z, flows);
 
   // 装置：機種の色の四角（色ごとに続けて塗る）。寄っているうちは、ひと回り大きい主線の色の四角を下に敷いて縁取りにする
   const pad = z >= 3 ? z * 0.08 : 0;
   if (z >= 2.5) {
     const lw = Math.max(1, z * 0.07);
-    ctx.globalAlpha = Math.min(1, z - 2.5); ctx.fillStyle = ink;
+    ctx.globalAlpha = Math.min(1, z - 2.5); ctx.fillStyle = line;
     for (const list of rects.values()) for (let i = 0; i < list.length; i += 3) { const s = Math.max(1, list[i + 2] * z - pad * 2); ctx.fillRect(sx(list[i]) + pad - lw, sy(list[i + 1]) + pad - lw, s + lw * 2, s + lw * 2); }
     ctx.globalAlpha = 1;
   }
@@ -505,11 +540,23 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
     ctx.fillStyle = c;
     for (let i = 0; i < list.length; i += 3) { const s = Math.max(1, list[i + 2] * z - pad * 2); ctx.fillRect(sx(list[i]) + pad, sy(list[i + 1]) + pad, s, s); }
   }
+  // 色覚の補助のとき、稼働率の色分けで止まりがちの装置には、斜めの線を 1 本
+  if (stall.length && z >= 2.5) {
+    ctx.strokeStyle = line; ctx.lineWidth = Math.max(1, z * 0.09); ctx.beginPath();
+    for (let i = 0; i < stall.length; i += 3) { const s = stall[i + 2] * z - pad * 2, X = sx(stall[i]) + pad, Y = sy(stall[i + 1]) + pad; ctx.moveTo(X, Y); ctx.lineTo(X + s, Y + s); }
+    ctx.stroke();
+  }
   // 状態：止まっている装置（設定がない・出口が詰まった・使わない物質が来た）は赤い輪。寄っているうちは、動いている装置に緑の点
+  // （色覚の補助のときは、近くの絵と同じく青い丸）
   if (z >= 3 && busy.length) {
-    ctx.fillStyle = '#58e06a'; ctx.beginPath();
-    for (let i = 0; i < busy.length; i += 3) { const s = busy[i + 2] * z * 0.28; ctx.rect(sx(busy[i]) - s / 2, sy(busy[i + 1]) - s / 2, s, s); }
+    ctx.fillStyle = cv ? CVD_GO : '#58e06a'; ctx.beginPath();
+    for (let i = 0; i < busy.length; i += 3) {
+      const s = busy[i + 2] * z * 0.28, X = sx(busy[i]), Y = sy(busy[i + 1]);
+      if (cv) { ctx.moveTo(X + s * 0.6, Y); ctx.arc(X, Y, s * 0.6, 0, Math.PI * 2); } else ctx.rect(X - s / 2, Y - s / 2, s, s);
+    }
     ctx.fill();
+    // 稼働率の色分けのときは、よく動く装置が点と同じ色で塗られるので、点を縁取って見分ける
+    if (heat) { ctx.strokeStyle = line; ctx.lineWidth = 1; ctx.stroke(); }
   }
   if (bad.length) {
     ctx.strokeStyle = P.red; ctx.lineWidth = z < 3 ? 1.5 : 2;
@@ -530,8 +577,8 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
         if (m & 2) { p.moveTo(sx(x + 0.5), sy(y + 0.5)); p.lineTo(sx(x + 0.5), sy(y + 1.5)); }
       }
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      ctx.strokeStyle = ink; ctx.lineWidth = Math.max(2, z * 0.26); ctx.stroke(p);
-      ctx.strokeStyle = light ? '#e9e6da' : '#aeb6c2'; ctx.lineWidth = Math.max(0.8, z * 0.1); ctx.stroke(p);
+      ctx.strokeStyle = rail.ink; ctx.lineWidth = Math.max(2, z * 0.26); ctx.stroke(p);
+      ctx.strokeStyle = rail.core; ctx.lineWidth = Math.max(0.8, z * 0.1); ctx.stroke(p);
     }
     for (const { e, routes } of routesOf(w)) {
       const col = lineColor(e.ch || 1);
@@ -561,23 +608,24 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
       if (X < -r || Y < -r || X > cw + r || Y > ch + r) continue;
       ctx.beginPath(); ctx.arc(X, Y, r, 0, Math.PI * 2);
       ctx.fillStyle = lineColor(trains[i + 2]); ctx.fill();
-      ctx.strokeStyle = trains[i + 3] ? P.red : ink; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.strokeStyle = trains[i + 3] ? P.red : rail.ink; ctx.lineWidth = 1.5; ctx.stroke();
     }
   }
 
   // ---- 納品所：小さく見えても見落とさない、太い印 ----
   const hr = hubRect(w.hubSize), hcx = sx(hr.x + hr.s / 2), hcy = sy(hr.y + hr.s / 2);
   if (!off) {
-    const R = Math.max(hr.s * z / 2, 8);
+    // 研究所の納品所は、近くの絵と同じく青緑の炉心（赤い印と赤い光にしない）
+    const R = Math.max(hr.s * z / 2, 8), lab = P.skin === 'lab', glowRgb = lab ? P.glow : '255,70,40';
     ctx.lineJoin = 'miter';
     rr(ctx, hcx - R - 3, hcy - R - 3, R * 2 + 6, R * 2 + 6, R * 0.35 + 2); ctx.fillStyle = P.paper; ctx.fill();
-    rr(ctx, hcx - R, hcy - R, R * 2, R * 2, R * 0.3); ctx.fillStyle = P.red; ctx.fill();
+    rr(ctx, hcx - R, hcy - R, R * 2, R * 2, R * 0.3); ctx.fillStyle = lab ? P.hi : P.red; ctx.fill();
     ctx.strokeStyle = ink; ctx.lineWidth = 2; ctx.stroke();
     const r2 = R * 0.42;
-    ctx.fillStyle = light ? '#ffffff' : P.hi; ctx.fillRect(hcx - r2 / 2, hcy - r2 / 2, r2, r2);
+    ctx.fillStyle = light ? '#ffffff' : lab ? P.paper : P.hi; ctx.fillRect(hcx - r2 / 2, hcy - r2 / 2, r2, r2);
     if (G) {
       const r3 = Math.max(hr.s * z * 1.1, 26), g = G.createRadialGradient(hcx, hcy, 0, hcx, hcy, r3);
-      g.addColorStop(0, `rgba(255,70,40,${0.45 + 0.08 * Math.sin(t * 2.3)})`); g.addColorStop(1, 'rgba(255,70,40,0)');
+      g.addColorStop(0, `rgba(${glowRgb},${0.45 + 0.08 * Math.sin(t * 2.3)})`); g.addColorStop(1, `rgba(${glowRgb},0)`);
       G.fillStyle = g; G.fillRect(hcx - r3, hcy - r3, r3 * 2, r3 * 2);
     }
   }

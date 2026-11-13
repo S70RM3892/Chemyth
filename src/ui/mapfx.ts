@@ -1,7 +1,7 @@
 /**
  * 地図の上の統計と手ごたえ（render.ts から短く呼ぶ）。
  *  - 稼働率の重ね表示のあいだ：ベルトに毎分の数（引いた視点では、流れの多いベルトほど太い線）
- *  - 稼働率の色分け：装置を緑（よく動く）→ 赤（止まりがち）で塗る
+ *  - 稼働率の色分け：装置を緑（よく動く）→ 赤（止まりがち）で塗る（色覚の補助では青 → 黄 → 橙と斜線。引いた視野でも far.ts が同じ色で塗る）
  *  - 納品所の上の計器：直近 1 分の納品の速さと、操業評価の目安
  *  - 高画質の光：納品所へ飛び込む荷の光の尾、反応を終えたときの光（多いときは間引く）、指令を達成したときの光の柱
  *  - 列車が降ろす駅に着いたとき：光の輪と、降ろした数
@@ -12,6 +12,7 @@ import { recentRate } from '../engine/flow';
 import { GRADES, beltPassed, currentGoal, DX, DY, groundY, isMachine, sizeOf, type Ent, type World } from '../engine/world';
 import { setStatsUi, statsUi } from './charts';
 import type { Palette } from './theme';
+import { riseTo } from './three';
 import { sprite } from './token';
 
 type Fx = World['fx'][number];
@@ -33,6 +34,22 @@ function rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: n
 let heat = statsUi().heat === true;
 export const heatOn = () => heat;
 export function setHeat(on: boolean) { heat = on; setStatsUi({ heat: on }); }
+/** 色覚の補助（設定）。1 回の描画で 1 度だけ読む */
+export const cvdOn = () => typeof document !== 'undefined' && document.documentElement.classList.contains('cvd');
+/** 色覚の補助のときの稼働率の色：こげ茶がかった橙（0 %）→ 黄（50 %）→ 青（100 %）。動いている印の青（render.ts）と同じ向き */
+const CVD_HEAT = [[184, 72, 16], [232, 182, 18], [47, 127, 216]];
+/**
+ * 稼働率 u（0〜1）の色。a は不透明度、edge は縁の色（塗りより、明るい地図では濃く、暗い地図では明るく）。
+ * ふだんは赤（0 %）→ 黄（50 %）→ 緑（100 %）。色覚の補助（cv）のときは、赤と緑で分けない色にする
+ */
+export function heatColor(u: number, light: boolean, cv: boolean, a: number, edge = false): string {
+  if (!cv) return `hsla(${Math.round(u * 120)},${edge ? 80 : 78}%,${edge ? (light ? 38 : 60) : light ? 48 : 52}%,${a})`;
+  const lo = u < 0.5, p = CVD_HEAT[lo ? 0 : 1], q = CVD_HEAT[lo ? 1 : 2], k = lo ? u * 2 : (u - 0.5) * 2;
+  const c = p.map((v, i) => { const m = v + (q[i] - v) * k; return Math.round(!edge ? m : light ? m * 0.68 : m + (255 - m) * 0.3); });
+  return `rgba(${c.join(',')},${a})`;
+}
+/** 止まりがち（稼働率 35 % 未満）。色覚の補助のときは、色だけでなく斜線でも示す */
+export const STALL = 0.35;
 
 // ---------------- 光の効果 ----------------
 
@@ -80,7 +97,7 @@ export function noteFx(f: Fx): boolean {
  * 標準の画質では、列車の数だけを描き、ほかの光は捨てる
  */
 export function drawGlints(ctx: CanvasRenderingContext2D, G: CanvasRenderingContext2D | null, P: Palette, sx: ToScreen, sy: ToScreen, z: number, dt: number, cw: number, ch: number,
-  three: { screen: CanvasRenderingContext2D; project(x: number, y: number, h?: number): [number, number] } | null) {
+  three: { screen: CanvasRenderingContext2D; sh: number; project(x: number, y: number, h?: number): [number, number] } | null) {
   view = { x0: (0 - sx(0)) / z, y0: (0 - sy(0)) / z, x1: (cw - sx(0)) / z, y1: (ch - sy(0)) / z };
   const now = performance.now() / 1000;
   popBudget = Math.min(POP_MAX, popBudget + (now - popAt) * POP_RATE); popAt = now;
@@ -142,13 +159,16 @@ export function drawGlints(ctx: CanvasRenderingContext2D, G: CanvasRenderingCont
 }
 
 /** 指令を達成したとき：納品所から光の柱が立つ（高画質）。立体表示では、画面の層に高さをつけて描く */
-function pillar(ctx: CanvasRenderingContext2D, G: CanvasRenderingContext2D, three: { screen: CanvasRenderingContext2D; project(x: number, y: number, h?: number): [number, number] } | null,
+function pillar(ctx: CanvasRenderingContext2D, G: CanvasRenderingContext2D, three: { screen: CanvasRenderingContext2D; sh: number; project(x: number, y: number, h?: number): [number, number] } | null,
   sx: ToScreen, sy: ToScreen, z: number, g: Glint, k: number, light: boolean) {
   // 立ち上がり 0.2、保ち、終わり 1/3 で消える
   const env = Math.min(1, k / 0.07) * Math.min(1, (1 - k) / 0.33), flick = 0.9 + 0.1 * Math.sin(g.age * 40);
   const a = env * flick, hs = hubRect(2).s;
   if (three) {
-    const S = three.screen, [bx, by] = three.project(g.x, g.y, 0), [tx, ty] = three.project(g.x, g.y, 14), wid = Math.max(10, Math.abs(three.project(g.x + hs * 0.5, g.y, 0)[0] - bx));
+    // 柱の先は 14 マスの高さ。うんと寄って先がカメラより後ろになるとき（低い画面）や、画面よりずっと上へ出るときは、画面 1 枚ぶん上で止める
+    const S = three.screen, [bx, by] = three.project(g.x, g.y, 0), top = riseTo(three.project, g.x, g.y, 14, -three.sh);
+    if (!top) return;
+    const [tx, ty] = top, wid = Math.max(10, Math.abs(three.project(g.x + hs * 0.5, g.y, 0)[0] - bx));
     S.save(); S.globalCompositeOperation = 'lighter';
     for (const [m, al] of [[1.6, 0.18], [0.8, 0.35], [0.3, 0.7]] as const) {
       const gr = S.createLinearGradient(bx, by, tx, ty);
@@ -192,19 +212,31 @@ function beltRate(w: World, e: Ent): number {
 }
 const fmtRate = (r: number) => (r >= 10 ? String(Math.round(r)) : r.toFixed(1));
 
-/** 統計の重ね表示（stats）と色分け（切り替え）。装置と札の上、稼働率の札の下に描く */
-export function mapStats(ctx: CanvasRenderingContext2D, P: Palette, w: World, stats: boolean, sx: ToScreen, sy: ToScreen, z: number, inView: (e: Ent) => boolean) {
+/** 斜線の網（色覚の補助で、止まりがちの装置に重ねる） */
+function hatch(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, col: string, lw: number) {
+  ctx.save(); ctx.beginPath(); ctx.rect(x, y, s, s); ctx.clip(); ctx.beginPath();
+  for (let d = -s; d < s; d += s * 0.25) { ctx.moveTo(x + d, y); ctx.lineTo(x + d + s, y + s); }
+  ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.stroke(); ctx.restore();
+}
+
+/**
+ * 統計の重ね表示（stats）と色分け（切り替え）。装置と札の上、稼働率の札の下に描く。
+ * base は地面の層、top は天面の層（平らな表示では同じ）。立体表示では、1 マスの装置の色分けとベルトの線は地面へ（1 マスの箱の天面には地面の絵が貼られる）、
+ * 2×2 の装置の色分けとベルトの札は天面へ描く（天面の層に描くと、1 マスの箱やベルトの上に浮いて見える）
+ */
+export function mapStats(base: CanvasRenderingContext2D, top: CanvasRenderingContext2D, P: Palette, w: World, stats: boolean, sx: ToScreen, sy: ToScreen, z: number, inView: (e: Ent) => boolean) {
   const punk = P.skin === 'punk';
   if (heat && z >= 5) {
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const cv = cvdOn();
+    for (const c of base === top ? [base] : [base, top]) { c.textAlign = 'center'; c.textBaseline = 'middle'; }
     for (const e of w.ents.values()) {
       const cfg = isMachine(e.kind) && !!e.recipe;
       if ((!cfg && e.kind !== 'extractor') || !inView(e)) continue;
-      const u = Math.max(0, Math.min(1, e.u ?? (e.kind === 'extractor' ? 1 : 0))), sz = sizeOf(e), pad = z * 0.08;
-      // 赤（0 %）→ 黄（50 %）→ 緑（100 %）
-      const hue = Math.round(u * 120), x = sx(e.x) + pad, y = sy(e.y) + pad, s = sz * z - pad * 2;
-      ctx.fillStyle = `hsla(${hue},78%,${light(P) ? 48 : 52}%,0.42)`; ctx.fillRect(x, y, s, s);
-      ctx.strokeStyle = `hsla(${hue},80%,${light(P) ? 38 : 60}%,0.95)`; ctx.lineWidth = Math.max(2, z * 0.07); ctx.strokeRect(x, y, s, s);
+      const u = Math.max(0, Math.min(1, e.u ?? (e.kind === 'extractor' ? 1 : 0))), sz = sizeOf(e), pad = z * 0.08, ctx = sz === 2 ? top : base;
+      const x = sx(e.x) + pad, y = sy(e.y) + pad, s = sz * z - pad * 2, edge = heatColor(u, light(P), cv, 0.95, true);
+      ctx.fillStyle = heatColor(u, light(P), cv, 0.42); ctx.fillRect(x, y, s, s);
+      if (cv && u < STALL) hatch(ctx, x, y, s, edge, Math.max(1, z * 0.045));
+      ctx.strokeStyle = edge; ctx.lineWidth = Math.max(2, z * 0.07); ctx.strokeRect(x, y, s, s);
       // 色だけに頼らない：近づけば割合を書く
       if (z >= 18 && !stats) {
         const fs = Math.max(10, Math.min(14, z * 0.26));
@@ -213,33 +245,17 @@ export function mapStats(ctx: CanvasRenderingContext2D, P: Palette, w: World, st
         ctx.fillStyle = punk ? '#eef0ea' : P.ink; ctx.fillText(`${Math.round(u * 100)}%`, x + s / 2, y + s - fs * 0.7);
       }
     }
-    ctx.textBaseline = 'alphabetic';
+    for (const c of base === top ? [base] : [base, top]) c.textBaseline = 'alphabetic';
   }
   if (!stats) return;
   if (z < 15) {
-    // 引いた視点：流れの多いベルトほど太い線（太さの段ごとに、まとめて 1 回で引く）
-    const groups: number[][] = [[], [], [], [], []];
-    for (const e of w.ents.values()) {
-      if (e.kind !== 'belt' || !inView(e)) continue;
-      const r = beltRate(w, e);
-      if (r < 0.5) continue;
-      const k = r < 15 ? 0 : r < 40 ? 1 : r < 80 ? 2 : r < 160 ? 3 : 4, cx = sx(e.x + 0.5), cy = sy(e.y + 0.5);
-      groups[k].push(cx - DX[e.dir] * z * 0.5, cy - DY[e.dir] * z * 0.5, cx + DX[e.dir] * z * 0.5, cy + DY[e.dir] * z * 0.5);
-    }
-    ctx.lineCap = 'round';
-    for (const [pass, col] of [[1, punk ? '#0b0d10' : P.ink], [0, P.hi]] as const) {
-      groups.forEach((g, k) => {
-        if (!g.length) return;
-        ctx.strokeStyle = col; ctx.globalAlpha = pass ? 0.55 : 0.95;
-        ctx.lineWidth = Math.min(z * 0.95, 2 + k * 2.2) + pass * 2;
-        ctx.beginPath();
-        for (let i = 0; i < g.length; i += 4) { ctx.moveTo(g[i], g[i + 1]); ctx.lineTo(g[i + 2], g[i + 3]); }
-        ctx.stroke();
-      });
-    }
-    ctx.globalAlpha = 1;
+    // 引いた視点：流れの多いベルトほど太い線。ベルトは地面にあるので、地面の層に描く
+    const list: Ent[] = [];
+    for (const e of w.ents.values()) if (e.kind === 'belt' && inView(e)) list.push(e);
+    flowLines(base, P, w, sx, sy, z, list);
     return;
   }
+  const ctx = top;
   // 近い視点：4 マスおきに、毎分の数の札
   const fs = Math.max(9.5, Math.min(13, z * 0.27));
   ctx.font = `700 ${fs}px ${FONT_MONO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -255,6 +271,32 @@ export function mapStats(ctx: CanvasRenderingContext2D, P: Palette, w: World, st
   ctx.textBaseline = 'alphabetic';
 }
 const light = (P: Palette) => P.name === 'light';
+
+/**
+ * 流れの多いベルトほど太い線（太さの段ごとに、まとめて 1 回で引く）。belts は見えているベルト。
+ * 近くの絵（z < 15）と引いた視野（far.ts）の両方で使う。うんと引いても、段の違いが見える太さは残す
+ */
+export function flowLines(ctx: CanvasRenderingContext2D, P: Palette, w: World, sx: ToScreen, sy: ToScreen, z: number, belts: readonly Ent[]) {
+  const punk = P.skin === 'punk', groups: number[][] = [[], [], [], [], []];
+  for (const e of belts) {
+    const r = beltRate(w, e);
+    if (r < 0.5) continue;
+    const k = r < 15 ? 0 : r < 40 ? 1 : r < 80 ? 2 : r < 160 ? 3 : 4, cx = sx(e.x + 0.5), cy = sy(e.y + 0.5);
+    groups[k].push(cx - DX[e.dir] * z * 0.5, cy - DY[e.dir] * z * 0.5, cx + DX[e.dir] * z * 0.5, cy + DY[e.dir] * z * 0.5);
+  }
+  ctx.lineCap = 'round';
+  for (const [pass, col] of [[1, punk ? '#0b0d10' : P.ink], [0, P.hi]] as const) {
+    groups.forEach((g, k) => {
+      if (!g.length) return;
+      ctx.strokeStyle = col; ctx.globalAlpha = pass ? 0.55 : 0.95;
+      ctx.lineWidth = Math.min(Math.max(z * 0.95, 1.5 + k), 2 + k * 2.2) + pass * 2;
+      ctx.beginPath();
+      for (let i = 0; i < g.length; i += 4) { ctx.moveTo(g[i], g[i + 1]); ctx.lineTo(g[i + 2], g[i + 3]); }
+      ctx.stroke();
+    });
+  }
+  ctx.globalAlpha = 1;
+}
 
 // ---------------- 納品所の上の計器 ----------------
 
