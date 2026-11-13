@@ -122,9 +122,16 @@ async function upload(slot: number, force = false, keepalive = false): Promise<s
 async function download(slot: number): Promise<string> {
   if (!st) return 'signed_out';
   const n0 = seq[slot] || 0;
-  const r = await call<{ data: string; rev: number; at: number; device: string; summary: Partial<SaveBrief> }>('chemyth_save_get', { p_token: st.token, p_slot: slot });
+  const r = await call<{ data: string; rev: number; at: number; device: string; summary: CloudSave['summary'] }>('chemyth_save_get', { p_token: st.token, p_slot: slot });
   if (!st) return 'signed_out';
   if (!r.ok) { trouble = r.error; return r.error; }
+  // 一覧を受け取ったあとで「消した」印に変わっていた（この端末やほかの端末で、その枠を消した）。受け取るものはない。
+  // 手元も空なら、消えた番号を覚えておく（読めないセーブとして扱わない）
+  if (r.summary?.gone || r.data === 'gone') {
+    cloud[slot] = { slot, rev: r.rev, at: r.at, device: r.device, bytes: 0, summary: { gone: true } };
+    if (!store.read(slot)) { st.sync[slot] = { rev: r.rev, dirty: false }; conflicts.delete(slot); persist(); }
+    return '';
+  }
   const json = await unpack(r.data);
   if (!json || !deserialize(json)) { trouble = 'broken'; return 'broken'; }
   cloud[slot] = { slot, rev: r.rev, at: r.at, device: r.device, bytes: r.data.length, summary: r.summary };

@@ -1,6 +1,7 @@
 /**
  * ファイルからの読み込みと、読み込む前の控え（画面も保存先も持たない。単体テストで確かめる）。
- * - 設計図の棚：読み込んだ設計図も、この端末に置いてある設計図も、文字列での受け渡しと同じ検査（decodeBlueprint）に通す。
+ * - 設計図の棚：読み込んだ設計図も、この端末に置いてある設計図も、文字列での受け渡しと同じ検査（decodeBlueprint）に通す
+ *   （数・広さ・名前の長さは、文字列で渡すときの上限に切らない）。
  *   読み込んだ設計図は、いまの棚に足す（いまある設計図は消さない）
  * - 読み込む前の控え：置き換えた枠だけを控える。戻すときも、その枠だけを戻す（読み込みと関係ない枠には触らない）
  */
@@ -11,23 +12,31 @@ export interface Shelf { name: string; stamps: Stamp[] }
 /** 設計図の棚に置ける数 */
 export const SHELF_MAX = 16;
 
+/** 棚の設計図の名前の長さの上限。自動でつける名前（設計図 N：反応・反応）は、文字列で渡すときの 30 文字を超えることがある */
+const NAME_MAX = 100;
+/** 棚の設計図の広さの上限（マス）。自分で囲んだ範囲は、文字列で渡すときの上限（BP_SPAN）より広くてよい */
+const SHELF_SPAN = 1_000_000;
+
 /**
- * 棚の 1 件を確かめる。文字列にして読み直す（decodeBlueprint の検査をそのまま通す）。読めなければ null。
- * 棚の設計図は、文字列で渡せる数（BP_MAX）を超えてよいので、BP_MAX 個ずつに分けて確かめる
+ * 棚の 1 件を確かめる。設備と設定は、文字列にして読み直す（decodeBlueprint の検査をそのまま通す）。読めなければ null。
+ * 棚の設計図は、文字列で渡せる数（BP_MAX）と広さ（BP_SPAN）を超えてよい。数は BP_MAX 個ずつに分けて確かめ、
+ * 位置はここで確かめてから、文字列の検査には左上に寄せて通し、元の位置に戻す。名前もそのまま残す（文字列の 30 文字に切らない）
  */
 export function checkShelf(x: unknown): Shelf | null {
   try {
     const { name, stamps } = (x ?? {}) as { name?: unknown; stamps?: unknown };
     if (typeof name !== 'string' || !Array.isArray(stamps) || !stamps.length) return null;
+    const pos = (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= SHELF_SPAN;
     const out: Stamp[] = [];
-    let title = '';
     for (let i = 0; i < stamps.length; i += BP_MAX) {
-      const d = decodeBlueprint(encodeBlueprint(name, stamps.slice(i, i + BP_MAX) as Stamp[]));
-      if (!d) return null;
-      title = d.name;
-      out.push(...d.stamps);
+      const part = stamps.slice(i, i + BP_MAX) as Stamp[];
+      if (!part.every((b) => b && typeof b === 'object' && pos(b.dx) && pos(b.dy))) return null;
+      // 位置は上で確かめた。文字列の広さの上限に当たらないよう、左上（0, 0）に寄せて検査に通す
+      const d =decodeBlueprint(encodeBlueprint('', part.map((b) => ({ ...b, dx: 0, dy: 0 }))));
+      if (!d || d.stamps.length !== part.length) return null;
+      d.stamps.forEach((b, j) => out.push({ ...b, dx: part[j].dx, dy: part[j].dy }));
     }
-    return { name: title, stamps: out };
+    return { name: name.trim().slice(0, NAME_MAX) || '受け取った設計図', stamps: out };
   } catch { return null; }
 }
 
