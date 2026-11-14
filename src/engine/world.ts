@@ -1755,6 +1755,10 @@ function planFlush(w: World, e: Ent, pl: MachinePlan, ob: number[], erev: number
     if (pushInto(w, t, pl.tx[i], pl.ty[i], pl.td[i], pl.oo[i], undefined, k)) ob[i] -= k;
   }
 }
+/** 降ろす駅が 1 歩に出せる荷の数（1 荷は STACK_MAX 個まで）と、先頭から飛ばせる物質の種類の数 */
+const OUT_PUSHES = 16, OUT_SKIP = 4;
+/** 降ろす駅が満杯で降ろせない列車が、荷を積んだまま引き返すまでの時間（秒） */
+export const TRAIN_GIVE_UP = 4;
 const occRev = new WeakMap<World, number>();
 /** 積む駅 e の列車 1 本を、1 歩進める（毎歩・列車ごとに呼ぶので、ここでは配列も関数も作らない） */
 function runTrain(w: World, e: Ent, tr: Train, buf: string[], dt: number, sver: number) {
@@ -1764,8 +1768,14 @@ function runTrain(w: World, e: Ent, tr: Train, buf: string[], dt: number, sver: 
     tr.wait += dt;
     // 満載か、少し待っても増えなければ発車する
     if (tr.cargo.length && (tr.cargo.length >= cap || tr.wait > 2.5)) {
-      const ds = stationDests(w, e, sver).list;
-      if (ds.length) { e.rr = ((e.rr || 0) + 1) % ds.length; const to = ds[e.rr]; tr.to = key(to.x, to.y); tr.p = 1e-6; tr.wait = 0; tr.rt = undefined; }
+      // 行き先は順番に配る。満杯の降ろす駅は飛ばす（出口が詰まった駅へ、列車を送り続けない）。どこも満杯なら、空くまで駅で待つ
+      const ds = stationDests(w, e, sver).list, capS = stationCap(w);
+      for (let q = 1; q <= ds.length; q++) {
+        const i = ((e.rr || 0) + q) % ds.length, to = ds[i];
+        if ((to.buf ? to.buf.length : 0) >= capS) continue;
+        e.rr = i; tr.to = key(to.x, to.y); tr.p = 1e-6; tr.wait = 0; tr.rt = undefined;
+        break;
+      }
     }
     return;
   }
@@ -1801,8 +1811,15 @@ function runTrain(w: World, e: Ent, tr: Train, buf: string[], dt: number, sver: 
         const got = tr.cargo.splice(0, room);
         for (let i = 0; i < got.length; i++) db.push(got[i]);
         w.fx.push({ x: dest!.x + 1, y: dest!.y + 1, type: 'train', s: got[0].replace(/^!/, ''), n: got.length });
+        tr.wait = 0;
       }
-      if (!tr.cargo.length) { tr.back = true; e.n = (e.n || 0) + 1; }
+      if (!tr.cargo.length) { tr.back = true; tr.wait = 0; e.n = (e.n || 0) + 1; }
+      else {
+        // 満杯で降ろせない：しばらく待って空かなければ、残りの荷を積んだまま引き返す（戻ったら、空いている駅へ出直す）。
+        // 待ち続けると、出口の詰まった駅 1 つの前に、番線じゅうの列車が集まって止まってしまう
+        tr.wait += dt;
+        if (tr.wait > TRAIN_GIVE_UP) { tr.back = true; tr.wait = 0; }
+      }
     }
   } else {
     if (!held) tr.p = Math.max(0, tr.p - v);
@@ -2068,12 +2085,25 @@ export function step(w: World, dt: number) {
         if (e.role === 'out') {
           // 降ろす駅：ためたものを、正面の 2 つの口から交互に出す
           if (!buf.length) break;
-          // 先頭から続く同じ物質を、荷にまとめて、待たずに出す
-          let q = 1;
-          while (q < STACK_MAX && q < buf.length && buf[q] === buf[0]) q++;
-          for (let k = 0; k < 2; k++) {
-            const i = ((e.rr || 0) + k) % 2, p = slotPort(e, i), rc = buf[0].startsWith('!');
-            if (push(w, p.tx, p.ty, p.d, rc ? buf[0].slice(1) : buf[0], rc, q)) { buf.splice(0, q); e.rr = (i + 1) % 2; e.n = (e.n || 0) + q; break; }
+          // 続く同じ物質を荷にまとめて出す。出口の先が受け取るかぎり、1 歩のうちに何荷でも出す
+          // （1 歩に 1 荷までだと、出せる量が計算の歩数で決まってしまい、納品所へじかに降ろしても列車が待つ）。
+          // 先頭の物質を出口の先が受け取らないときは、その物質を飛ばして、うしろの別の物質を出す
+          // （いろいろな物質が届く駅で、1 つの物質のために全部が止まらないように。飛ばすのは OUT_SKIP 種類まで）
+          let start = 0, skipped = 0;
+          for (let tries = 0; tries < OUT_PUSHES && start < buf.length; tries++) {
+            const s0 = buf[start], rc = s0.startsWith('!');
+            let q = 1;
+            while (q < STACK_MAX && start + q < buf.length && buf[start + q] === s0) q++;
+            let ok = false;
+            for (let k = 0; k < 2; k++) {
+              const i = ((e.rr || 0) + k) % 2, p = slotPort(e, i);
+              if (push(w, p.tx, p.ty, p.d, rc ? s0.slice(1) : s0, rc, q)) { buf.splice(start, q); e.rr = (i + 1) % 2; e.n = (e.n || 0) + q; ok = true; break; }
+            }
+            if (ok) continue;
+            if (++skipped > OUT_SKIP) break;
+            let j = start + q;
+            while (j < buf.length && buf[j] === s0) j++;
+            start = j;
           }
           break;
         }

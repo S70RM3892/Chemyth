@@ -575,7 +575,7 @@ export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
     linePicker({ id: 'st-line', unit: '番線', cur: e.ch || 1, used: [...c.w.ents.values()].filter((n) => n.kind === 'station').map((n) => n.ch || 1), pick: (n) => { e.ch = n; sfx.tap(); again(); }, again }),
     h('p', { class: 'status' }, e.role === 'in'
       ? (to && route ? `行き先：線路 ${Math.round(route.len)} マス先の降ろす駅（${route.custom ? '敷いた線路' : '自動の仮線路'}）。片道 約 ${(route.len / speedOn(route.custom)).toFixed(1)} 秒、1 編成 ${trainCap(c.w)} 個で、1 分あたり およそ ${Math.round(((e.cars || 1) * trainCap(c.w) * 60) / ((2 * route.len) / speedOn(route.custom) + 1))} 個まで運べる。${held ? `いま ${held} 編成が、前の列車を待って止まっている。幹線が混んでいる。` : ''}` : `${e.ch} 番線の「降ろす駅」がまだない。届け先に貨物駅を置き、同じ番線の「降ろす駅」にしろ。`)
-      : `${e.ch} 番線の積む駅：${feeders} か所。届いたものは、正面の 2 つの口から出る。${(e.buf?.length ?? 0) >= stationCap(c.w) ? '満杯で、列車が降ろせずに待っている。出口にベルトをつなげ。' : ''}`),
+      : `${e.ch} 番線の積む駅：${feeders} か所。届いたものは、正面の 2 つの口から出る。${(e.buf?.length ?? 0) >= stationCap(c.w) ? `満杯。先頭の ${label((e.buf![0] ?? '').replace(/^!/, ''))} を、出口の先が受け取っていない（タンクは 1 種類しか入らない。ベルトは詰まっていないか）。満杯のあいだ、列車はこの駅を飛ばして、ほかの降ろす駅へ行く。` : ''}`),
     e.role === 'in' ? h('h3', {}, '③ 編成の数') : null,
     e.role === 'in' ? h('div', { class: 'row' }, ...Array.from({ length: maxCars(c.w) }, (_, i) => i + 1).map((n) => h('button', { class: 'ghost' + ((e.cars || 1) === n ? ' picked on' : ''), type: 'button', id: `st-cars-${n}`, onclick: () => { e.cars = n; sfx.tap(); again(); } }, `${n} 編成`)), h('span', { class: 'muted' }, '増やすと、そのぶん多く運べる。')) : null,
     e.role === 'in' && routes.length > 1 ? h('p', { class: 'muted' }, `行き先は ${routes.length} か所。列車は順番に配る（分岐）。`) : null,

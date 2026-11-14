@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addRail, at, deserialize, layRail, newWorld, place, railOf, railRoute, remove, serialize, stationDests, stationRoutes, stationsOf, step, TRAIN_CAP, type Ent, type Train, type World } from '../src/engine/world';
+import { addRail, at, deserialize, STATION_CAP, layRail, newWorld, place, railOf, railRoute, remove, serialize, stationDests, stationRoutes, stationsOf, step, TRAIN_CAP, type Ent, type Train, type World } from '../src/engine/world';
 import { LINE_EXACT, lineRuns, TRAIN, trainAt } from '../src/ui/railruns';
 
 // 決まった乱数
@@ -350,5 +350,56 @@ describe('図鑑の星', () => {
     for (let i = 0; i < STAR_MAX + 5; i++) toggleStar(s, `r${i}`);
     expect(s.stars!.length).toBe(STAR_MAX);
     expect(s.stars![0]).toBe('r5');
+  });
+});
+
+describe('降ろす駅の詰まり', () => {
+  const vented = (w: World) => Object.values(w.vented).reduce((a, b) => a + b, 0);
+  it('出口の先が受け取るかぎり、1 歩のうちに何荷でも出す（出せる量が、計算の歩数で決まらない）', () => {
+    const w = newWorld();
+    const o = station(w, 300, 300, 'out');
+    // 正面（向き 0 ＝ 東）の 2 つの口の先に、廃棄口
+    place(w, 'vent', 302, 300, 0); place(w, 'vent', 302, 301, 0);
+    o.buf = Array(1000).fill('N2');
+    step(w, 1 / 30);
+    expect(o.buf.length).toBe(0);
+    expect(vented(w)).toBe(1000);
+  });
+  it('先頭の物質を出口の先が受け取らなくても、うしろの別の物質は出ていく', () => {
+    const w = newWorld();
+    const o = station(w, 300, 300, 'out');
+    place(w, 'tank', 302, 300, 0);
+    const tank = at(w, 302, 300)!;
+    tank.sub = 'O2'; tank.cnt = 5;          // O₂ のタンク：N₂ は受け取らない
+    o.buf = [...Array(50).fill('N2'), ...Array(30).fill('O2'), ...Array(20).fill('N2')];
+    step(w, 1 / 30);
+    expect(tank.cnt).toBe(35);
+    expect(o.buf).toEqual(Array(70).fill('N2'));
+  });
+  it('満杯で出せない降ろす駅があっても、列車はそこで止まり続けず、空いている駅へ運ぶ', async () => {
+    const { TRAIN_GIVE_UP } = await import('../src/engine/world');
+    const w = newWorld();
+    const a = station(w, 300, 300, 'in'), dead = station(w, 320, 300, 'out'), good = station(w, 320, 310, 'out');
+    place(w, 'vent', 322, 310, 0); place(w, 'vent', 322, 311, 0);
+    // dead：出口の先に何もないので、ためるだけ。もう満杯
+    dead.buf = Array(STATION_CAP).fill('O2');
+    // 走っている途中で満杯になった駅へ向かう列車：着いても降ろせない
+    a.tr = { p: 0.99, back: false, cargo: Array(100).fill('N2'), wait: 0, to: '320,300' };
+    for (let i = 0; i < 30 * (TRAIN_GIVE_UP + 1); i++) step(w, 1 / 30);
+    expect(a.tr.back || a.tr.p <= 0 || a.tr.to === '320,310').toBe(true);   // 引き返した（か、もう出直した）
+    // そのあとは、満杯の駅を飛ばして、空いている駅へ運び続ける
+    for (let i = 0; i < 30 * 90; i++) { if (a.buf!.length < 200) a.buf!.push(...Array(200).fill('N2')); step(w, 1 / 30); w.fx.length = 0; }
+    expect(dead.buf.length).toBe(STATION_CAP);
+    expect(vented(w)).toBeGreaterThan(300);
+    expect(a.tr.to).toBe('320,310');
+  });
+  it('降ろす駅がどこも満杯なら、列車は積む駅で待つ（荷を持ったまま走り回らない）', () => {
+    const w = newWorld();
+    const a = station(w, 300, 300, 'in'), dead = station(w, 320, 300, 'out');
+    dead.buf = Array(STATION_CAP).fill('O2');
+    a.buf = Array(300).fill('N2');
+    for (let i = 0; i < 30 * 20; i++) step(w, 1 / 30);
+    expect(a.tr!.p).toBe(0);
+    expect(a.tr!.cargo.length + a.buf.length).toBe(300);
   });
 });
