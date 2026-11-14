@@ -7,13 +7,13 @@ import { HUB_TILES } from '../src/content/map';
 import { RECIPES, productsOf } from '../src/content/recipes';
 import { TESTS } from '../src/content/samples';
 import { hasSub } from '../src/content/substances';
-import { at, configure, deserialize, layRail, newWorld, place, serialize, step, FLOOR_DY, type World } from '../src/engine/world';
+import { at, configure, deserialize, layRail, newWorld, place, serialize, step, FLOOR_DY, type World, plainSave } from '../src/engine/world';
 
 const run = (w: World, sec: number) => { for (let i = 0; i < sec * 60; i++) step(w, 1 / 60); };
 const forge = (o: unknown) => 'CHEMYTH-BP1:' + btoa(JSON.stringify(o));
 const [hx, hy] = HUB_TILES[0];
 /** 新しい工場のセーブを、書き換えられるように読んだもの */
-const blank = () => JSON.parse(serialize(newWorld()));
+const blank = () => plainSave(serialize(newWorld()));
 
 describe('設計図の文字列を確かめる', () => {
   it('どのオブジェクトにもある名前（constructor など）は、設備の種類として受けつけない', () => {
@@ -228,7 +228,7 @@ describe('セーブの読み込みを確かめる', () => {
     const j = serialize(w);
     // 読み込みでもともと決まっている直し（納品所を置き直すので並び順が変わる。荷の tick と、列車の待ち合わせは、読み込むたびに消す）だけを合わせて比べる
     const norm = (s: string) => {
-      const d = JSON.parse(s);
+      const d = plainSave(s);
       delete d.savedAt;
       d.ents.sort((a: { x: number; y: number }, b: { x: number; y: number }) => a.x - b.x || a.y - b.y);
       for (const e of d.ents) {

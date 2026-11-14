@@ -630,6 +630,35 @@ export function stationRoutes(w: World, e: Ent): Route[] {
   return d.list.map((t) => (d.laid ? railRoute(w, e, t) : null) ?? autoRoute(e, t));
 }
 
+
+/** 列車が動けない理由。nodest：積む駅に荷があるのに、同じ番線の降ろす駅がない。allfull：降ろす駅がすべて満杯。outfull：満杯の降ろす駅（出口の先が受け取っていない） */
+export interface TrainTrouble { type: 'nodest' | 'allfull' | 'outfull'; ch: number; at: Ent; s: string; stations: number; trains: number }
+/**
+ * 止まっている列車と、その理由の一覧（番線ごとにまとめる。重いものから）。
+ * 列車は、行き先がなければ荷を積んだまま駅で待ち、積む駅が満杯になり、その手前の装置まで止まる。画面のどこで起きているかを、探さずに分かるようにする
+ */
+export function trainTroubles(w: World): TrainTrouble[] {
+  const cap = stationCap(w), out: TrainTrouble[] = [], by = new Map<string, TrainTrouble>();
+  const loaded = (e: Ent) => { let n = e.tr && e.tr.cargo.length ? 1 : 0; if (e.xtr) for (const t of e.xtr) if (t.cargo.length) n++; return n; };
+  for (const e of stationsOf(w)) {
+    const ch = e.ch ?? 1, len = e.buf ? e.buf.length : 0;
+    if (e.role === 'out') {
+      if (len >= cap) out.push({ type: 'outfull', ch, at: e, s: e.buf![0].replace(/^!/, ''), stations: 1, trains: 0 });
+      continue;
+    }
+    const tr = loaded(e);
+    if (!len && !tr) continue;
+    const ds = stationDests(w, e).list;
+    const type = !ds.length ? 'nodest' : ds.every((d) => (d.buf ? d.buf.length : 0) >= cap) ? 'allfull' : null;
+    if (!type) continue;
+    const k = `${type}:${ch}`, t = by.get(k);
+    const s = (e.buf && e.buf[0] ? e.buf[0] : e.tr && e.tr.cargo[0] ? e.tr.cargo[0] : '').replace(/^!/, '');
+    if (t) { t.stations++; t.trains += tr; if (len > (t.at.buf ? t.at.buf.length : 0)) { t.at = e; if (s) t.s = s; } }
+    else by.set(k, { type, ch, at: e, s, stations: 1, trains: tr });
+  }
+  return [...[...by.values()].sort((a, b) => b.trains - a.trains || b.stations - a.stations), ...out];
+}
+
 export const key = (x: number, y: number) => `${x},${y}`;
 export const isMachine = (k: Kind): k is MachineKind => k === 'separator' || k === 'electrolyzer' || k === 'reactor' || k === 'battery' || k === 'collector';
 
@@ -2225,7 +2254,104 @@ function pack(v: unknown): unknown {
   }
   return out;
 }
-const entsJson = (list: Ent[]) => JSON.stringify(list.map(pack));
+/**
+ * 設備の一覧を、小さく書く。大きな工場では、設備がセーブのほとんどを占める（同じ機種・同じ設定の設備が、何千・何万と並ぶ）。
+ *  - 設備ごとに変わらない欄（機種・向き・反応・出口の並び・番線など）は「型」として 1 度だけ書き、設備は「型の番号, x, y, 設備ごとの値…」の並びにする
+ *  - 読み直せばすぐ戻る値は書かない：稼働率・出口にためておける量・詰まりの印・採取や搬出の端数（読んだあと数秒で元に戻る）
+ *  - 時間の合計は秒まで、進み具合は 2 桁まで
+ * 前の形（設備を 1 つずつ欄の名前つきで書いたもの）も、そのまま読める
+ */
+const SAVE_DROP = new Set(['u', 'hb', 'bad', 'badT', 'stuck', 'timer']);
+/** 設備ごとに違う値の欄（この順で並べる） */
+const ROW_KEYS = ['n', 'prog', 'ts', 'inBuf', 'outBuf', 'item', 'items', 'buf', 'buf2', 'buf3', 'tr', 'xtr', 'rr', 'cnt', 'rcn', 'pw', 'offProg', 'left', 'memo'];
+const ROW_SET = new Set(ROW_KEYS);
+interface EntTpl { o: Record<string, unknown>; k: string[]; ik?: string[] }
+const round2 = (v: number) => Math.round(v * 100) / 100;
+/** 荷：動かした歩の番号（読むと 0 に戻る）は書かない。位置は 2 桁、待った時間は 0.1 秒まで */
+const slimItem = (it: unknown): unknown => {
+  if (!it || typeof it !== 'object') return it;
+  const o = it as Record<string, unknown>, out: Record<string, unknown> = {};
+  for (const k in o) { const v = o[k]; if (k === 'm' || v === undefined || v === null || v === false) continue; out[k] = k === 'p' && typeof v === 'number' ? round2(v) : k === 'w' && typeof v === 'number' ? Math.round(v * 10) / 10 : v; }
+  return out;
+};
+/** 列車を、並びで書く：[位置, 行き先（なければ 0）, 帰り道なら 1, 待った時間, 荷（まとめた形）…] */
+const slimTrain = (t: unknown): unknown => {
+  if (!t || typeof t !== 'object') return t;
+  const o = t as Record<string, unknown>;
+  return [typeof o.p === 'number' ? Math.round(o.p * 10000) / 10000 : 0, typeof o.to === 'string' ? o.to : 0, o.back ? 1 : 0, typeof o.wait === 'number' ? Math.round(o.wait * 10) / 10 : 0, ...(Array.isArray(o.cargo) ? o.cargo : [])];
+};
+const fatTrain = (t: unknown): unknown => (Array.isArray(t) ? { p: t[0], to: typeof t[1] === 'string' ? t[1] : undefined, back: t[2] === 1, wait: t[3], cargo: t.slice(4) } : t);
+/**
+ * 書く形：c ＝ 型の一覧、g ＝ 型ごとの組 [型の番号, 設備の数, 数の並び]。数の並びは、設備ごとに「前の設備からの y の差, x の差, 設備ごとの値…」。
+ * 同じ型の設備は、上から下・左から右の順に並べるので、差は小さな数になる（何万台の採取機でも、1 台あたり数文字）
+ */
+export function packEnts(list: Ent[]): { c: EntTpl[]; g: unknown[][] } {
+  const c: EntTpl[] = [], index = new Map<string, number>(), rows: { x: number; y: number; v: unknown[] }[][] = [];
+  for (const e of list) {
+    const p = pack(e) as Record<string, unknown>, o: Record<string, unknown> = {}, k: string[] = [];
+    for (const key in p) if (key !== 'x' && key !== 'y' && !ROW_SET.has(key) && !SAVE_DROP.has(key)) o[key] = p[key];
+    for (const key of ROW_KEYS) if (p[key] !== undefined) k.push(key);
+    const ik = p.inBuf && typeof p.inBuf === 'object' ? Object.keys(p.inBuf as object) : undefined;
+    const tk = JSON.stringify(o) + '|' + k.join(',') + '|' + (ik ? ik.join(',') : '');
+    let ti = index.get(tk);
+    if (ti === undefined) { ti = c.length; index.set(tk, ti); c.push(ik ? { o, k, ik } : { o, k }); rows.push([]); }
+    const v: unknown[] = [];
+    for (const key of k) {
+      const x = p[key];
+      v.push(key === 'inBuf' ? ik!.map((q) => (p.inBuf as Record<string, unknown>)[q])
+        : key === 'ts' && Array.isArray(x) ? x.map((q) => (typeof q === 'number' ? Math.round(q) : q))
+        : key === 'prog' && typeof x === 'number' ? round2(x)
+        : key === 'item' ? slimItem(x) : key === 'items' && Array.isArray(x) ? x.map(slimItem)
+        : key === 'tr' ? slimTrain(x) : key === 'xtr' && Array.isArray(x) ? x.map(slimTrain) : x);
+    }
+    rows[ti].push({ x: e.x, y: e.y, v });
+  }
+  const g: unknown[][] = [];
+  rows.forEach((l, ti) => {
+    l.sort((a, b) => a.y - b.y || a.x - b.x);
+    const flat: unknown[] = [];
+    let px = 0, py = 0;
+    for (const r of l) { flat.push(r.y - py, r.x - px); for (const q of r.v) flat.push(q); px = r.x; py = r.y; }
+    g.push([ti, l.length, flat]);
+  });
+  return { c, g };
+}
+/** packEnts の逆：設備を、欄の名前つきの形に戻す（中身の確かめは、このあと readEnt がする）。形がおかしい所は読み飛ばす */
+export function unpackEnts(d: unknown): unknown[] {
+  if (Array.isArray(d)) return d;
+  const pk = d as { c?: unknown; g?: unknown } | null;
+  if (!pk || !Array.isArray(pk.c) || !Array.isArray(pk.g)) return [];
+  const out: unknown[] = [];
+  for (const grp of pk.g as unknown[]) {
+    if (!Array.isArray(grp) || !Array.isArray(grp[2])) continue;
+    const t = pk.c[grp[0] as number] as EntTpl | undefined, flat = grp[2] as unknown[];
+    if (!t || typeof t.o !== 'object' || !t.o || !Array.isArray(t.k)) continue;
+    const w = 2 + t.k.length;
+    let px = 0, py = 0;
+    for (let at2 = 0; at2 + w <= flat.length; at2 += w) {
+      const dy = flat[at2], dx = flat[at2 + 1];
+      if (typeof dx !== 'number' || typeof dy !== 'number') break;
+      px += dx; py += dy;
+      const e: Record<string, unknown> = { ...t.o, x: px, y: py };
+      for (let i = 0; i < t.k.length; i++) {
+        const key = t.k[i], v = flat[at2 + 2 + i];
+        if (typeof key !== 'string' || !ROW_SET.has(key)) continue;
+        if (key === 'inBuf') { const ib: Record<string, unknown> = {}; if (Array.isArray(t.ik) && Array.isArray(v)) t.ik.forEach((q, j) => { if (typeof q === 'string') ib[q] = v[j]; }); e.inBuf = ib; }
+        else e[key] = key === 'tr' ? fatTrain(v) : key === 'xtr' && Array.isArray(v) ? v.map(fatTrain) : v;
+      }
+      out.push(e);
+    }
+  }
+  return out;
+}
+const entsJson = (list: Ent[]) => JSON.stringify(packEnts(list));
+/** セーブの文字を読み、設備を「欄の名前つきの一覧」に広げたもの（中身を調べる・直す道具やテストのため。この形のセーブも、そのまま読める） */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function plainSave(json: string): any {
+  const d = JSON.parse(json);
+  d.ents = unpackEnts(d.ents);
+  return d;
+}
 export function serialize(w: World): string {
   const ents = entsJson([...w.ents.values()].filter((e) => e.kind !== 'part'));
   return JSON.stringify({
@@ -2357,10 +2483,10 @@ const table = <T,>(o: unknown): Record<string, T> => (o && typeof o === 'object'
 export function deserialize(json: string): World | null {
   try {
     const d = JSON.parse(json);
-    if (d.v !== SAVE_VERSION || !Array.isArray(d.ents)) return null;
+    if (d.v !== SAVE_VERSION || !d.ents || typeof d.ents !== 'object') return null;
     const w = newWorld();
     w.ents = new EntMap();
-    for (const o of d.ents as unknown[]) { const e = readEnt(o); if (e) restore(w, e); }
+    for (const o of unpackEnts(d.ents)) { const e = readEnt(o); if (e) restore(w, e); }
     if (Array.isArray(d.rails)) for (const row of d.rails) if (Array.isArray(row) && typeof row[0] === 'string' && Number.isInteger(row[1]) && row[1] > 0 && row[1] < 16) w.rails.set(row[0], row[1]);
     // 古いセーブ：駅ごとに持っていた線路を、地図の線路へ移す（形のおかしいもの、長すぎるものは移さない）
     let railLeft = LEGACY_RAIL_MAX;

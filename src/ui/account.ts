@@ -99,7 +99,11 @@ async function upload(slot: number, force = false, keepalive = false): Promise<s
   const json = store.read(slot), b = brief(json);
   if (!st || !json || !b) return '';
   const n0 = seq[slot] || 0, device = deviceLabel();
-  const r = await call<{ rev: number; at: number }>('chemyth_save_put', { p_token: st.token, p_slot: slot, p_data: await pack(json), p_base_rev: st.sync[slot]?.rev ?? 0, p_device: device, p_summary: b, p_force: force }, keepalive);
+  const data = await pack(json);
+  // 閉じる間際の送信（keepalive）は、ブラウザが 64 KB までしか送らせない。大きいセーブは、ふつうの送信にする（確実に断られるより、間に合う見込みのある方）
+  if (data.length > 60_000) keepalive = false;
+  if (!st) return 'signed_out';
+  const r = await call<{ rev: number; at: number }>('chemyth_save_put', { p_token: st.token, p_slot: slot, p_data: data, p_base_rev: st.sync[slot]?.rev ?? 0, p_device: device, p_summary: b, p_force: force }, keepalive);
   if (!st) return 'signed_out';
   if (r.ok) {
     st.sync[slot] = { rev: r.rev, dirty: (seq[slot] || 0) !== n0 };

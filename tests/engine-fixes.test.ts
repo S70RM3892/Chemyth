@@ -7,7 +7,7 @@ import { CHAPTERS } from '../src/content/goals';
 import { MACHINES } from '../src/content/machines';
 import { RECIPES } from '../src/content/recipes';
 import { HUB_TILES, resourceAt } from '../src/content/map';
-import { addRail, at, configure, currentGoal, deserialize, DX, DY, flowStats, flowTrace, goalCount, layRail, liftPartner, machineState, moveEnts, moveRails, multiOf, newWorld, place, railRoute, requiredOf, serialize, setChapter, setRailMask, setStationRole, slotPort, step, outPort, type Ent, type World } from '../src/engine/world';
+import { addRail, at, configure, currentGoal, deserialize, DX, DY, flowStats, flowTrace, goalCount, layRail, liftPartner, machineState, moveEnts, moveRails, multiOf, newWorld, place, railRoute, requiredOf, serialize, setChapter, setRailMask, setStationRole, slotPort, step, outPort, type Ent, type World, plainSave } from '../src/engine/world';
 import { mirrorFixed, moveSpec, relocate, xEnts, xRails, type MoveSpec, type Rect, type Xform } from '../src/engine/shape';
 import { bottlenecks, machineTypes, stopReasons } from '../src/engine/flow';
 import { findRoute } from '../src/engine/route';
@@ -300,7 +300,7 @@ describe('複数の物質を同時に求める指令：進み具合は指令ご�
     expect(multiOf(w2, a.ch)).toEqual({ [a.g.s]: 4 });
     expect(multiOf(w2, b.ch)).toEqual({ [b.g.s]: 2 });
     // 古いセーブ
-    const d = JSON.parse(serialize(w));
+    const d = plainSave(serialize(w));
     const all = [a.g.s, ...a.g.also!];
     d.multi = Object.fromEntries(all.map((s, i) => [s, 3 + i]));
     d.counts[a.ch] = 3;
@@ -356,7 +356,7 @@ describe('線路：範囲をずらす・回すと、外とのつながりは両�
     expect(addRail(w, [19, 10], [20, 10])).toBe(true);
     expect(railRoute(w, a, b)).not.toBeNull();
     // 片側だけのつながりを持つセーブ
-    const d = JSON.parse(serialize(w));
+    const d = plainSave(serialize(w));
     d.rails = [...d.rails, ['50,50', 1], ['60,60', 1], ['61,60', 4 | 1]];
     const w2 = deserialize(JSON.stringify(d))!;
     expect(w2.rails.has('50,50')).toBe(false);   // 右の隣がない

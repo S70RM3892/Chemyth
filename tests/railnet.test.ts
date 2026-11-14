@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addRail, at, deserialize, STATION_CAP, layRail, newWorld, place, railOf, railRoute, remove, serialize, stationDests, stationRoutes, stationsOf, step, TRAIN_CAP, type Ent, type Train, type World } from '../src/engine/world';
+import { addRail, at, deserialize, STATION_CAP, layRail, newWorld, place, railOf, railRoute, remove, serialize, stationDests, stationRoutes, stationsOf, step, TRAIN_CAP, type Ent, type Train, type World, plainSave } from '../src/engine/world';
 import { LINE_EXACT, lineRuns, TRAIN, trainAt } from '../src/ui/railruns';
 
 // 決まった乱数
@@ -191,15 +191,19 @@ describe('セーブ：駅と列車の荷をまとめて書く', () => {
     a.tr = { p: 0.4, back: false, cargo: Array(TRAIN_CAP).fill('!O2'), wait: 0, to: '40,100' };
     b.buf = ['H2'];
     const s = serialize(w);
-    expect(s).toContain('"buf":["N2",700,"O2","!H2",3,"N2",2]');
-    expect(s).toContain(`"cargo":["!O2",${TRAIN_CAP}]`);
-    expect(s).toContain('"buf":["H2"]');
+    // 文字の中では、まとめた形で書かれている（1 個ずつ 700 回は書かない）
+    expect(s).toContain('["N2",700,"O2","!H2",3,"N2",2]');
+    expect(s).toContain(`"!O2",${TRAIN_CAP}]`);
+    expect(s.length).toBeLessThan(3000);
+    const flat = plainSave(s).ents.find((e: { x: number; y: number }) => e.x === 0 && e.y === 100);
+    expect(flat.buf).toEqual(['N2', 700, 'O2', '!H2', 3, 'N2', 2]);
+    expect(flat.tr.cargo).toEqual(['!O2', TRAIN_CAP]);
     const r = deserialize(s)!;
     expect(at(r, 0, 100)!.buf).toEqual(a.buf);
     expect(at(r, 0, 100)!.tr!.cargo).toEqual(a.tr.cargo);
     expect(at(r, 40, 100)!.buf).toEqual(['H2']);
     // 古い形
-    const old = JSON.parse(s);
+    const old = plainSave(s);
     for (const e of old.ents) if (e.x === 0 && e.y === 100) { e.buf = ['N2', 'N2', 'O2']; e.tr.cargo = ['!O2', '!O2']; }
     const r2 = deserialize(JSON.stringify(old))!;
     expect(at(r2, 0, 100)!.buf).toEqual(['N2', 'N2', 'O2']);
@@ -401,5 +405,93 @@ describe('降ろす駅の詰まり', () => {
     for (let i = 0; i < 30 * 20; i++) step(w, 1 / 30);
     expect(a.tr!.p).toBe(0);
     expect(a.tr!.cargo.length + a.buf.length).toBe(300);
+  });
+});
+
+describe('列車の点検', () => {
+  it('行き先のない番線・どこも満杯の番線・満杯の降ろす駅を、理由つきで挙げる。流れている番線は挙げない', async () => {
+    const { trainTroubles } = await import('../src/engine/world');
+    const w = newWorld();
+    // 1 番線：流れている
+    const a = station(w, 300, 300, 'in', 1); station(w, 320, 300, 'out', 1);
+    a.buf = Array(50).fill('N2');
+    // 7 番線：降ろす駅がない（積む駅 2 か所。1 か所は荷がないので数えない）
+    const b = station(w, 300, 320, 'in', 7), b2 = station(w, 300, 330, 'in', 7); station(w, 300, 340, 'in', 7);
+    b.buf = Array(STATION_CAP).fill('Fe2O3'); b2.buf = Array(10).fill('Fe2O3');
+    // 9 番線：降ろす駅がすべて満杯
+    const c = station(w, 300, 360, 'in', 9), full = station(w, 320, 360, 'out', 9);
+    c.buf = Array(20).fill('SO2'); full.buf = Array(STATION_CAP).fill('!C');
+    for (let i = 0; i < 30 * 5; i++) step(w, 1 / 30);
+    const t = trainTroubles(w);
+    expect(t.map((x) => `${x.type}:${x.ch}`).sort()).toEqual(['allfull:9', 'nodest:7', 'outfull:9']);
+    const nd = t.find((x) => x.type === 'nodest')!;
+    expect(nd.at).toBe(b);           // いちばんたまっている駅へ案内する
+    expect(nd.s).toBe('Fe2O3');
+    expect(nd.stations).toBe(2);
+    expect(nd.trains).toBe(2);       // 積んだまま出られない列車
+    expect(t.find((x) => x.type === 'outfull')!.s).toBe('C');   // 試薬棚から来た印（!）は外す
+    // 降ろす駅を置けば、消える
+    station(w, 320, 320, 'out', 7);
+    expect(trainTroubles(w).some((x) => x.type === 'nodest')).toBe(false);
+  });
+});
+
+describe('セーブの大きさ', () => {
+  it('同じ設定の設備は 1 つの型にまとめ、場所は前の設備との差で書く。読み戻すと同じ工場になる', async () => {
+    const { packEnts, unpackEnts } = await import('../src/engine/world');
+    const w = newWorld();
+    for (let i = 0; i < 400; i++) { place(w, 'extractor', 300 + (i % 40) * 2, 300 + Math.floor(i / 40) * 3, 1); place(w, 'belt', 300 + (i % 40) * 2, 301 + Math.floor(i / 40) * 3, 0); }
+    const a = station(w, 500, 300, 'in', 12), o = station(w, 520, 300, 'out', 12);
+    a.buf = [...Array(40).fill('N2'), ...Array(3).fill('!O2')];
+    a.tr = { p: 0.25, back: false, cargo: Array(7).fill('N2'), wait: 1.5, to: '520,300' };
+    a.xtr = [{ p: 0.5, back: true, cargo: [], wait: 0, to: '520,300' }];
+    a.cars = 2; o.memo = '受け取り';
+    at(w, 300, 301)!.item = { s: 'air', p: 0.5, m: 0, n: 3 };
+    for (let i = 0; i < 40; i++) step(w, 1 / 30);
+    const json = serialize(w), d = JSON.parse(json);
+    expect(Array.isArray(d.ents)).toBe(false);
+    // 400 台の採取機と 400 本のベルトが、数個の型に収まる
+    expect(d.ents.c.length).toBeLessThan(30);
+    const plain = JSON.stringify(plainSave(json).ents);
+    expect(JSON.stringify(d.ents).length).toBeLessThan(plain.length / 3);
+    // 読み戻し：設備の数・場所・中身が同じ
+    const w2 = deserialize(json)!;
+    expect(w2.ents.size).toBe(w.ents.size);
+    const a2 = at(w2, 500, 300)!;
+    expect(a2.ch).toBe(12); expect(a2.role).toBe('in'); expect(a2.cars).toBe(2);
+    expect(a2.buf).toEqual(a.buf);
+    expect(a2.tr!.cargo).toEqual(a.tr!.cargo); expect(a2.tr!.to).toBe(a.tr!.to); expect(a2.tr!.p).toBeCloseTo(a.tr!.p, 2);
+    expect(a2.xtr!.length).toBe(1); expect(a2.xtr![0].back).toBe(a.xtr![0].back);
+    expect(at(w2, 520, 300)!.memo).toBe('受け取り');
+    for (const e of w.ents.values()) {
+      if (e.kind === 'part') continue;   // 大きな設備の残りのマス：at() は持ち主を返す
+      const f = at(w2, e.x, e.y)!;
+      expect(f.kind).toBe(e.kind); expect(f.dir).toBe(e.dir);
+      if (e.item) { expect(f.item!.s).toBe(e.item.s); expect(f.item!.n ?? 1).toBe(e.item.n ?? 1); }
+      if (e.kind === 'extractor') expect(f.n ?? 0).toBe(e.n ?? 0);
+    }
+    // 読んで書くと、同じ形に落ち着く（型の並びは、読み込んだ順で決まる）
+    const again = serialize(w2);
+    expect(JSON.stringify(JSON.parse(serialize(deserialize(again)!)).ents)).toBe(JSON.stringify(JSON.parse(again).ents));
+    expect(JSON.parse(again).ents.c.length).toBe(d.ents.c.length);
+    // 型と行の往復
+    const back = unpackEnts(packEnts([...w.ents.values()]));
+    expect(back.length).toBe(w.ents.size);
+  });
+  it('これまでの形（設備を 1 つずつ並べた配列）のセーブも読める。壊れた型・行は、その分だけ捨てて、残りを読む', async () => {
+    const { unpackEnts } = await import('../src/engine/world');
+    const w = newWorld();
+    place(w, 'belt', 300, 300, 0); place(w, 'belt', 301, 300, 0); station(w, 310, 300, 'in', 3);
+    const json = serialize(w), old = plainSave(json);
+    expect(Array.isArray(old.ents)).toBe(true);
+    const w2 = deserialize(JSON.stringify(old))!;
+    expect(w2.ents.size).toBe(w.ents.size);
+    expect(at(w2, 310, 300)!.ch).toBe(3);
+    // 壊れた入れ物
+    for (const bad of [null, 5, 'x', {}, { c: 1, g: 2 }, { c: [], g: [[9, 1, [0, 0]]] }, { c: [{ o: { kind: 'belt' }, k: [] }], g: [[0, 5, [1]], 'x', [0]] }]) expect(Array.isArray(unpackEnts(bad))).toBe(true);
+    const d = JSON.parse(json);
+    d.ents.g.push([999, 3, [0, 0, 0, 0]], 'junk');
+    const w3 = deserialize(JSON.stringify(d))!;
+    expect(w3.ents.size).toBe(w.ents.size);
   });
 });

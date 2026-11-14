@@ -342,6 +342,8 @@ function machineStrips(w: World, fl: number, P: Palette): Map<string, { strips: 
   stripCache = { w, rev, fl, soft: P.soft, m };
   return m;
 }
+/** 1 マスがこの画素数より小さくなるまで引いたら、資源地の絵と名札を省く */
+const ULTRA = 1.2;
 let distCache: { w: World; tick: number; n: number; list: District[] } | null = null;
 function districts(w: World): District[] {
   if (!distCache || distCache.w !== w || Math.abs(w.tick - distCache.tick) > 90 || distCache.n !== w.ents.size) distCache = { w, tick: w.tick, n: w.ents.size, list: districtsOf(w) };
@@ -454,9 +456,12 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
   ctx.fillStyle = P.paper;
   ctx.fillRect(0, 0, cw, ch);
   // 札を出す資源地（見えているもの）。見えている範囲（マス）が変わらないうちは、探し直さない
+  // うんと引いたとき（1 マスが ULTRA 画素より小さい）：資源地の絵と名札は描かない。
+  // 画面に入る資源地が何万にもなり、探すのも描くのも重く、見えても点にしかならない。紙と方眼の上に、設備・線路・列車だけを描く
+  const ultra = z < ULTRA;
   const vk = `${Math.floor(wx0)},${Math.floor(wy0)},${Math.ceil(wx1)},${Math.ceil(wy1)}`;
-  if (!spotMemo || spotMemo.k !== vk) spotMemo = { k: vk, list: zoneSpots(Math.floor(wx0) - 6, Math.floor(wy0) - 6, Math.ceil(wx1) + 6, Math.ceil(wy1) + 6) };
-  const vis = spotMemo.list.filter((s) => {
+  if (!ultra && (!spotMemo || spotMemo.k !== vk)) spotMemo = { k: vk, list: zoneSpots(Math.floor(wx0) - 6, Math.floor(wy0) - 6, Math.ceil(wx1) + 6, Math.ceil(wy1) + 6) };
+  const vis = ultra || !spotMemo ? [] : spotMemo.list.filter((s) => {
     const R = (s.r * 1.25 + 0.6) * z, X = sx(s.cx), Y = sy(s.cy);
     return X > -R && X < cw + R && Y > -R && Y < ch + R;
   });
@@ -469,7 +474,7 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
   regionKeep = Math.max(REG_MAX, 2 * (Math.floor(wx1 / span) - Math.floor(wx0 / span) + 1) * (Math.floor(wy1 / span) - Math.floor(wy0 / span) + 1));
   // 区画の境は、画面の画素にそろえる（となりの絵とのあいだに、すき間の線が出ないように）
   const snap = (v: number) => Math.round(v * dpr) / dpr;
-  for (let ry = Math.floor(wy0 / span); ry <= Math.floor(wy1 / span); ry++) for (let rx = Math.floor(wx0 / span); rx <= Math.floor(wx1 / span); rx++) {
+  if (!ultra) for (let ry = Math.floor(wy0 / span); ry <= Math.floor(wy1 / span); ry++) for (let rx = Math.floor(wx0 / span); rx <= Math.floor(wx1 / span); rx++) {
     const X0 = snap(sx(rx * span)), Y0 = snap(sy(ry * span)), X1 = snap(sx((rx + 1) * span)), Y1 = snap(sy((ry + 1) * span));
     let img = regionImage(P, rx, ry, ppt, performance.now() < until);
     if (img === undefined) {
@@ -484,7 +489,7 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
   ctx.globalAlpha = 1;
   // 方眼：5・10・50・100 … マスごとの線。細かい線は、引くにつれて薄れて消える。太い区切りは、何段にも重なって濃くなる
   ctx.lineWidth = 1;
-  for (const s of [5, 10, 50, 100, 500, 1000]) {
+  for (const s of [5, 10, 50, 100, 500, 1000, 5000, 10000, 50000]) {
     const px = s * z;
     if (px < 8) continue;
     ctx.globalAlpha = Math.min(1, (px - 8) / 18) * (s >= 50 ? 0.9 : 0.75);
@@ -959,7 +964,7 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
     ctx.drawImage(l.cv, pos[0], pos[1], l.w, l.h);
     return true;
   };
-  const used = off ? new Set<string>() : usedSpots(w), core = new Set(Object.values(ZONES).map((zi) => `${zi.at[0]},${zi.at[1]}`));
+  const used = off || ultra ? new Set<string>() : usedSpots(w), core = new Set(Object.values(ZONES).map((zi) => `${zi.at[0]},${zi.at[1]}`));
   const goalAt = gz ? `${ZONES[gz].at[0]},${ZONES[gz].at[1]}` : '';
   const rank = (s: ZoneSpot) => { const k = `${s.cx},${s.cy}`; return k === goalAt ? 0 : used.has(k) ? 1 : core.has(k) ? 2 : 3; };
   const order = off ? [] : vis.map((s, i) => ({ s, own: i + 1, r: rank(s), d: Math.hypot(sx(s.cx) - cw / 2, sy(s.cy) - ch / 2) })).sort((a, b) => a.r - b.r || a.d - b.d);

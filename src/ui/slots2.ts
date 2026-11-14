@@ -18,7 +18,6 @@ import { draw } from './render';
 import { sfx } from './sound';
 import { SLOTS, fmtDate, fmtTime, slotName, store } from './title';
 
-const slotKey = (n: number) => `chemyth-v2-slot-${n}`;
 const albumKey = (n: number) => `chemyth-v2-album-${n}`;
 const dailyKey = (n: number) => `chemyth-v2-daily-${n}`;
 // アルバムの写真と前日の控えは、大きな保存領域（IndexedDB。bigstore.ts）に置く。ほかは localStorage
@@ -40,7 +39,7 @@ function beforeWrite(n: number) {
   const now = Date.now(), today = dayKey(now);
   if (dailyDay[n] === today) return;   // 今日はもう決めた（セーブのたびに枠を読み直さない）
   if (!(n in dailyDay)) dailyDay[n] = readDaily(n)?.day ?? '';
-  const cur = get(slotKey(n)), plan = dailyPlan(dailyDay[n], cur, now);
+  const cur = store.read(n), plan = dailyPlan(dailyDay[n], cur, now);
   if (plan === 'skip') return;
   dailyDay[n] = today;
   const sum = sumOf(cur);

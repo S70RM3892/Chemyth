@@ -4,7 +4,7 @@ import { MACHINES } from '../content/machines';
 import { QUESTIONS } from '../content/questions';
 import { recipeById, RECIPES } from '../content/recipes';
 import { SYLLABUS } from '../content/syllabus';
-import { TOXIC, currentGoal, doneCount, dueIds, flowStats, isMachine, machineState, type Ent, type World } from '../engine/world';
+import { TOXIC, currentGoal, doneCount, dueIds, flowStats, isMachine, machineState, stationCap, trainTroubles, type Ent, type TrainTrouble, type World } from '../engine/world';
 import { label, sub } from '../content/substances';
 import { PERIODS, balanceOf, bottlenecks, deliverySeries, hourTrend, machineTypes, periodName, statsCsv, stockSeries, stopReasons, type Neck, type Period } from '../engine/flow';
 import { ACHIEVEMENTS } from '../engine/achieve';
@@ -203,6 +203,28 @@ function typeTable(w: World): HTMLElement {
   return off.length ? h('div', {}, table, h('p', { class: 'muted', id: 'st-types-off' }, `‖ 一時停止：${off.map((r) => `${r.name} ${r.off} 台`).join('・')}（稼働率と状態ごとの台数には入れていない）`)) : table;
 }
 
+/** 列車の点検：動けない列車と理由を、番線ごとに 1 行。押すとその駅へ移る */
+function trainRows(c: StatsCtx): HTMLElement[] {
+  const all = trainTroubles(c.w), cap = stationCap(c.w);
+  if (!all.length) return [h('p', { class: 'muted', id: 'st-train-ok' }, '止まっている列車はない（荷を積んだまま行き先のない列車も、満杯の降ろす駅もない）。')];
+  const text = (t: TrainTrouble): [string, string] => t.type === 'nodest'
+    ? [`${t.ch} 番線：降ろす駅がない`, `${t.s ? `${label(t.s)} を積んだ` : '荷を積んだ'}列車 ${t.trains} 編成が、出発できずに待っている${t.stations > 1 ? `（積む駅 ${t.stations} か所）` : ''}。届け先に貨物駅を置いて ${t.ch} 番線の「降ろす駅」にするか、この駅の番線を、届け先の番線に合わせろ。積む駅が満杯になると、手前の装置も止まる。`]
+    : t.type === 'allfull'
+      ? [`${t.ch} 番線：降ろす駅がすべて満杯`, `積む駅 ${t.stations} か所の列車 ${t.trains} 編成が、空くのを待っている。降ろす駅の出口の先（ベルト・タンク・装置）が受け取っていない。`]
+      : [`${t.ch} 番線：降ろす駅が満杯（${cap} 個）`, `先頭の ${label(t.s)} を、出口の先が受け取っていない。列車はこの駅を飛ばしている。出口のベルトの先をたどれ（タンクは 1 種類だけ。装置は原料にしない物質を受け取らない）。`];
+  return [
+    h('div', { class: 'mrows', id: 'st-train' }, ...all.slice(0, 24).map((t) => {
+      const [head, body] = text(t);
+      return h('button', { class: 'mrow', type: 'button', onclick: () => { sfx.tap(); c.focus(t.at); } },
+        h('span', { class: 'mrow-t' }, h('b', {}, head), h('span', { class: 'muted' }, `（${t.at.x}, ${t.at.y}）`)),
+        h('span', { class: `state ${t.type === 'outfull' ? 'warn' : 'bad'}` }, h('i', {}, t.type === 'outfull' ? '▲' : '✕'), t.type === 'outfull' ? '満杯' : '出発できない'),
+        h('span', { class: 'muted mrow-d' }, body));
+    })),
+    all.length > 24 ? h('p', { class: 'muted' }, `ほかに ${all.length - 24} 件。`) : null,
+    h('p', { class: 'muted' }, '行を押すと、その駅へ移る。番線は、同じ番号の「積む駅」と「降ろす駅」を結ぶ。'),
+  ].filter(Boolean) as HTMLElement[];
+}
+
 export interface StatsCtx extends PanelCtx { overlay(): boolean; setOverlay(on: boolean): void; focus(e: Ent): void }
 
 export function showStats(c: StatsCtx) {
@@ -285,6 +307,7 @@ export function showStats(c: StatsCtx) {
         h('span', { class: 'state warn' }, h('i', {}, '▲'), `原料待ちで止まりがち ${f.starved} 台`),
         h('span', { class: 'state' }, h('i', {}, '？'), `未設定 ${f.unset} 台`))),
     fold('neck', '詰まりの元（押すとその場所へ）', true, ...necks(c)),
+    fold('train', '列車の点検（動けない列車と理由）', true, ...trainRows(c)),
     h('div', { class: 'row' }, toggle, heat),
     heatOn() ? h('p', { class: 'muted' }, cvdOn() ? '色分け：青はよく動いている、黄は半分ほど、橙に斜線は止まりがち。近づくと割合も出る。' : '色分け：緑はよく動いている、黄は半分ほど、赤は止まりがち。近づくと割合も出る。') : null,
     c.overlay() ? h('p', { class: 'muted' }, '重ね表示：装置の上に稼働率、詰まっているマスに色、ベルトに毎分の数（引いた視点では、流れの多いベルトほど太い線）。') : null,

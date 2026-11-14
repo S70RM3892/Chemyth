@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { capByExams, dayKey, initS, migrate, review, S_MAX, type Card } from '../src/engine/fsrs';
-import { answer, deserialize, EXAMS_DEFAULT, newWorld, serialize } from '../src/engine/world';
+import { answer, deserialize, EXAMS_DEFAULT, newWorld, serialize, plainSave } from '../src/engine/world';
 import { forecast, hintFor, weekReport } from '../src/engine/learn';
 import { learnedToday, nameTells, partsFor, recipeQuiz } from '../src/engine/quiz';
 import { applyTestOut, canTestOut, chapterRecipes, testOutQuiz } from '../src/engine/pace';
@@ -81,7 +81,7 @@ describe('試験日に合わせた間隔', () => {
     // 読み込むとき：共通テストの 2 日前のあとに答えて 1000 年先になった予定を、2 次の前へ戻す
     vi.useFakeTimers({ now: new Date(2027, 0, 20, 12), toFake: ['Date'] });
     try {
-      const j = JSON.parse(serialize(newWorld()));
+      const j = plainSave(serialize(newWorld()));
       j.srs = {
         'k:ppt-agcl': { due: new Date(3233, 0, 1).getTime(), s: 440558, d: 3, last: EX[0] - 2 * DAY + 3600000, n: 30, l: 0, iv: 5, b: 40 },
         // ふつうの予定は動かさない

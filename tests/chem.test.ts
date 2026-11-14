@@ -4,7 +4,7 @@ import { ORG_MIXES, WASHES, extract, extractReachable, extractRefusal, washById 
 import { AMINO, AMINO_MIXES, migrate, migrateReachable, poleAt } from '../src/content/phoresis';
 import { AGENTS, ION_ORDER, MIXES, MUD_CL, MUD_OH, SLUDGE, agentById, ionsId, ionsOf, reachableFrom, refusal, settle } from '../src/content/ions';
 import { isBalanced, normalizeFormula, parseFormula } from '../src/chem/formula';
-import { DX, DY, outputBlocked, signalOn, stationCap, trainCap, RAIL_BOOST, addRail, layRail, railRoute, removeRail, stationRoutes, STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, goalRate, reactionsPerMin, stationTargets, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort } from '../src/engine/world';
+import { DX, DY, outputBlocked, signalOn, stationCap, trainCap, RAIL_BOOST, addRail, layRail, railRoute, removeRail, stationRoutes, STATION_CAP, TOXIC, TRAIN_CAP, TUNNEL_RANGE, goalRate, reactionsPerMin, stationTargets, pathLength, railLength, railOf, trainSpeed, fedTier, stationTarget, tunnelPair, fitAnchor, flowStats, inDoors, machineState, moveOutput, outPort, poleOf, restore, slotCount, slotPort, plainSave } from '../src/engine/world';
 import { CONDITIONS, RECIPES, productsOf } from '../src/content/recipes';
 import { hasSub, sub, subByFormula, sameAtoms, SUBSTANCES } from '../src/content/substances';
 import { element, ELEMENTS } from '../src/content/elements';
@@ -1084,7 +1084,7 @@ describe('工場の動作', () => {
   it('1 マスだった頃の装置は、そのまま 3 つの出口で動く', () => {
     const w = newWorld();
     w.progress[0] = 2;
-    const old = JSON.parse(serialize(w));
+    const old = plainSave(serialize(w));
     old.ents.push({ kind: 'reactor', x: hx - 1, y: hy, dir: 0, recipe: 'haber-bosch', outOrder: ['NH3'], inBuf: { N2: 1, H2: 3 }, outBuf: [0], busy: false, prog: 0 });
     const r = deserialize(JSON.stringify(old))!;
     const e = at(r, hx - 1, hy)!;
@@ -1196,7 +1196,7 @@ describe('研究・信号・2 階・設計図の共有・区画', () => {
     expect(ts2(w)).toBeCloseTo(v0);
     expect(trainCap(w)).toBe(400);
     // 保存して読み直しても残る。知らない id は捨てる
-    const j = JSON.parse(serialize(w)); j.research.push('nonsense');
+    const j = plainSave(serialize(w)); j.research.push('nonsense');
     expect(deserialize(JSON.stringify(j))!.research.sort()).toEqual([...w.research].sort());
     expect(toolUnlocked(w, MACHINES.sensor)).toBe(false);
     doResearch(w, 'logic');
@@ -1382,7 +1382,7 @@ describe('線路の網', () => {
     expect(r.rails.size).toBe(w.rails.size);
     expect(railRoute(r, at(r, 0, 100)!, at(r, 40, 90)!)!.custom).toBe(true);
     // 古いセーブ（駅ごとに線路を持っていた頃）は、地図の線路へ移される
-    const old = JSON.parse(serialize(newWorld()));
+    const old = plainSave(serialize(newWorld()));
     old.ents.push({ kind: 'station', x: 10, y: 10, dir: 0, big: true, role: 'in', ch: 1, buf: [], rail: [[10.5, 10.5], [10.5, 40.5]], railTo: '10,40' }, { kind: 'station', x: 10, y: 40, dir: 0, big: true, role: 'out', ch: 1, buf: [] });
     delete old.rails;
     const m = deserialize(JSON.stringify(old))!;
@@ -2371,7 +2371,7 @@ describe('FSRS：問題ごとの復習の間隔', () => {
     // 古いセーブを読み込んでも、そのまま遊べる
     const w = newWorld();
     learn(w, rec('contact'), true);
-    const j = JSON.parse(serialize(w));
+    const j = plainSave(serialize(w));
     j.srs = { 'r:contact': { iv: 3, due: 123 }, 'k:ppt-agcl': { iv: 1, due: 456 } };
     delete j.exams; delete j.calib; delete j.relearn;
     const back = deserialize(JSON.stringify(j))!;
@@ -2820,7 +2820,7 @@ describe('設定・控え・休み（改善 76〜100）', () => {
   });
   it('工場の名前はセーブに入り、読み直しても残る（長すぎる名前は切り、空白だけなら名前なし）', () => {
     const w = newWorld();
-    expect(JSON.parse(serialize(w)).fname).toBeUndefined();
+    expect(plainSave(serialize(w)).fname).toBeUndefined();
     w.fname = 'アンモニア工場';
     expect(deserialize(serialize(w))!.fname).toBe('アンモニア工場');
     w.fname = 'あ'.repeat(40);
@@ -3014,7 +3014,7 @@ describe('学習の補助：ヒント・取り消し・答える時間・助言�
     expect(deserialize(serialize(w))!.study.nights).toEqual(w.study.nights);
   });
   it('古いセーブ（study がない）も読め、壊れた値は既定に戻る', async () => {
-    const d = JSON.parse(serialize(newWorld()));
+    const d = plainSave(serialize(newWorld()));
     delete d.study;
     expect(deserialize(JSON.stringify(d))!.study).toEqual({ ms: {}, why: [], nights: [], goalMin: 0, order: 'mix', redo: {} });
     d.study = { ms: { 'k:a': [100, 2], 'k:b': ['x', 1], 'k:c': [5, 0] }, why: [{ id: 'k:a', why: 'slip', t: 1 }, { id: 'k:a', why: 'bad', t: 1 }], nights: [{ day: '2026-11-1', n: 3, got: 2 }, { day: 5 }], goalMin: 37, order: 'weak', redo: { q1: 5, q2: 'x' } };
@@ -3210,7 +3210,7 @@ describe('組み立ての道具：自動ベルト・回す・鏡・一時停止�
     expect(at(w2, 20, 10)!.memo).toBe('アンモニア1号のとても長'.slice(0, 12));
     expect(at(w2, 10, 10)!.off).toBeUndefined();
     expect(w2.pins).toEqual([{ x: 5, y: 6, note: '入り江' }]);
-    const old = JSON.parse(serialize(newWorld()));
+    const old = plainSave(serialize(newWorld()));
     delete old.pins;
     expect(deserialize(JSON.stringify(old))!.pins).toEqual([]);
   });
@@ -3432,7 +3432,7 @@ describe('統計：収支・1 時間の記録・詰まりの元・見込み・�
     for (let i = 0; i < 90 * 6 + 1; i++) { big.playMs = i * 10000; step(big, 0.001); }
     expect(minutes(big).length).toBeLessThanOrEqual(HOUR_KEEP + 1);
     expect(big.hour.length).toBeLessThanOrEqual(HOUR_KEEP);
-    const bad = JSON.parse(serialize(big));
+    const bad = plainSave(serialize(big));
     bad.hist = [[1, 2, 3], ['x', 1, 1, 1, 1, 1], [5, 1, 0, 0, 0, 2], [4, -1, 0, 0, 0, 0]];
     expect(deserialize(JSON.stringify(bad))!.hour).toEqual([{ t: 5, deliver: 1, goal: 0, vent: 0, spill: 0, made: 2 }]);
   });
@@ -3484,7 +3484,7 @@ describe('統計：収支・1 時間の記録・詰まりの元・見込み・�
     // 前の 2 つは時間の記録がない（ここでは飛ばした）
     expect(ch0.goals[0].sec).toBeNull();
     // 保存して読み直しても残る。形の合わない値は捨てる
-    const d = JSON.parse(serialize(w));
+    const d = plainSave(serialize(w));
     d.eta.x = 3; d.eta['1:0'] = 'a';
     expect(deserialize(JSON.stringify(d))!.eta).toEqual({ '0:2': est });
     // 指令を終えると、納品所から光の柱を出すきっかけを残す
@@ -3511,7 +3511,7 @@ describe('統計：収支・1 時間の記録・詰まりの元・見込み・�
     run(line, 30, 0.25);
     expect(checkAchievements(line, T0).map((a) => a.id)).toContain('deliver-1');
     // 保存と読み直し。数でない値は捨てる
-    const d = JSON.parse(serialize(w));
+    const d = plainSave(serialize(w));
     d.ach.bogus = 'x';
     const r = deserialize(JSON.stringify(d))!;
     expect(r.ach['react-1']).toBe(T0);

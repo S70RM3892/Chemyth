@@ -7,12 +7,14 @@ import { $, h } from './dom';
 import { setSound, sfx, soundOn } from './sound';
 import { emptyMore, nameOf, slotMore, slotThumb, type TitleUi } from './slots2';
 import { drawElement } from './token';
-import { bigDel } from './bigstore';
+import { bigDel, bigGet, bigOn, bigPut } from './bigstore';
 import { applySkin, applyTheme, skinName, type Skin, type ThemeChoice } from './theme';
 
 export const SLOTS = 3;
 const slotKey = (n: number) => `chemyth-v2-slot-${n}`;
 const META = 'chemyth-v2-meta';
+/** これより大きいセーブは、はじめから大きな保存領域へ置く（localStorage は、全部あわせて 500 万文字ほどまで） */
+const SLOT_BIG = 2_000_000;
 
 type Cam = { x: number; y: number; z: number };
 /** 端末ごとの設定。セーブ枠とは別に置く */
@@ -34,16 +36,27 @@ export interface Meta {
 }
 // セーブはこの端末のブラウザの中だけに置く。読み書きに失敗しても遊べるようにする
 export const store = {
-  read(n: number): string | null { try { return localStorage.getItem(slotKey(n)); } catch { return null; } },
+  /**
+   * セーブは、ふつうは localStorage（閉じる瞬間にもすぐ書ける）。とても大きいセーブ（SLOT_BIG 文字を超える）と、
+   * localStorage に入りきらなかったセーブは、大きな保存領域（IndexedDB。端末の空きに応じて数百 MB 以上）へ置く。
+   * どちらか一方にだけ置く（古い方が残って、読み違えないように）
+   */
+  read(n: number): string | null { try { const v = localStorage.getItem(slotKey(n)); if (v !== null) return v; } catch { /* 下で、大きな保存領域を見る */ } return bigOn() ? bigGet(slotKey(n)) : null; },
   /** セーブを書いたときに呼ぶもの（同期の予約に使う） */
   onWrite: null as ((n: number) => void) | null,
   /** セーブを書く直前に呼ぶもの（前日の控えをとる。slots2.ts） */
   beforeWrite: null as ((n: number) => void) | null,
   write(n: number, json: string, quiet = false): boolean {
     try { store.beforeWrite?.(n); } catch { /* 控えがとれなくても書く */ }
-    try { localStorage.setItem(slotKey(n), json); if (!quiet) store.onWrite?.(n); return true; } catch { return false; }
+    const k = slotKey(n);
+    let ok = false;
+    if (!(bigOn() && json.length > SLOT_BIG)) { try { localStorage.setItem(k, json); ok = true; if (bigOn()) bigDel(k); } catch { ok = false; } }
+    // 入りきらない・大きい：大きな保存領域へ。localStorage の古い分は消す（残すと、次に読むとき古い方を読む）
+    if (!ok && bigOn() && bigPut(k, json)) { ok = true; try { localStorage.removeItem(k); } catch { /* 消せなければ、次の read が古い方を読む。下で確かめる */ } try { if (localStorage.getItem(k) !== null) ok = false; } catch { /* 読めないなら、残っていない扱い */ } }
+    if (ok && !quiet) store.onWrite?.(n);
+    return ok;
   },
-  erase(n: number) { try { localStorage.removeItem(slotKey(n)); } catch { /* 同上 */ } bigDel(`chemyth-v2-album-${n}`); },
+  erase(n: number) { try { localStorage.removeItem(slotKey(n)); } catch { /* 同上 */ } if (bigOn()) bigDel(slotKey(n)); bigDel(`chemyth-v2-album-${n}`); },
   meta(): Meta { try { return JSON.parse(localStorage.getItem(META) || '{}'); } catch { return {}; } },
   setMeta(m: Meta) { try { localStorage.setItem(META, JSON.stringify({ ...store.meta(), ...m })); } catch { /* 同上 */ } },
 };

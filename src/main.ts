@@ -251,16 +251,46 @@ function boot(data: HotData) {
   });
   const nearZoom = () => Math.max(40, Math.min(54, cw / 24));
   /** いま引ける限界。立体表示は、平らな表示ほど引けない */
-  const zMin = () => (threeOn() ? Z_MIN_3D : Z_MIN);
+  const zMin = () => (threeOn() ? Z_MIN_3D : Math.max(Z_FLOOR, Math.min(Z_MIN, 0.7 * fitZoom(entBoxes().full))));
+  /** これより引かない（1 マスが 0.01 画素。10 万マス四方が画面に入る） */
+  const Z_FLOOR = 0.01;
+  type Box = [number, number, number, number];
+  const fitZoom = (b: Box, vw = cw, vh = ch - 150) => Math.min(vw / Math.max(60, b[2] - b[0] + 16), vh / Math.max(40, b[3] - b[1] + 16));
+  /**
+   * 設備のある範囲。full：すべて。main：ほとんどの設備がある範囲（うんと離れた所に少しだけ置いた設備は入れない。
+   * 入れると、「全体」が離れた設備まで引いて、工場が点になる）。置く・消すが起きるまで覚えておく
+   */
+  let boxMemo: { w: World; rev: number | undefined; n: number; full: Box; main: Box } | null = null;
+  const entBoxes = () => {
+    const rev = (world.ents as { rev?: number }).rev;
+    if (boxMemo && boxMemo.w === world && boxMemo.rev === rev && boxMemo.n === world.ents.size) return boxMemo;
+    const hr = hubRect(world.hubSize), xs: number[] = [], ys: number[] = [];
+    for (const e of world.ents.values()) { if (e.kind === 'part') continue; xs.push(e.x); ys.push(groundY(e.y)); }
+    xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
+    const n = xs.length, full: Box = [Math.min(hr.x, xs[0] ?? hr.x), Math.min(hr.y, ys[0] ?? hr.y), Math.max(hr.x + hr.s, (xs[n - 1] ?? hr.x) + 1), Math.max(hr.y + hr.s, (ys[n - 1] ?? hr.y) + 1)];
+    let main = full;
+    if (n >= 200) {
+      // 両端の 0.5 % を除いた範囲。全体がそれよりずっと広い（3 倍を超える）ときだけ、そちらを「工場」とみなす
+      const lo = Math.floor(n * 0.005), hi = n - 1 - lo, m: Box = [Math.min(hr.x, xs[lo]), Math.min(hr.y, ys[lo]), Math.max(hr.x + hr.s, xs[hi] + 1), Math.max(hr.y + hr.s, ys[hi] + 1)];
+      if (full[2] - full[0] > 3 * (m[2] - m[0]) || full[3] - full[1] > 3 * (m[3] - m[1])) main = m;
+    }
+    return (boxMemo = { w: world, rev, n: world.ents.size, full, main });
+  };
   /** 建てたもの全体と、採取機を置いた資源地、いまの指令の資源地が収まる視野 */
-  const fitView = (vw = cw, vh = ch - 150): Camera => {
-    const hr = hubRect(world.hubSize);
+  const fitView = (vw = cw, vh = ch - 150, all = false): Camera => {
+    const hr = hubRect(world.hubSize), bx = entBoxes(), lim = all ? bx.full : bx.main;
     let x0 = hr.x, y0 = hr.y, x1 = hr.x + hr.s, y1 = hr.y + hr.s;
-    const grow = (ax: number, ay: number, bx: number, by: number) => { x0 = Math.min(x0, ax); y0 = Math.min(y0, ay); x1 = Math.max(x1, bx); y1 = Math.max(y1, by); };
+    const grow = (ax: number, ay: number, bx2: number, by: number) => { x0 = Math.min(x0, ax); y0 = Math.min(y0, ay); x1 = Math.max(x1, bx2); y1 = Math.max(y1, by); };
+    grow(lim[0], lim[1], lim[2], lim[3]);
+    // 採取機を置いた資源地は、資源地ごと入れる（採取機は何万台もあるので、8 マス四方ごとに 1 度だけ調べる）
+    const seen = new Set<number>();
     for (const e of world.ents.values()) {
       const gy = groundY(e.y);
-      grow(e.x, gy, e.x + 1, gy + 1);
-      if (e.kind === 'extractor' && !floorOf(e.y)) for (const s of zoneSpots(e.x - 6, gy - 6, e.x + 6, gy + 6)) if (Math.hypot(e.x + 0.5 - s.cx, gy + 0.5 - s.cy) <= s.r * 1.3 + 0.5) grow(s.cx - s.r * 1.3, s.cy - s.r * 1.3, s.cx + s.r * 1.3, s.cy + s.r * 1.3);
+      if (e.kind !== 'extractor' || floorOf(e.y) || e.x < lim[0] || e.x > lim[2] || gy < lim[1] || gy > lim[3]) continue;
+      const cell = (e.x >> 3) * 100003 + (gy >> 3);
+      if (seen.has(cell)) continue;
+      seen.add(cell);
+      for (const s of zoneSpots(e.x - 6, gy - 6, e.x + 6, gy + 6)) if (Math.hypot(e.x + 0.5 - s.cx, gy + 0.5 - s.cy) <= s.r * 1.3 + 6.5) grow(s.cx - s.r * 1.3, s.cy - s.r * 1.3, s.cx + s.r * 1.3, s.cy + s.r * 1.3);
     }
     const gz = !sandbox ? currentGoal(world)?.zone : undefined, za = gz ? ZONES[gz as keyof typeof ZONES]?.at : undefined;
     if (za) grow(za[0] - za[2] * 1.3, za[1] - za[2] * 1.3, za[0] + za[2] * 1.3, za[1] + za[2] * 1.3);
@@ -1485,10 +1515,11 @@ function boot(data: HotData) {
   };
 
   $('b-fit').onclick = () => {
-    const fit = fitView();
-    const wide = cam.z > fit.z * 1.15;
-    camTo = wide ? fit : { x: hubCX, y: hubCY, z: nearZoom() };
-    $('b-fit').textContent = wide ? '近く' : '全体';
+    // 全体（工場のほとんどが入る）→ すべて（うんと離れた設備まで入る。あるときだけ）→ 近く（納品所）
+    const fit = fitView(), every = fitView(cw, ch - 150, true), far = every.z < fit.z * 0.8;
+    if (cam.z > fit.z * 1.15) { camTo = fit; $('b-fit').textContent = far ? 'すべて' : '近く'; }
+    else if (far && cam.z > every.z * 1.15) { camTo = every; $('b-fit').textContent = '近く'; }
+    else { camTo = { x: hubCX, y: hubCY, z: nearZoom() }; $('b-fit').textContent = '全体'; }
   };
 
   // ---- 地図の操作 ----
@@ -2257,6 +2288,7 @@ function boot(data: HotData) {
   let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0, chapterBefore = 0, slowFrames = 0;
   /** 工場を進める 1 歩。軽量スキンは 1/30 秒（結果は 1/60 秒と同じ：ベルトは 1 歩に 1 マスまでで、いちばん速いベルトでも 1 秒に 6 マスほど。手間は半分） */
   let STEP = 1 / 60, saveMs = 0, stepMs = 0, stepHz = 60;
+  const STEP_HZ = [60, 30, 20, 15];
   /** 1 コマのうち、工場を進め、出来事を知らせ、ときどき保存する所 */
   const simFrame = (now: number, dt: number) => {
     if (slot) {
@@ -2265,18 +2297,20 @@ function boot(data: HotData) {
         // 1 歩にかかる時間（ならした値）が長い大きな工場では、歩幅を広げる（1/60 → 1/30 → 1/20 秒。工場の時間の進みは同じで、手間が半分・3 分の 1 になる）。
         // 行ったり来たりしないよう、戻すときは、ゆとりができてから
         const base = lite() ? 30 : 60;
-        if (stepMs > 12) stepHz = 20;
-        else if (stepMs > 5) { if (stepHz > 30 || stepMs < 9) stepHz = 30; }
-        else if (stepMs < 3) stepHz = base;
-        else if (stepHz < 30) stepHz = 30;
+        // 歩幅は 4 段（1/60・1/30・1/20・1/15 秒）。工場の 1 秒を進めるのにかかる時間（1 歩の時間 × 1 秒の歩数）が 0.3 秒を超えたら 1 段広げ、
+        // 1 段戻しても 0.15 秒に収まる見込みになったら戻す。1/15 秒までは、実物の大きな工場で、納品と生産の数が変わらないことを確かめてある
+        const li = Math.max(0, STEP_HZ.indexOf(stepHz));
+        if (stepMs * stepHz > 300 && li < STEP_HZ.length - 1) stepHz = STEP_HZ[li + 1];
+        else if (li > 0 && stepMs * STEP_HZ[li - 1] < 150) stepHz = STEP_HZ[li - 1];
         if (stepHz > base) stepHz = base;
         STEP = 1 / stepHz;
         acc += dt * speed;
         let guard = 0;
         const s0 = performance.now();
-        // 1 コマで工場を進めてよい時間（軽量 6 ms、ほか 10 ms）。大きな工場で端末が追いつかないときは、追いつこうとして
-        // 1 コマに何十歩も進め、さらに遅くなる（止まったように見える）のではなく、工場の時間をゆっくり進める
-        const budget = lite() ? 6 : 10;
+        // 1 コマで工場を進めてよい時間。ふつうは 10 ms（軽量 6 ms）。絵を描くのが遅くてコマの間が空いたときは、その間の 45 %（上限 110 ms）まで使って、
+        // 空いた時間のぶんの歩数を進める。こうしないと、1 コマに 1 歩しか進まず、コマが遅い場面（納品所のまわりなど）で工場の時間まで遅くなり、列車も装置も止まったように見える。
+        // それでも追いつかない端末では、追いつこうとして固まるのではなく、工場の時間をゆっくり進める
+        const budget = Math.max(lite() ? 6 : 10, Math.min(110, dt * 450));
         while (acc >= STEP && guard++ < 24) { const s1 = performance.now(); step(world, STEP); const now1 = performance.now(); stepMs += (now1 - s1 - stepMs) * 0.1; acc -= STEP; if (now1 - s0 > budget) break; }
         if (PERF) PERF.step.push(performance.now() - s0);
         if (acc > STEP * 4) acc = STEP * 4;
@@ -2448,10 +2482,12 @@ function boot(data: HotData) {
   let liteFlip = false, liteCarry = 0;
   const frame = (now: number) => {
     requestAnimationFrame(frame);
-    const dt = Math.min(0.1, (now - prev) / 1000);
+    // 工場の時間は、コマの間が 0.25 秒までなら、そのまま進める（遅いコマでも工場は遅れない）。それより空いたぶんは数えない（画面を隠していた間などを、まとめて進めない）。
+    // 視点と絵の動きは、これまでどおり 0.1 秒まで
+    const raw = (now - prev) / 1000, dt = Math.min(0.1, raw);
     prev = now;
     let drawn = true;
-    try { simFrame(now, dt); } catch (err) { frameFault(err, now); }
+    try { simFrame(now, Math.min(0.25, raw)); } catch (err) { frameFault(err, now); }
     try { viewFrame(dt); } catch (err) { frameFault(err, now); }
     // 軽量スキンは、描くのを 2 コマに 1 回にする（工場と視点は毎コマ進める。飛ばしたコマの時間は、次に描くコマへ足す）
     if (lite() && !shotPending && (liteFlip = !liteFlip)) { liteCarry += dt; return; }
@@ -2493,10 +2529,14 @@ function boot(data: HotData) {
   window.addEventListener('unhandledrejection', onCrash);
   window.addEventListener('pagehide', () => { save(); saveCam(); });
   // 更新のお知らせ：新しい版で、はじめて工場を開いたときに 1 度だけ
-  const NEWS = '2026-11-unload';
+  const NEWS = '2026-11-roomy';
   const showNews = () => {
     store.setMeta({ news: NEWS });
     showSheet(h('header', {}, h('h2', {}, '更新のお知らせ'), closeBtn()),
+      h('p', {}, h('b', {}, 'セーブを 5 分の 1 の大きさにした（同期できなくなっていたのを直した）。'), '同じ設定の設備は 1 つの型にまとめ、場所は前の設備との差で書く。設備 6.5 万個の工場で、400 万字が 72 万字になる。同期で送る大きさは 47 万字から 18 万字になり、上限（150 万字）まで 8 倍の余裕がある。端末に入りきらない大きさのセーブは、別の保存場所（ブラウザーのデータベース）へ自動で移す。画面を閉じる瞬間の送信が、大きなセーブでは失敗していたのも直した。注意：新しい形のセーブは、古い版のままの端末では開けない。同期する端末は、どれも開き直して新しい版にしろ。'),
+      h('p', {}, h('b', {}, '地図を、工場ぜんぶが入るまで引ける。'), '引ける限界を、工場の広がりに合わせた（遠くに置いた設備まで入る倍率の、さらに 0.7 倍まで）。「全体」は、遠くに離れた少しの設備を除いた工場のまとまりを映し、もう一度押すと「すべて」（遠くの設備まで）、もう一度で「近く」（納品所）。'),
+      h('p', {}, h('b', {}, '重い場面で、工場の時間が遅れなくなった。'), 'これまでは、絵を描くのが遅い場面（納品所のまわりなど）で、1 コマに 1 歩しか工場を進めず、工場の時間が実際の 4 分の 1 ほどまで遅れて、列車も装置も止まったように見えた。コマの間が空いたら、その分の歩数を進める。CPU を 4 分の 1 に絞った測定で、工場の進みが実時間の 0.21〜0.27 倍から 0.72〜0.92 倍になった。'),
+      h('p', {}, h('b', {}, '統計に「列車の点検」を足した。'), '荷を積んだまま出発できない列車と、その理由を、番線ごとに並べる（同じ番線の降ろす駅がない・降ろす駅がすべて満杯・満杯の降ろす駅）。行を押すと、その駅へ移る。'),
       h('p', {}, h('b', {}, '降ろす駅の詰まりを直した。'), '降ろす駅は、出口の先が受け取るかぎり、待たずにいくらでも出す（納品所へじかに降ろす駅は、届いた分をすぐ納める）。先頭の物質を出口の先が受け取らないときは、うしろの別の物質を先に出す。列車は、満杯の降ろす駅を飛ばして空いている駅へ行き、着いてから満杯だったときは、4 秒待って引き返して出直す（これまでは、詰まった駅 1 つの前に、番線じゅうの列車が集まって止まっていた）。'),
       h('p', {}, h('b', {}, '図鑑の反応に、星を付けられる。'), '図鑑 →「反応」で、覚えたい反応・まちがえやすい反応の ☆ を押すと ★ になる。★ の反応はいつも上に並び、「★ だけ見る」で絞れ、「★ をまとめて練習」で、その反応だけを続けて解ける（予定は動かさない）。星はセーブに残る。'),
       h('p', {}, h('b', {}, '新しいスキン「実景」（昼の構内／夜の構内）。'), '上空から撮った本物の化学プラントのような見た目。地面は、目地・しみ・水たまり・ひびのあるコンクリートで、資源地は、その土地の地面（海は水面、畑は草地、鉱床は土と石）。装置は、コンクリートの基礎の上の、研磨した鋼の箱（機種の色は、塗装の帯だけ）。液体は青灰、気体は黄の塗装管で、継ぎ目にフランジ。固体は黒いゴムのコンベヤ。夜は、構内灯の橙の光が地面に落ちる。画質は「高」以上がおすすめ（影と、物のきわの暗がりがつく）。装置の窓の中は、ほかのスキンと同じ。'),
