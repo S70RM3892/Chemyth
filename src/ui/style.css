@@ -471,7 +471,10 @@ html.card-right #rvcard { left: auto; right: var(--gr); }
 .card .muted { font-size: 12px; line-height: 1.45; }
 .rxlist { display: grid; gap: 0; border-top: 1px solid var(--rule); }
 .rx { border-bottom: 1px solid var(--rule); padding: 10px 4px; }
-.rx summary { cursor: pointer; display: grid; gap: 2px; }
+.rx summary { cursor: pointer; display: grid; gap: 2px; grid-template-columns: auto 1fr; column-gap: 8px; align-items: start; }
+.rx summary > * { grid-column: 2; }
+.rx summary > .star { grid-column: 1; grid-row: 1 / span 3; min-width: 44px; min-height: 44px; padding: 0; font-size: 24px; line-height: 1; background: transparent; border: 0; box-shadow: none; color: var(--soft); }
+.rx summary > .star.on { color: var(--hi); -webkit-text-stroke: 1px var(--ink); }
 .rx summary .formula { font-size: 14px; overflow-x: auto; white-space: nowrap; }
 .rx[open] { display: grid; gap: 8px; }
 

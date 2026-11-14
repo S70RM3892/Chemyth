@@ -331,3 +331,24 @@ describe('自動の仮線路をまとめて描く', () => {
     expect(autoRuns(w).pairs).toBeLessThan(120);
   });
 });
+
+describe('図鑑の星', () => {
+  it('付ける・外す。セーブしても残る。壊れた値は読まない', async () => {
+    const { starred, toggleStar, readStudy, STAR_MAX } = await import('../src/engine/study');
+    const w = newWorld();
+    expect(starred(w.study, 'haber-bosch')).toBe(false);
+    expect(toggleStar(w.study, 'haber-bosch')).toBe(true);
+    expect(toggleStar(w.study, 'water-electrolysis')).toBe(true);
+    expect(starred(w.study, 'haber-bosch')).toBe(true);
+    const r = deserialize(serialize(w))!;
+    expect(r.study.stars).toEqual(['haber-bosch', 'water-electrolysis']);
+    expect(toggleStar(r.study, 'haber-bosch')).toBe(false);
+    expect(r.study.stars).toEqual(['water-electrolysis']);
+    expect(readStudy({ stars: ['a', 'a', 5, null, 'b'] }).stars).toEqual(['a', 'b']);
+    expect(readStudy({ stars: 'x' }).stars).toBeUndefined();
+    const s = readStudy({});
+    for (let i = 0; i < STAR_MAX + 5; i++) toggleStar(s, `r${i}`);
+    expect(s.stars!.length).toBe(STAR_MAX);
+    expect(s.stars![0]).toBe('r5');
+  });
+});

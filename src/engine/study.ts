@@ -35,11 +35,23 @@ export interface Study {
   order: 'mix' | 'weak';
   /** 計算問題を解き直して正解した時刻（問題の id ごと） */
   redo: Record<string, number>;
+  /** 図鑑で星を付けた反応（反応の id。覚えたいもの・苦手なものの目印）。新しい STAR_MAX 件 */
+  stars?: string[];
   /** 途中で閉じた今夜・今朝の 10 問（種類ごとに 1 つ。なければ無い） */
   runs?: Partial<Record<SetRun['kind'], SetRun>>;
 }
 export const GOAL_MINS = [0, 15, 30, 45, 60, 90];
-export const WHY_KEEP = 300, NIGHT_KEEP = 30;
+export const WHY_KEEP = 300, NIGHT_KEEP = 30, STAR_MAX = 200;
+/** 反応 id に星が付いているか */
+export const starred = (s: Study, id: string) => !!s.stars?.includes(id);
+/** 星を付ける・外す。付けたあとの状態を返す */
+export function toggleStar(s: Study, id: string): boolean {
+  const l = (s.stars ??= []), i = l.indexOf(id);
+  if (i >= 0) { l.splice(i, 1); return false; }
+  l.push(id);
+  if (l.length > STAR_MAX) l.splice(0, l.length - STAR_MAX);
+  return true;
+}
 
 export const newStudy = (): Study => ({ ms: {}, why: [], nights: [], goalMin: 0, order: 'mix', redo: {} });
 /** 続きから出せる回（同じ種類・同じ日のもの）。なければ null */
@@ -73,6 +85,7 @@ export function readStudy(d: unknown): Study {
   }
   s.goalMin = GOAL_MINS.includes(o.goalMin as number) ? (o.goalMin as number) : 0;
   s.order = o.order === 'weak' ? 'weak' : 'mix';
+  if (Array.isArray(o.stars)) { const l = [...new Set(o.stars.filter((x: unknown): x is string => typeof x === 'string' && x.length <= 80))].slice(-STAR_MAX); if (l.length) s.stars = l; }
   if (o.redo && typeof o.redo === 'object') for (const [k, v] of Object.entries(o.redo as Record<string, unknown>)) if (num(v)) s.redo[k] = v;
   if (o.runs && typeof o.runs === 'object') {
     for (const kind of ['night', 'morning'] as const) {

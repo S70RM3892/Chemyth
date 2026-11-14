@@ -20,7 +20,7 @@ import {
   answerRow, calcRedo, canFillCoef, canPickProducts, checkCoefs, checkProducts, fillTerms, forecast, goalsOf, known, mistakeUnits,
   nightHistory, orderIds, practiceGroups, productPool, redoSolved, studyToday, termTopics, timeStats, weakIds, weekReport, whyTally,
 } from '../engine/learn';
-import { GOAL_MINS, WHY_NAME, WHY_TIP, type Why } from '../engine/study';
+import { GOAL_MINS, WHY_NAME, WHY_TIP, type Why, starred, toggleStar } from '../engine/study';
 import { PLATING, platingOf, type World } from '../engine/world';
 import { chip, equation } from './config';
 import { h } from './dom';
@@ -81,6 +81,8 @@ export function bookSubs(w: World): HTMLElement[] {
 
 let rxMachine: MachineKind | 'all' = 'all';
 let rxSort: 'learned' | 'due' | 'lapse' = 'learned';
+/** 星を付けた反応だけを見る */
+let rxStarOnly = false;
 const goalName = (g: { ch: number; gi: number; s: string }) => `${CHAPTERS[g.ch].name}・${g.gi + 1} 番目の指令（${sub(g.s).name}）`;
 export function bookRx(c: PanelCtx, again: Back): HTMLElement[] {
   const { w } = c;
@@ -90,9 +92,14 @@ export function bookRx(c: PanelCtx, again: Back): HTMLElement[] {
   const kinds = [...new Set(learned.map((r) => r.machine))];
   if (rxMachine !== 'all' && !kinds.includes(rxMachine)) rxMachine = 'all';
   const card = (r: Recipe) => w.srs[`r:${r.id}`];
-  const shown = learned.filter((r) => rxMachine === 'all' || r.machine === rxMachine);
+  const nStar = learned.filter((r) => starred(w.study, r.id)).length;
+  if (!nStar) rxStarOnly = false;
+  const shown = learned.filter((r) => (rxMachine === 'all' || r.machine === rxMachine) && (!rxStarOnly || starred(w.study, r.id)));
   if (rxSort === 'due') shown.sort((a, b) => (card(a)?.due ?? Infinity) - (card(b)?.due ?? Infinity));
   if (rxSort === 'lapse') shown.sort((a, b) => (card(b)?.l ?? 0) - (card(a)?.l ?? 0) || (card(a)?.due ?? Infinity) - (card(b)?.due ?? Infinity));
+  // 星を付けた反応は、いつも上に（並べ方は、その中で保つ）
+  shown.sort((a, b) => Number(starred(w.study, b.id)) - Number(starred(w.study, a.id)));
+  const starIds = learned.filter((r) => starred(w.study, r.id) && card(r)).map((r) => `r:${r.id}`);
   const when = (t: number) => { const d = Math.round((t - now) / 86400000); return t <= now ? 'いま' : d <= 0 ? '今日' : d === 1 ? '明日' : `${d} 日後`; };
   const fillIds = (pred: (r: Recipe) => boolean) => orderIds(w, shown.filter(pred).map((r) => `r:${r.id}`));
   const nCoef = shown.filter(canFillCoef).length, nProd = shown.filter(canPickProducts).length;
@@ -105,11 +112,18 @@ export function bookRx(c: PanelCtx, again: Back): HTMLElement[] {
     h('div', { class: 'row' },
       h('button', { class: 'ghost', type: 'button', id: 'book-fill-coef', disabled: !nCoef, onclick: () => runFill(c, 'coef', fillIds(canFillCoef), again) }, `係数を書く練習（${Math.min(10, nCoef)} 問）`),
       h('button', { class: 'ghost', type: 'button', id: 'book-fill-prod', disabled: !nProd, onclick: () => runFill(c, 'prod', fillIds(canPickProducts), again) }, `生成物を組む練習（${Math.min(10, nProd)} 問）`)),
+    h('div', { class: 'row' },
+      h('button', { class: 'chip plain' + (rxStarOnly ? ' on' : ''), type: 'button', id: 'book-star-only', disabled: !nStar, ariaPressed: String(rxStarOnly), onclick: () => { rxStarOnly = !rxStarOnly; sfx.tap(); again(); } }, `★ だけ見る（${nStar}）`),
+      h('button', { class: 'ghost', type: 'button', id: 'book-star-try', disabled: !starIds.length, onclick: () => solveList(c, '★ の反応を練習', orderIds(w, starIds), true, again) }, `★ をまとめて練習（${starIds.length} 問）`),
+      h('span', { class: 'muted' }, nStar ? '★ を付けた反応は、いつも上に並ぶ。' : '覚えたい反応・まちがえやすい反応に、☆ を押して星を付けろ。')),
     orderSeg(w, again, 'book-order'),
     h('div', { class: 'rxlist' }, ...shown.map((r) => {
       const cd = card(r), pl = platingOf(w.srs, r.id), goals = goalsOf(r);
       return h('details', { class: 'rx', id: `book-rx-${r.id}` },
-        h('summary', {}, h('b', {}, r.name), h('span', { class: 'formula' }, equation(r) + (r.machine === 'battery' ? `（e⁻ ${electronsOf(r)}）` : '')),
+        h('summary', {},
+          h('button', { class: 'star' + (starred(w.study, r.id) ? ' on' : ''), type: 'button', id: `book-star-${r.id}`, title: starred(w.study, r.id) ? '星を外す' : '星を付ける（上に並び、まとめて練習できる）', ariaPressed: String(starred(w.study, r.id)), ariaLabel: `${r.name}に星を${starred(w.study, r.id) ? '付けている。外す' : '付ける'}`,
+            onclick: (ev: Event) => { ev.preventDefault(); ev.stopPropagation(); const on = toggleStar(w.study, r.id); sfx.tap(); c.toast(on ? `★ ${r.name}` : `星を外した：${r.name}`, 1400); again(); } }, starred(w.study, r.id) ? '★' : '☆'),
+          h('b', {}, r.name), h('span', { class: 'formula' }, equation(r) + (r.machine === 'battery' ? `（e⁻ ${electronsOf(r)}）` : '')),
           cd ? h('span', { class: 'muted rx-srs' }, `次の復習 ${when(cd.due)}　いま思い出せる確率 ${Math.round(recallNow(cd, now) * 100)} %${cd.l ? `　忘れた ${cd.l} 回` : ''}${pl ? `　${PLATING[pl]}` : ''}`) : null),
         h('p', { class: 'muted' }, `${MACHINES[r.machine].name}　${CONDITIONS[r.machine].label}：${r.accept.join(' または ')}`),
         h('p', { class: 'note' }, r.note), h('p', { class: 'muted' }, r.source),
