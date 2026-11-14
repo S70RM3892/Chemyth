@@ -9,7 +9,7 @@ import { productsOf, recipeById } from './content/recipes';
 import { about, chip, diagram, openConfig } from './ui/config';
 import { $, h } from './ui/dom';
 import { attachInput, Z_MAX, Z_MIN, Z_MIN_3D, type InputHandlers } from './ui/input';
-import { FAR_Z, isFar } from './ui/far';
+import { FAR_Z, farFading, farKept, isFar } from './ui/far';
 import { numPad, typeNumber, reviewCount, showAnalyzer, showBook, showChapters, showDepot, showLog, showPassages, showSampler, showTestOut, showPhoresis, showSettler, showSignal, showStation, showTank, showSyllabus, showUpgrades, type PanelCtx } from './ui/panels';
 import { showDrills, showEssays, showStructure } from './ui/practice';
 import { burst, draw, setCalm, type Camera } from './ui/render';
@@ -2389,6 +2389,18 @@ function boot(data: HotData) {
     }
   };
   /** 地図を描く所。省電力で描かずに休んだコマは false */
+  /**
+   * 引いた視野の絵の使い回し。設備が何万もある工場では、引いた絵を 1 枚描くのに、遅い端末で 0.1 秒を超える。毎コマ描くと、地図を動かす間ずっと引っかかる。
+   *  - 視点も選んでいるものも変わらないコマ：描かない（前の絵が画面に残っている）。列車や荷の動きは、少し間をおいて描き直す
+   *  - 視点が動いたコマ（光の層を使わない表示のとき）：前の絵を、いまの視点の位置と大きさに合わせて写す。描き直しは、描く時間の 1.5 倍に 1 回まで
+   * 1 枚を FAR_SLOW ミリ秒より速く描ける端末・工場では、これまでどおり毎コマ描く
+   */
+  const FAR_SLOW = 14;
+  let farCost = 0, farAt = 0, farKey = '', farCam: Camera = { x: 0, y: 0, z: 1 }, farCopy: HTMLCanvasElement | null = null, farSel: Ent | null = null, farSince = 0, farPrev: Camera = { x: 0, y: 0, z: 1 }, farMoveAt = 0;
+  const farSig = (v: { area?: number[] | null; ghost?: { x: number; y: number; ok: boolean }[] | null; rail?: [number, number][] | null; ports?: unknown[] | null; marks?: unknown[] | null; lift?: boolean }) => {
+    const g = v.ghost, r = v.rail;
+    return `${floor}|${tool}|${overlay ? 1 : 0}|${palette().key}|${(world.ents as unknown as { rev?: number }).rev ?? world.ents.size}|${world.railRev}|${cw}x${ch}|${v.area ? v.area.join(',') : ''}|${g ? `${g.length}:${g[0]?.x},${g[0]?.y},${g[0]?.ok}` : ''}|${r ? `${r.length}:${r[r.length - 1]?.join(',')}` : ''}|${v.ports ? v.ports.length : ''}|${v.marks ? v.marks.length : ''}|${v.lift ? 1 : 0}`;
+  };
   const drawFrame = (now: number, dt: number): boolean => {
     if (slot) {
       const d0 = PERF ? performance.now() : 0;
@@ -2399,6 +2411,37 @@ function boot(data: HotData) {
       if ((idle || veiled) && ++idleSkip % (veiled ? 15 : 6)) return false;
       const fx = fxOn(), t3 = fx && three && gw > 0;
       const view = { dusk: palette().name === 'light' ? dusk : dusk * 0.5, floor, tool, selected, stats: overlay, area: tool === 'area' ? areaRect() : null, ghost: moving && (moving.dx || moving.dy) ? moveGhost() : tool === 'area' ? ghostCells() : toolGhost(), lift: !!moving && !!(moving.dx || moving.dy), ports: moving ? null : selPorts(), marks: sameMarks(), allPlates: pf.plates, over: b2.draw };
+      // 引いた視野：前の絵を使い回せるコマか
+      const farOn = !t3 && isFar(cv, cam);
+      let farK = '';
+      if (!farOn) { farSince = 0; if (farCopy) { farCopy.width = farCopy.height = 0; farCopy = null; } }
+      else {
+        const nowR = performance.now();
+        if (!farSince) farSince = nowR;
+        farK = farSig(view);
+        if (farCost > FAR_SLOW && !shotPending && !fireworksActive() && farK === farKey && farSel === selected && nowR - farSince > 700 && !farFading(cv)) {
+          const age = nowR - farAt, still = cam.x === farCam.x && cam.y === farCam.y && cam.z === farCam.z;
+          // 視点が、前のコマから動いたか（指を離して止まったら、すぐ描き直して、くっきりさせる）
+          if (cam.x !== farPrev.x || cam.y !== farPrev.y || cam.z !== farPrev.z) { farMoveAt = nowR; farPrev = { x: cam.x, y: cam.y, z: cam.z }; }
+          // 指の動きはコマより粗いこともあるので、0.15 秒動かなければ「止まった」とみなす
+          const moving = nowR - farMoveAt < 150;
+          if (still && age < Math.min(1500, Math.max(220, farCost * 4))) { farKept(cv, cam); if (PERF) PERF.draw.push(performance.now() - d0); return true; }
+          const sc = cam.z / farCam.z;
+          if (!still && moving && !fx && farCopy && farCopy.width === cv.width && farCopy.height === cv.height && age < Math.min(1200, Math.max(150, farCost * 6)) && sc > 0.45 && sc < 2.2
+            && Math.abs(farCam.x - cam.x) * cam.z < cw * 0.6 && Math.abs(farCam.y - cam.y) * cam.z < ch * 0.6) {
+            const x = (farCam.x - cam.x) * cam.z + cw / 2 - (cw / 2) * sc, y = (farCam.y - cam.y) * cam.z + ch / 2 - (ch / 2) * sc;
+            ctx.save();
+            ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.setLineDash([]);
+            ctx.fillStyle = palette().paper; ctx.fillRect(0, 0, cw, ch);
+            ctx.imageSmoothingEnabled = true;
+            ctx.drawImage(farCopy, x, y, cw * sc, ch * sc);
+            ctx.restore();
+            farKept(cv, cam);
+            if (PERF) PERF.draw.push(performance.now() - d0);
+            return true;
+          }
+        }
+      }
       if (fx) {
         // 光の層は黒地に加算、効果の層は黒地（何もない所は効果なし）
         for (const c2 of [glowCtx, maskCtx]) { c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'source-over'; c2.globalAlpha = 1; c2.fillStyle = '#000'; c2.fillRect(0, 0, glowCv.width, glowCv.height); c2.setTransform(fxK, 0, 0, fxK, 0, 0); c2.globalCompositeOperation = 'lighter'; }
@@ -2427,7 +2470,22 @@ function boot(data: HotData) {
           ao: gfxTier === 2 ? (pal.name === 'light' ? 0.32 : 0.45) : 0, rich: gfxTier === 2 ? 1 : 0, skin: pal.skin === 'punk' ? 1 : pal.skin === 'arcane' ? 2 : pal.skin === 'lab' ? 3 : 0, dark: pal.name === 'dark',
         }, glowCv, maskCv, duskPost(POST_PRESETS[pal.key], now / 1000, true));
       } else {
+        const f0 = farOn ? performance.now() : 0;
         draw(ctx, cw, ch, world, cam, now / 1000, dt, { ...view, fx: fx ? { glow: glowCtx, mask: maskCtx, height: useH ? heightCtx : null } : null });
+        if (farOn) {
+          // 描くのにかかった時間（ならした値）と、そのときの視点を覚える。遅いときは、絵の写しも取っておく（視点が動いたコマに、合わせて写す）
+          if (!fx && (farCost > FAR_SLOW || performance.now() - f0 > FAR_SLOW) && cv.width > 0 && cv.height > 0) {
+            farCopy ??= document.createElement('canvas');
+            if (farCopy.width !== cv.width || farCopy.height !== cv.height) { farCopy.width = cv.width; farCopy.height = cv.height; }
+            const g2 = farCopy.getContext('2d')!;
+            g2.globalCompositeOperation = 'copy'; g2.globalAlpha = 1;
+            g2.drawImage(cv, 0, 0);
+          } else if (farCopy && farCost <= FAR_SLOW) { farCopy.width = farCopy.height = 0; farCopy = null; }
+          // 写しを取ると、ためてあった描く仕事がここで済む。その時間まで含めたものが、1 枚にかかる時間
+          const f1 = performance.now(), c1 = f1 - f0;
+          farCost = farCost ? farCost + (c1 - farCost) * 0.3 : c1;
+          farAt = f1; farKey = farK; farSel = selected; farCam = { x: cam.x, y: cam.y, z: cam.z }; farPrev = farCam;
+        }
         drawFireworks(ctx, cw, ch, dt, fx ? glowCtx : null);
         if (fx) post!.render(cv, glowCv, maskCv, duskPost(POST_PRESETS[palette().key], now / 1000), useH ? heightCv : null);
       }
@@ -2529,10 +2587,17 @@ function boot(data: HotData) {
   window.addEventListener('unhandledrejection', onCrash);
   window.addEventListener('pagehide', () => { save(); saveCam(); });
   // 更新のお知らせ：新しい版で、はじめて工場を開いたときに 1 度だけ
-  const NEWS = '2026-11-roomy';
+  const NEWS = '2026-11-rework';
   const showNews = () => {
     store.setMeta({ news: NEWS });
     showSheet(h('header', {}, h('h2', {}, '更新のお知らせ'), closeBtn()),
+      h('p', {}, h('b', {}, '大きな工場の計算と、引いた地図の描き方を、作り直した。'), '設備が何万もある工場のための作り直し。動き（作る数・運ぶ数）は変えていない。'),
+      h('ul', {},
+        h('li', {}, '採取機 → 装置 → 廃棄口・駅のまとまりは、1.6 秒ぶんをまとめて進める（設備を 1 台ずつ読みに行く回数が、1 歩の時間の大半だった）。装置の絵の進み具合は、時刻から求めて、なめらかに動かす。'),
+        h('li', {}, '積む駅は、列車がみな走っている間、次の列車が着く時刻まで眠る。列車の位置は、時刻から求める。空のベルト・タンク・分配器も、荷が来るまで眠る。'),
+        h('li', {}, '納品所へのひと山は、数をまとめて納める（毎秒 1 万個を超える納品を、1 個ずつ数えない）。'),
+        h('li', {}, '引いた地図（戦略図）は、1 枚描くのが遅い端末では、描いた絵を使い回す。動かしている間は、前の絵を視点に合わせて写し、指を止めたら描き直す。止まっている間は、0.2〜1.5 秒おきに描き直す（列車と荷の動きは、その間隔で進む）。'),
+        h('li', {}, '実物の工場（設備 6.5 万）で、工場の 1 秒を進める計算が 79 ms → 35 ms（毎秒 20 歩）。CPU を 4 分の 1 に絞った測定で、引いた地図を引きずる間のコマの間が 133 ms → 17 ms、工場の進みは実時間の 0.96〜1.03 倍。')),
       h('p', {}, h('b', {}, 'セーブを 5 分の 1 の大きさにした（同期できなくなっていたのを直した）。'), '同じ設定の設備は 1 つの型にまとめ、場所は前の設備との差で書く。設備 6.5 万個の工場で、400 万字が 72 万字になる。同期で送る大きさは 47 万字から 18 万字になり、上限（150 万字）まで 8 倍の余裕がある。端末に入りきらない大きさのセーブは、別の保存場所（ブラウザーのデータベース）へ自動で移す。画面を閉じる瞬間の送信が、大きなセーブでは失敗していたのも直した。注意：新しい形のセーブは、古い版のままの端末では開けない。同期する端末は、どれも開き直して新しい版にしろ。'),
       h('p', {}, h('b', {}, '地図を、工場ぜんぶが入るまで引ける。'), '引ける限界を、工場の広がりに合わせた（遠くに置いた設備まで入る倍率の、さらに 0.7 倍まで）。「全体」は、遠くに離れた少しの設備を除いた工場のまとまりを映し、もう一度押すと「すべて」（遠くの設備まで）、もう一度で「近く」（納品所）。'),
       h('p', {}, h('b', {}, '重い場面で、工場の時間が遅れなくなった。'), 'これまでは、絵を描くのが遅い場面（納品所のまわりなど）で、1 コマに 1 歩しか工場を進めず、工場の時間が実際の 4 分の 1 ほどまで遅れて、列車も装置も止まったように見えた。コマの間が空いたら、その分の歩数を進める。CPU を 4 分の 1 に絞った測定で、工場の進みが実時間の 0.21〜0.27 倍から 0.72〜0.92 倍になった。'),

@@ -10,7 +10,7 @@ import { ZONES, isSea, zoneAt } from '../content/map';
 import { MACHINES } from '../content/machines';
 import { SEP_PORTS, isSep, sepReady, sepSlots, type SepKind } from '../content/sep';
 import { label, sub } from '../content/substances';
-import { DX, DY, STATION_CAP, currentGoal, fedTier, goalCount, goalRate, inDoors, isMachine, outPort, portDir, requiredOf, sizeOf, slotPort, type Ent, type World } from '../engine/world';
+import { progOf, DX, DY, STATION_CAP, currentGoal, fedTier, goalCount, goalRate, inDoors, isMachine, outPort, portDir, requiredOf, sizeOf, slotPort, type Ent, type World } from '../engine/world';
 import { LAB_MAGENTA, mix, onThemeChange, type Palette } from './theme';
 import { drawElement, sprite } from './token';
 
@@ -412,7 +412,7 @@ export function machineLab(ctx: CanvasRenderingContext2D, P: Palette, cx: number
   if (st === 0) {
     // 稼働：進み具合まで満ち、先頭の光が走る
     ctx.fillStyle = light ? `rgba(${TEAL_L},0.3)` : `rgba(${TEAL_D},0.22)`; ctx.fillRect(lx0, ly - lh / 2, lw, lh);
-    ctx.fillStyle = on; ctx.fillRect(lx0, ly - lh / 2, lw * Math.min(1, e.prog || 0), lh);
+    ctx.fillStyle = on; ctx.fillRect(lx0, ly - lh / 2, lw * Math.min(1, progOf(e)), lh);
     if (!calm) { const hx = lx0 + lw * ((t * 0.9 + e.x * 0.13) % 1); ctx.fillStyle = '#ffffff'; ctx.globalAlpha = 0.85; ctx.fillRect(hx - lh, ly - lh / 2, lh * 2, lh); ctx.globalAlpha = 1; }
   } else {
     // 原料待ちは点線、設定待ち・詰まりは全体、止まっているものは暗い点線

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { addRail, at, deserialize, STATION_CAP, layRail, newWorld, place, railOf, railRoute, remove, serialize, stationDests, stationRoutes, stationsOf, step, TRAIN_CAP, type Ent, type Train, type World, plainSave } from '../src/engine/world';
 import { LINE_EXACT, lineRuns, TRAIN, trainAt } from '../src/ui/railruns';
+import { recipeById } from '../src/content/recipes';
+import { resourceAt } from '../src/content/map';
 
 // 決まった乱数
 const rng = (seed: number) => { let x = seed; return () => { x = (x * 16807) % 2147483647; return (x - 1) / 2147483646; }; };
@@ -493,5 +495,137 @@ describe('セーブの大きさ', () => {
     d.ents.g.push([999, 3, [0, 0, 0, 0]], 'junk');
     const w3 = deserialize(JSON.stringify(d))!;
     expect(w3.ents.size).toBe(w.ents.size);
+  });
+});
+
+describe('大きな工場の計算の作り（まとまり・居眠り・まとめて納める）', () => {
+  /** 採取機 2 台 → 蒸留塔（液体空気の分留）→ 廃棄口 2 つ、の組を n 組（空気の採れる所） */
+  const units = async (n: number) => {
+    const { configure, outPort } = await import('../src/engine/world');
+    const w = newWorld(), r = recipeById('air-distillation')!;
+    let made = 0;
+    for (let i = 0; made < n && i < 40000; i++) {
+      const x = 400 + (i % 60) * 4, y = 400 + Math.floor(i / 60) * 3;
+      if (at(w, x, y) || at(w, x, y + 1) || at(w, x + 1, y) || at(w, x + 2, y + 1) || at(w, x + 3, y) || at(w, x + 2, y + 2)) continue;
+      if (resourceAt(x, y) !== 'air' || resourceAt(x, y + 1) !== 'air') continue;   // 空気の採れるマスだけ
+      if (place(w, 'extractor', x, y, 0) !== null) continue;
+      if (place(w, 'extractor', x, y + 1, 0) !== null || place(w, 'separator', x + 1, y, 0) !== null) { remove(w, x, y); remove(w, x, y + 1); continue; }
+      const m = at(w, x + 1, y)!;
+      configure(m, r, r.outputs.map((o) => o[0]));
+      m.inBuf = {}; m.outBuf = r.outputs.map(() => 0);
+      for (let q = 0; q < r.outputs.length; q++) { const pt = outPort(m, q); place(w, 'vent', pt.tx, pt.ty, 0); }
+      made++;
+    }
+    expect(made).toBe(n);
+    return w;
+  };
+  const run = (w: World, secs: number, hz = 20) => { for (let i = 0; i < secs * hz; i++) { step(w, 1 / hz); w.fx.length = 0; w.events.length = 0; } };
+  const madeOf = (w: World) => (w.made.N2 || 0) + (w.made.O2 || 0);
+
+  it('採取機 → 装置 → 廃棄口のまとまりは、まとめて回しても、1 組あたりの生産が同じ（計算の歩数を変えても同じ）', async () => {
+    const small = await units(12), big = await units(1020), big60 = await units(1020);
+    // まとまりは、回ってくるまで最大 1.6 秒待つ。その分（1 組あたり反応 1 回に満たない）だけ、はじめに遅れる。速さは同じ
+    run(small, 180); run(big, 180); run(big60, 180, 60);
+    const a = madeOf(small) / 12, b = madeOf(big) / 1020, c = madeOf(big60) / 1020;
+    expect(a).toBeGreaterThan(300);
+    expect(Math.abs(b - a)).toBeLessThan(6);
+    expect(Math.abs(c - a)).toBeLessThan(6);
+    expect(Math.abs(b - c)).toBeLessThan(1);
+    // 捨てた数も、作った数と合う（装置の中に残った分だけ少ない）
+    const v = Object.values(big.vented).reduce((x, y) => x + y, 0);
+    expect(v).toBeGreaterThan(madeOf(big) * 0.97);
+    // 稼働率・回数の記録も進んでいる
+    const m = [...big.ents.values()].find((e) => e.kind === 'separator')!;
+    expect(m.n).toBeGreaterThan(20);
+    expect(m.u).toBeGreaterThan(0.5);
+  });
+  it('置く・消すを続けても（まとまりを解いて組み直す間も）、生産は減りも増えもしない', async () => {
+    const calm = await units(1020), busy = await units(1020);
+    run(calm, 10); run(busy, 10);
+    for (let k = 0; k < 12; k++) {
+      // 手を入れる：遠くにベルトを置き、少しして消す
+      place(busy, 'belt', 3000 + k, 3000, 0); run(busy, 1); run(calm, 1);
+      remove(busy, 3000 + k, 3000); run(busy, 2.5); run(calm, 2.5);
+    }
+    const a = madeOf(calm), b = madeOf(busy);
+    expect(Math.abs(b - a) / a).toBeLessThan(0.02);
+  });
+  it('一時停止した装置は、まとまりの中でも止まり、動かすと続きから動く', async () => {
+    const w = await units(1020);
+    run(w, 10);
+    const m = [...w.ents.values()].find((e) => e.kind === 'separator')!;
+    m.off = true;
+    run(w, 5);
+    const n0 = m.n;
+    run(w, 10);
+    expect(m.n).toBe(n0);
+    m.off = undefined;
+    run(w, 10);
+    expect(m.n!).toBeGreaterThan(n0! + 2);
+  });
+  it('積む駅は、列車がみな走っている間は居眠りする。列車の位置は時刻から求まり、着く時刻・運ぶ量は変わらない', async () => {
+    const { trainP } = await import('../src/engine/world');
+    const mk = () => {
+      const w = newWorld();
+      const a = station(w, 300, 300, 'in', 5); station(w, 380, 300, 'out', 5);
+      place(w, 'vent', 382, 300, 0); place(w, 'vent', 382, 301, 0);
+      return { w, a };
+    };
+    const A = mk(), B = mk();
+    const vented = (w: World) => Object.values(w.vented).reduce((x, y) => x + y, 0);
+    let slept = 0, last = 0, mono = true;
+    for (let i = 0; i < 20 * 120; i++) {
+      for (const q of [A, B]) if (q.a.buf!.length < 400) q.a.buf!.push(...Array(100).fill('N2'));
+      step(A.w, 1 / 20);
+      // B は、2 歩を 1 回にまとめて進める（歩幅が違っても、同じだけ運ぶ）
+      if (i % 2) step(B.w, 1 / 10);
+      const tr = A.a.tr!;
+      if (A.a.zw !== undefined && A.a.zw > A.w.playMs) slept++;
+      if (tr.p > 0 && !tr.back) { const p = trainP(A.w, A.a, tr); if (p < last - 1e-9) mono = false; last = p; } else last = 0;
+    }
+    expect(slept).toBeGreaterThan(20 * 120 * 0.5);     // 半分より長く寝ている
+    expect(mono).toBe(true);                            // 走っている間、位置は戻らない
+    expect(vented(A.w)).toBeGreaterThan(TRAIN_CAP * 3);
+    expect(Math.abs(vented(A.w) - vented(B.w))).toBeLessThanOrEqual(TRAIN_CAP);
+    // セーブには、いまの位置が書かれる
+    const tr = A.a.tr!, pNow = trainP(A.w, A.a, tr);
+    const saved = plainSave(serialize(A.w)).ents.find((e: Ent) => e.kind === 'station' && e.role === 'in');
+    expect(saved.tr.p).toBeCloseTo(pNow, 2);
+  });
+  it('納品所へのひと山は、1 個ずつ納めたときと同じ結果になる（在庫・納品の数・元素の段と知らせ・研究点）', () => {
+    const mk = () => {
+      const w = newWorld();
+      // 納品所のマスの西に、2×2 の駅を置ける所を探す
+      const hub = [...w.ents.values()].find((e) => e.kind === 'hub' && !at(w, e.x - 1, e.y) && !at(w, e.x - 2, e.y) && !at(w, e.x - 1, e.y + 1) && !at(w, e.x - 2, e.y + 1))!;
+      const o = station(w, hub.x - 2, hub.y, 'out', 8);
+      return { w, o };
+    };
+    const A = mk(), B = mk(), evA: string[] = [], evB: string[] = [];
+    A.o.buf = Array(600).fill('N2');
+    step(A.w, 1 / 20); evA.push(...A.w.events.filter((e) => e.startsWith('fed')));
+    for (let i = 0; i < 600; i++) { B.o.buf = ['N2']; step(B.w, 1 / 20); evB.push(...B.w.events.filter((e) => e.startsWith('fed'))); B.w.events.length = 0; }
+    expect(A.w.delivered.N2).toBe(600);
+    expect(B.w.delivered.N2).toBe(600);
+    expect(A.w.stock.N2).toBe(B.w.stock.N2);
+    expect(A.w.fed).toEqual(B.w.fed);
+    expect(evA).toEqual(evB);
+    expect(evA.length).toBeGreaterThan(0);
+    expect(A.w.points).toBe(B.w.points);
+  });
+  it('設備の多い工場では、空のベルトは居眠りするが、荷が来ればすぐ動く（流れる量は同じ）', () => {
+    const mk = (idle: number) => {
+      const w = newWorld();
+      for (let i = 0; i < idle; i++) place(w, 'belt', 2000 + (i % 100), 2000 + Math.floor(i / 100) * 2, 0);
+      // 採取機 → ベルト 12 本 → 廃棄口
+      expect(place(w, 'extractor', 400, 400, 0)).toBe(null);
+      for (let x = 401; x <= 412; x++) place(w, 'belt', x, 400, 0);
+      place(w, 'vent', 413, 400, 0);
+      return w;
+    };
+    const small = mk(0), big = mk(1800);
+    for (let i = 0; i < 20 * 40; i++) { step(small, 1 / 20); step(big, 1 / 20); small.fx.length = 0; big.fx.length = 0; }
+    const v = (w: World) => Object.values(w.vented).reduce((x, y) => x + y, 0);
+    expect(v(small)).toBeGreaterThan(20);
+    expect(Math.abs(v(big) - v(small))).toBeLessThanOrEqual(2);
   });
 });

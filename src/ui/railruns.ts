@@ -1,4 +1,4 @@
-import { railGraph, railOf, railRoute, stationDests, stationRailIdx, stationsOf, stationVer, type Ent, type Train, type World } from '../engine/world';
+import { railGraph, railOf, railRoute, stationDests, stationRailIdx, stationsOf, stationVer, trainP, type Ent, type Train, type World } from '../engine/world';
 /**
  * 線路を、まっすぐ続く所ごとに 1 本の線にまとめる（[x0, y0, x1, y1] の並び。マスの中心どうしを結ぶ）。
  * 線路は縦と横しかないので、1 万マスでも、まっすぐな区間の数（多くは数十〜数百）だけ線を引けばよい。
@@ -148,7 +148,8 @@ export function trainAt(w: World, e: Ent, tr: Train): void {
     const d = tr.to ? w.ents.get(tr.to) : undefined;
     r = d && d.kind === 'station' && d.role === 'out' && d.ch === e.ch ? railOf(w, e, d) : null;
   }
-  const T = TRAIN, p = tr.p < 0 ? 0 : tr.p > 1 ? 1 : tr.p;
+  // 駅が居眠りしている間の位置は、時刻から求める（工場を進める所は、着くときまで列車を触らない）
+  const p0 = trainP(w, e, tr), T = TRAIN, p = p0 < 0 ? 0 : p0 > 1 ? 1 : p0;
   T.x = e.x + 1; T.y = e.y + 1; T.dx = 1; T.dy = 0;
   if (!r) return;
   let ax: number, ay: number, bx: number, by: number, f: number;

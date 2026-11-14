@@ -71,6 +71,17 @@ export function farBegin(ctx: CanvasRenderingContext2D, cam: Camera, t: number, 
   return far;
 }
 
+/** 引いた視野の絵を描かずに、前の絵を使い回したコマ：視点だけ覚える（近くの絵へ切り替わるときの重ね描きが、ずれないように） */
+export function farKept(cv: HTMLCanvasElement, cam: Camera) {
+  const m = modes.get(cv);
+  if (m) m.cam = { x: cam.x, y: cam.y, z: cam.z };
+}
+/** 近くの絵と引いた絵の切り替えの、重ね描きの最中か */
+export function farFading(cv: HTMLCanvasElement): boolean {
+  const m = modes.get(cv);
+  return !!m && !!m.snap && m.t0 >= 0;
+}
+
 /** 切り替えの重ね描き（前の絵を、いまの視点の位置と大きさに合わせて、薄くしながら重ねる）。毎コマの最後に呼ぶ */
 export function farEnd(ctx: CanvasRenderingContext2D, cw: number, ch: number, cam: Camera, t: number) {
   const m = modes.get(ctx.canvas);

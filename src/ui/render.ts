@@ -3,7 +3,7 @@ import { ELEMENTS } from '../content/elements';
 import { lineColor, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
 import { heightOf, TOP_H } from './three';
-import { flowTrace, JAM_SEC, markEpoch, MOVERS, stationsOf, type FlowTrace } from '../engine/world';
+import { progOf, flowTrace, JAM_SEC, markEpoch, MOVERS, stationsOf, type FlowTrace } from '../engine/world';
 import { at, floorOf, FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, railOf, stationDests, stationVer, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type Train, type World } from '../engine/world';
 import { BRASS, BRASS_DARK, mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
@@ -1159,7 +1159,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
       const r = recipeById(e.recipe);
       if (r) {
         const a = Math.min(1, (z - ZOOM_IN) / 20), cx2 = sx(e.x + 1), cy2 = sy(e.y + 1), ww = z * 1.62, hh = ww * (SW_H / SW_W);
-        const img = sceneImage(r, e.busy ? Math.min(0.999, e.prog || 0) : (t * 0.12) % 0.2);
+        const img = sceneImage(r, e.busy ? Math.min(0.999, progOf(e)) : (t * 0.12) % 0.2);
         ctx.save(); ctx.globalAlpha = a;
         rr(ctx, cx2 - ww / 2 - 4, cy2 - hh / 2 - 4, ww + 8, hh + 8, 10); ctx.fillStyle = P.paper; ctx.fill();
         ctx.strokeStyle = arcane ? BRASS : P.ink; ctx.lineWidth = Math.max(2, z * 0.04); ctx.stroke();
@@ -2269,7 +2269,7 @@ function machine(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: numb
   if (busy) {
     // 進み具合は蛍光ペンの下線
     ctx.strokeStyle = P.hi; ctx.lineWidth = u * 0.07; ctx.lineCap = 'butt';
-    ctx.beginPath(); ctx.moveTo(cx - u * 0.34, cy + u * 0.36); ctx.lineTo(cx - u * 0.34 + u * 0.68 * (e.prog || 0), cy + u * 0.36); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx - u * 0.34, cy + u * 0.36); ctx.lineTo(cx - u * 0.34 + u * 0.68 * progOf(e), cy + u * 0.36); ctx.stroke();
   }
 }
 
@@ -2421,7 +2421,7 @@ function machinePunk(ctx: CanvasRenderingContext2D, P: Palette, cx: number, cy: 
   if (busy) {
     // 進み具合は盤の下のランプ列
     for (let i = 0; i < 8; i++) {
-      ctx.fillStyle = i < Math.ceil((e.prog || 0) * 8) ? P.hi : 'rgba(255,255,255,0.14)';
+      ctx.fillStyle = i < Math.ceil(progOf(e) * 8) ? P.hi : 'rgba(255,255,255,0.14)';
       ctx.fillRect(cx - b + u * 0.03 + i * ((b * 2 - u * 0.06) / 8), cy + b - u * 0.08, (b * 2 - u * 0.06) / 8 - u * 0.012, u * 0.045);
     }
   }
@@ -2477,7 +2477,7 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
       ctx.strokeStyle = P.ink; ctx.lineWidth = line * 0.7;
       for (let i = 0; i < 4; i++) {
         const ty = cy + u * (0.2 - i * 0.13);
-        const lit = busy && Math.floor(((e.prog || 0) * 8) % 4) === i;
+        const lit = busy && Math.floor((progOf(e) * 8) % 4) === i;
         if (lit) { ctx.fillStyle = P.hi; ctx.fillRect(cx - u * 0.13, ty - u * 0.05, u * 0.26, u * 0.1); }
         ctx.beginPath(); ctx.moveTo(cx - u * 0.13, ty); ctx.lineTo(cx + u * 0.13, ty); ctx.stroke();
       }
@@ -2558,7 +2558,7 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
     }
     case 'collector': {
       rr(ctx, cx - u * 0.17, cy - u * 0.14, u * 0.34, u * 0.42, u * 0.06); inked(mix(info.color, '#ffffff', P.name === 'light' ? 0.6 : 0.12));
-      if (busy) { ctx.fillStyle = info.color; ctx.fillRect(cx - u * 0.14, cy + u * (0.25 - 0.34 * (e.prog || 0)), u * 0.28, u * 0.34 * (e.prog || 0)); }
+      if (busy) { ctx.fillStyle = info.color; ctx.fillRect(cx - u * 0.14, cy + u * (0.25 - 0.34 * progOf(e)), u * 0.28, u * 0.34 * progOf(e)); }
       rr(ctx, cx - u * 0.09, cy - u * 0.27, u * 0.18, u * 0.13, u * 0.02); inked(info.color);
       break;
     }
@@ -2598,7 +2598,7 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
       if (cur) {
         ctx.fillStyle = liq; ctx.fillRect(x0, y0 + hh * 0.22, wd, hh);
         if (down) {
-          const k = busy ? Math.min(1, e.prog || 0) : 1, h0 = hh * (0.08 + 0.24 * k);
+          const k = busy ? Math.min(1, progOf(e)) : 1, h0 = hh * (0.08 + 0.24 * k);
           ctx.fillStyle = down; ctx.fillRect(x0, y0 + hh - h0, wd, h0);
           if (busy) for (let i = 0; i < 7; i++) { const f = cyc(t, i + e.x, 0.8); ctx.fillRect(x0 + wd * ((i * 0.29 + 0.1) % 1), y0 + hh * 0.25 + (hh * 0.7 - h0) * f, u * 0.03, u * 0.03); }
         }
@@ -2623,7 +2623,7 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
       const shape = () => { ctx.beginPath(); ctx.moveTo(cx - wd * 0.28, top); ctx.lineTo(cx + wd * 0.28, top); ctx.quadraticCurveTo(cx + wd * 0.62, top + hh * 0.35, cx + wd * 0.1, top + hh); ctx.lineTo(cx - wd * 0.1, top + hh); ctx.quadraticCurveTo(cx - wd * 0.62, top + hh * 0.35, cx - wd * 0.28, top); ctx.closePath(); };
       shape(); ctx.fillStyle = P.plate; ctx.fill();
       if (e.item) {
-        const k = busy ? Math.min(1, e.prog || 0) : 0, sh = busy ? Math.sin(t * 16) * u * 0.012 * (1 - k) : 0, mid = top + hh * 0.52 + sh;
+        const k = busy ? Math.min(1, progOf(e)) : 0, sh = busy ? Math.sin(t * 16) * u * 0.012 * (1 - k) : 0, mid = top + hh * 0.52 + sh;
         ctx.save(); shape(); ctx.clip();
         ctx.fillStyle = '#e9d9a0'; ctx.fillRect(cx - wd, top + hh * 0.14, wd * 2, hh);            // エーテル層（上）
         ctx.fillStyle = '#bcdff0'; ctx.fillRect(cx - wd, mid, wd * 2, hh);                           // 水層（下）
@@ -2643,7 +2643,7 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
       const pH = phOf(e.test), wd = u * 0.62, hh = u * 0.2, x0 = cx - wd / 2, y0 = cy - hh / 2;
       rr(ctx, x0, y0, wd, hh, u * 0.03); ctx.fillStyle = P.plate; ctx.fill(); ctx.strokeStyle = P.ink; ctx.lineWidth = line; ctx.stroke();
       const keys = e.item ? aminoOf(e.item.s) ?? ((AMINO_ORDER as string[]).includes(e.item.s) ? [e.item.s as AminoKey] : []) : [];
-      const k = busy ? Math.min(1, e.prog || 0) : 0;
+      const k = busy ? Math.min(1, progOf(e)) : 0;
       keys.forEach((key, i) => {
         const pole = pH === null ? 'stay' : poleAt(key, pH), dx = pole === 'cathode' ? -1 : pole === 'anode' ? 1 : 0;
         disc(cx + dx * wd * 0.36 * k, y0 + hh * (0.3 + 0.2 * i), u * 0.035);
@@ -2769,7 +2769,7 @@ const cyc = (t: number, k: number, speed = 1) => (((t * speed + k * 0.37) % 1) +
 function reactionGlyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy: number, u: number, t: number, line: number): boolean {
   const L = reactionLookById(e.recipe), r = recipeById(e.recipe);
   if (!L || !r) return false;
-  const busy = !!e.busy, prog = busy ? Math.min(1, e.prog || 0) : 0, ph = e.x * 0.7 + e.y * 1.3;
+  const busy = !!e.busy, prog = busy ? Math.min(1, progOf(e)) : 0, ph = e.x * 0.7 + e.y * 1.3;
   const disc = (x: number, y: number, rad: number) => { ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); };
   const ink = P.ink, body = mix(L.before, L.after, prog);
   // 泡：色のある気体はその色、無色の気体は輪（白く塗らない）

@@ -72,6 +72,17 @@ export interface Ent {
   res?: string; resAt?: number;
   /** 正面の設備の覚え書き（設備の顔ぶれ nbRev のときのもの。セーブには書かない） */
   nb?: Ent | null; nbRev?: number;
+  /**
+   * 積む駅の居眠り（セーブには書かない）。列車がみな走っている間・積む荷がない間は、次に何かが起きる時刻 zw（工場の時計 playMs）まで、駅を回らない。
+   * zt：列車を最後に進めた時刻。zh：空の列車が駅で荷を待っている（荷が入ったら起こす）。zv・zr：そのときの駅の顔ぶれと線路の番号（変わったら起こす）
+   */
+  zt?: number; zw?: number; zh?: boolean; zv?: number; zr?: number;
+  /** 毎歩回る設備の一覧（stepLists の fast）での番号。荷を受け取ったときに、居眠りから起こすのに使う（セーブには書かない） */
+  si?: number;
+  /** 「まとまり」で回る装置を、最後に進めた時刻（工場の時計、秒。セーブには書かない） */
+  ct?: number;
+  /** 一覧を作るときの覚え書き：入っている「まとまり」の番号（-1 ＝ 入っていない。セーブには書かない） */
+  cx?: number;
   /** 大きな装置の残りのマス（part）が指す、装置そのもの（ref と同じもの。セーブには書かない） */
   own?: Ent;
   /** 装置の段取りの覚え書き（反応・出口の場所と係数。設定・向き・場所が変わったら作り直す。セーブには書かない） */
@@ -816,6 +827,7 @@ export function shaped(o: Ent): Ent {
   const e: Ent = {
     kind: o.kind, x: o.x, y: o.y, dir: o.dir, off: o.off, offProg: o.offProg, big: o.big, ref: o.ref, own: o.own,
     timer: o.timer, u: o.u, n: o.n, res: o.res, resAt: o.resAt, nb: o.nb, nbRev: o.nbRev,
+    zt: undefined, zw: undefined, zh: undefined, zv: undefined, zr: undefined, si: undefined, ct: undefined, cx: undefined,
     recipe: o.recipe, pl: o.pl, inBuf: o.inBuf, outBuf: o.outBuf, outOrder: o.outOrder, outSlot: o.outSlot,
     busy: o.busy, prog: o.prog, stuck: o.stuck, bad: o.bad, badT: o.badT, hb: o.hb, pw: o.pw, ts: o.ts,
     item: o.item, items: o.items, rr: o.rr, sub: o.sub, test: o.test, st: o.st, ins: o.ins, li: o.li, pri: o.pri,
@@ -1406,6 +1418,26 @@ export function autoDir(w: World, kind: Kind, x: number, y: number): Dir {
   return (Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 0 : 2) : dy >= 0 ? 1 : 3) as Dir;
 }
 
+/**
+ * ひと山（n 個）を納める。指令にも混ぜ注文にも関わらず、元素の段も変わらない山は、数をまとめて足す（1 個ずつ納めたときと同じ結果）。
+ * それ以外は、1 個ずつ（指令が途中で終わる・段が上がる、などの順番を変えない）。大きな工場では、毎秒 1 万個を超えて納める
+ */
+function deliverMany(w: World, s: string, x: number, y: number, rc: boolean | undefined, n: number) {
+  if (n > 1 && !rc && !(w.side && w.side.s === s)) {
+    const g = currentGoal(w);
+    const plain = !g || (g.rate ? g.s !== s : g.also ? g.s !== s && !g.also.includes(s) : g.s !== s && !(g.strict && setById(g.strict)?.members.includes(s)));
+    if (plain && feedMany(w, s, n)) {
+      w.stock[s] = (w.stock[s] || 0) + n;
+      discover(w, s);
+      w.fx.push({ x, y, type: 'deliver', s });
+      w.delivered[s] = (w.delivered[s] || 0) + n;
+      bucket(w).deliver += n;
+      tally(w, s, 2, n);
+      return;
+    }
+  }
+  for (let i = 0; i < n; i++) deliver(w, s, x, y, rc, i > 0);
+}
 function deliver(w: World, s: string, x: number, y: number, rc?: boolean, quiet = false) {
   w.stock[s] = (w.stock[s] || 0) + 1;
   discover(w, s);
@@ -1465,7 +1497,9 @@ export const fedTier = (w: World, sym: string) => FEED_TIERS.filter((n) => (w.fe
 /** 納めた物質に含まれる原子を、元素ごとに数える */
 /** 物質ごとの、納品所が飲み込む元素と数（化学式を読むのは、物質ごとに 1 度だけ） */
 const feedAtoms = new Map<string, Record<string, number> | null>();
-function feed(w: World, s: string) {
+const tierOf = (v: number) => (v >= FEED_TIERS[2] ? 3 : v >= FEED_TIERS[1] ? 2 : v >= FEED_TIERS[0] ? 1 : 0);
+/** 物質 s に含まれる、納品所が数える元素と数（なければ null） */
+function atomsOf(s: string): Record<string, number> | null {
   let atoms = feedAtoms.get(s);
   if (atoms === undefined) {
     const su = sub(s);
@@ -1473,6 +1507,18 @@ function feed(w: World, s: string) {
     try { if (su.formula) all = parseFormula(su.formula); else for (const el of su.rep ?? []) all[el] = (all[el] || 0) + 1; atoms = {}; for (const el in all) if (ELEMENTS.some((e) => e.sym === el)) atoms[el] = all[el]; } catch { atoms = null; }
     feedAtoms.set(s, atoms);
   }
+  return atoms;
+}
+/** n 個ぶんの元素を、まとめて数える。どの元素の段も変わらないときだけ（変わるなら何もせず false：1 個ずつ数えて、段が上がる所で知らせる） */
+function feedMany(w: World, s: string, n: number): boolean {
+  const atoms = atomsOf(s);
+  if (!atoms) return true;
+  for (const el in atoms) { const v = w.fed[el] || 0; if (tierOf(v + atoms[el] * n) !== tierOf(v)) return false; }
+  for (const el in atoms) w.fed[el] = (w.fed[el] || 0) + atoms[el] * n;
+  return true;
+}
+function feed(w: World, s: string) {
+  const atoms = atomsOf(s);
   if (!atoms) return;
   for (const el in atoms) {
     const before = fedTier(w, el);
@@ -1585,6 +1631,8 @@ function pushInto(w: World, t: Ent | undefined, x: number, y: number, d: Dir, s:
   if (!t) return false;
   // 一時停止している装置は、何も受け取らない（ベルトはそこで待つ）
   if (t.off) return false;
+  // 居眠りしている設備（空のベルト・タンクなど）を起こす。積む駅は、荷を待つ列車がいるときだけ（下の 'station'）
+  if (!dry && t.si !== undefined && w === wakeW && t.kind !== 'station') wakeArr[t.si] = 0;
   switch (t.kind) {
     case 'belt':
       if (t.dir === (d + 2) % 4) return false;
@@ -1655,6 +1703,7 @@ function pushInto(w: World, t: Ent | undefined, x: number, y: number, d: Dir, s:
       if (t.role !== 'in' || (t.buf ??= []).length >= stationCap(w)) return false;
       if (dry) return true;
       for (let i = 0; i < n; i++) t.buf.push(rc ? '!' + s : s);
+      if (t.zh) { t.zw = 0; if (t.si !== undefined && w === wakeW) wakeArr[t.si] = 0; }   // 空の列車が待っている：起こす
       return true;
     case 'bridge': {
       const slots = (t.items ??= [null, null]);
@@ -1666,7 +1715,7 @@ function pushInto(w: World, t: Ent | undefined, x: number, y: number, d: Dir, s:
     }
     case 'hub':
       if (dry) return true;
-      for (let i = 0; i < n; i++) deliver(w, s, x, y, rc, i > 0);
+      deliverMany(w, s, x, y, rc, n);
       return true;
     case 'vent':
       if (dry) return true;
@@ -1720,22 +1769,93 @@ function pushInto(w: World, t: Ent | undefined, x: number, y: number, d: Dir, s:
 const FX_STEP = 48;
 let fxRoom = Infinity;
 /**
+ * 毎歩回る設備が、次に回ってほしい時刻（工場の時計 playMs。0 ＝ 毎歩）。設備そのものを読まずに飛ばせるように、設備とは別の、数だけの並びに持つ
+ * （何万台も並ぶ工場では、設備を読みに行くこと自体が、1 歩の時間の大半）。いま進めている工場のものを、ここに置く
+ */
+let wakeW: World | null = null, wakeArr: Float64Array = new Float64Array(0);
+/** 空の設備が居眠りする長さ（秒）。荷が入れば、すぐ起きる。手で直したとき（タンクの物質を変えた、など）も、この時間のうちに気づく */
+const IDLE_NAP = 0.5;
+/** 空の設備を居眠りさせるのは、毎歩回る設備がこの数を超える工場だけ */
+const NAP_MIN = 1500;
+/**
  * 1 歩で動かす設備の一覧（置いた順。何もしない設備＝大きな装置の残りのマス・廃棄口・納品所は入れない）。置く・消すが起きるまで覚えておく。
  * all：ぜんぶ。fast：毎歩動かすもの（ベルト・駅と列車など、動きが見えるもの）。slow[0..3]：採取機と反応装置を、場所で 4 つの組に分けたもの
  */
-interface StepLists { rev: number; all: Ent[]; fast: Ent[]; slow: Ent[][]; nSlow: number }
+interface StepLists {
+  rev: number; fast: Ent[]; wake: Float64Array; slow: Ent[][]; slowAll: Ent[]; nSlow: number;
+  /** まとまり：cells に「採取機…, 装置」を続けて並べ、ends[i] が i 番目のまとまりの終わり。cur は次に回るまとまり（最後に進めた時刻は、設備の ct） */
+  cells: Ent[]; ends: number[]; cur: number;
+  /** まとまりを組む時刻（工場の時計 playMs。-1 ＝ 組んである・組まない）。置く・消すが続いている間は組まず、手が止まってから組む */
+  cellsDue: number;
+}
 const stepCache = new WeakMap<World, StepLists>();
+/** まとまりを回る間隔（秒）と、置く・消すのあと、まとまりを組み直すまでの時間（ミリ秒） */
+const CELL_EVERY = 1.6, CELL_WAIT = 1500;
 function stepLists(w: World, erev: number | undefined): StepLists {
   const c = stepCache.get(w);
-  if (c && erev !== undefined && c.rev === erev) return c;
-  const out: StepLists = { rev: erev ?? -1, all: [], fast: [], slow: [[], [], [], []], nSlow: 0 };
+  if (c && erev !== undefined && c.rev === erev) {
+    if (c.cellsDue >= 0 && w.playMs >= c.cellsDue) buildCells(w, c);
+    return c;
+  }
+  const fast: Ent[] = [], slowAll: Ent[] = [], slow: Ent[][] = [[], [], [], []];
+  let nSlow = 0;
+  for (const e of w.ents.values()) if (e.kind === 'extractor' || isMachine(e.kind)) nSlow++;
+  const huge = nSlow > STAG_MIN;
   for (const e of w.ents.values()) {
     if (e.kind === 'part' || e.kind === 'vent' || e.kind === 'hub') continue;
-    out.all.push(e);
-    if (e.kind === 'extractor' || isMachine(e.kind)) { out.slow[(e.x * 7 + e.y * 13) & 3].push(e); out.nSlow++; } else out.fast.push(e);
+    // 大きな工場では、採取機・反応装置・搬出口（時計を進めて出すだけのもの）を、4 歩に 1 回の組へ。ほかは毎歩
+    if (huge && (e.kind === 'extractor' || isMachine(e.kind) || e.kind === 'depot')) { slowAll.push(e); slow[(e.x * 7 + e.y * 13) & 3].push(e); }
+    else { e.si = fast.length; fast.push(e); }
   }
+  // 置く・消すのたびに、まとまりまで組み直すと、手を入れるたびに引っかかる。まず組なしで回し（動きは同じ）、手が止まってから組む。読み込んだ直後は、すぐ組む
+  const out: StepLists = { rev: erev ?? -1, fast, wake: new Float64Array(fast.length), slow, slowAll, nSlow, cells: [], ends: [], cur: 0, cellsDue: !huge || erev === undefined ? -1 : c ? w.playMs + CELL_WAIT : 0 };
   if (erev !== undefined) stepCache.set(w, out);
+  if (out.cellsDue === 0) buildCells(w, out);
   return out;
+}
+/**
+ * まとまりを組む：採取機がじかに入れている反応装置と、その採取機。出口の先がどれも「いつでも受け取る所」（廃棄口・積む駅・納品所）の装置だけ。
+ * こういう装置は、外とは、出した物を渡すだけでつながっている。採取機は、まとまった時間のぶんを一度に入れ、装置は、その時間を反応の回数に刻んで進める
+ */
+function buildCells(w: World, c: StepLists) {
+  c.cellsDue = -1;
+  const all = c.slowAll, groups: Ent[][] = [], heads: Ent[] = [];
+  for (let i = 0; i < all.length; i++) {
+    const m = all[i];
+    m.cx = -1;
+    if (m.kind === 'extractor' || m.kind === 'depot' || !m.recipe || !m.inBuf || !m.outBuf || !m.outOrder) continue;
+    const pl = planOf(m);
+    if (!pl) continue;
+    let ok = true;
+    for (let q = 0; q < pl.tx.length; q++) {
+      const t = at(w, pl.tx[q], pl.ty[q]);
+      if (!t || !(t.kind === 'vent' || t.kind === 'hub' || (t.kind === 'station' && t.role === 'in'))) { ok = false; break; }
+    }
+    if (ok) { m.cx = groups.length; groups.push([]); heads.push(m); }
+  }
+  let n = 0;
+  for (let i = 0; i < all.length; i++) {
+    const e = all[i];
+    if (e.kind !== 'extractor') continue;
+    const t = at(w, e.x + DX[e.dir], e.y + DY[e.dir]);
+    if (t && t !== e && t.cx !== undefined && t.cx >= 0 && heads[t.cx] === t) { groups[t.cx].push(e); n++; }
+  }
+  if (!n) return;
+  // まとまりに入る設備が、最後に進められた時刻：組（4 歩に 1 回）でまだ進めていない時間のぶんだけ前
+  const acc = stagAcc.get(w), nowS = w.playMs / 1000;
+  const cells: Ent[] = [], ends: number[] = [];
+  for (let g = 0; g < groups.length; g++) {
+    const f = groups[g], m = heads[g];
+    if (!f.length) { m.cx = -1; continue; }
+    const t0 = nowS - (acc ? acc[(m.x * 7 + m.y * 13) & 3] : 0);
+    for (let i = 0; i < f.length; i++) { f[i].cx = g; if (f[i].ct === undefined) f[i].ct = t0; cells.push(f[i]); }
+    if (m.ct === undefined) m.ct = t0;
+    cells.push(m);
+    ends.push(cells.length);
+  }
+  const slow: Ent[][] = [[], [], [], []];
+  for (let i = 0; i < all.length; i++) { const e = all[i]; if (e.cx === undefined || e.cx < 0) slow[(e.x * 7 + e.y * 13) & 3].push(e); }
+  c.slow = slow; c.cells = cells; c.ends = ends; c.cur = 0;
 }
 /**
  * とても大きな工場（採取機と反応装置が STAG_MIN 台を超える）では、採取機と反応装置を 4 歩に 1 回、4 歩ぶんの時間をまとめて進める
@@ -1790,6 +1910,46 @@ const OUT_PUSHES = 16, OUT_SKIP = 4;
 export const TRAIN_GIVE_UP = 4;
 const occRev = new WeakMap<World, number>();
 /** 積む駅 e の列車 1 本を、1 歩進める（毎歩・列車ごとに呼ぶので、ここでは配列も関数も作らない） */
+/** いま進めている工場の時計（秒）と、装置の速さ。絵を描く所が、まとめて進めている装置の進み具合を、時刻から求めるのに使う（progOf） */
+let clockS = 0, clockRate = 1;
+/**
+ * 装置の、いまの反応の進み具合（0〜1）。「まとまり」で回る装置は、1.6 秒に 1 回しか進めないので、その間は、最後に進めた時刻からの時間で求める
+ * （動いている装置の絵が、止まっては飛ぶ、にならないように）。絵を描く所は、e.prog をじかに読まず、ここを通す
+ */
+export function progOf(e: Ent): number {
+  const p = e.prog || 0;
+  if (e.ct === undefined || !e.busy || !e.pl) return p;
+  const el = clockS - e.ct;
+  if (!(el > 0)) return p;
+  const q = p + (el * clockRate * ((e.pw || 0) > 0 ? 2 : 1)) / e.pl.r.time;
+  return q - Math.floor(q);
+}
+/** 積む駅が居眠りする長さの上限（秒）。この間に 1 回は、駅を見に行く（編成の数を変えた・研究で速くなった、などを取りこぼさない） */
+const NAP_MAX = 1;
+/**
+ * 列車のいまの位置（0 ＝ 積む駅、1 ＝ 降ろす駅）。駅が居眠りしている間は、最後に進めた位置から、時刻で求める。
+ * 絵を描く所・位置を調べる所は、tr.p をじかに読まず、ここを通す
+ */
+export function trainP(w: World, e: Ent, tr: Train): number {
+  if (e.zt === undefined || !(tr.p > 0 || tr.back) || !tr.rt || tr.rt.custom) return tr.p;
+  const el = (w.playMs - e.zt) / 1000;
+  if (!(el > 0)) return tr.p;
+  const v = (trainSpeed(w) * el) / tr.rt.len;
+  return tr.back ? Math.max(0, tr.p - v) : Math.min(1, tr.p + v);
+}
+/** 居眠りしている駅の列車を、いまの時刻まで進める（セーブの前・列車の位置をまとめて読む前に） */
+export function settleTrains(w: World) {
+  const sver = stationVer(w);
+  for (const e of stationsOf(w)) {
+    if (e.role !== 'in' || e.off || e.zt === undefined || e.zv !== sver || e.zr !== w.railRev) continue;
+    const el = (w.playMs - e.zt) / 1000;
+    if (!(el > 0)) continue;
+    const buf = (e.buf ??= []);
+    if (e.tr) runTrain(w, e, e.tr, buf, Math.min(NAP_MAX * 2, el), sver);
+    if (e.xtr) for (const t of e.xtr) runTrain(w, e, t, buf, Math.min(NAP_MAX * 2, el), sver);
+    e.zt = w.playMs; e.zw = 0;
+  }
+}
 function runTrain(w: World, e: Ent, tr: Train, buf: string[], dt: number, sver: number) {
   if (tr.p <= 0 && !tr.back) {
     const cap = trainCap(w);
@@ -1880,7 +2040,7 @@ export function step(w: World, dt: number) {
   if (w.tick % 600 === 0 && w.occ.size) for (const [k, o] of w.occ) if (o.t < w.tick - 2) w.occ.delete(k);
   // 鍵は線路のマスの番号なので、線路が変わったら捨てる（次の 1 歩で、走っている列車が書き直す）
   if (occRev.get(w) !== w.railRev) { w.occ.clear(); occRev.set(w, w.railRev); }
-  const speed = beltSpeed(w), every = extractInterval(w), rate = machineRate(w), kU = 1 - Math.exp(-dt / UTIL_TAU);
+  const speed = beltSpeed(w), every = extractInterval(w), rate = machineRate(w), kU = 1 - Math.exp(-dt / UTIL_TAU), tspeed = trainSpeed(w), tcap = trainCap(w);
   // 駅の顔ぶれの番号は、1 歩のあいだ変わらない（駅ごとに確かめ直さない）
   const sver = stationVer(w);
   const erev: number | undefined = (w.ents as EntMap).rev;
@@ -1888,6 +2048,8 @@ export function step(w: World, dt: number) {
   fxRoom = FX_STEP;
   // 何もしない設備（大きな装置の残りのマス・廃棄口・納品所）を除いた一覧を、置いた順のまま回る
   const sl = stepLists(w, erev), huge = sl.nSlow > STAG_MIN, dt0 = dt, kU0 = kU;
+  wakeW = w; wakeArr = sl.wake;
+  clockS = w.playMs / 1000; clockRate = rate;
   let acc = stagAcc.get(w);
   if (!acc) stagAcc.set(w, (acc = new Float64Array(4)));
   const ph = w.tick & 3;
@@ -1896,14 +2058,11 @@ export function step(w: World, dt: number) {
   if (huge) acc[ph] = 0;
   const kUS = 1 - Math.exp(-dtS / UTIL_TAU);
   // 大きな工場：まず毎歩動かすもの、次に、この歩の番の組の採取機と反応装置（まとめた時間 dtS で）
-  for (let pass = 0; pass < (huge ? 2 : 1); pass++) {
-  const list = !huge ? sl.all : pass === 0 ? sl.fast : sl.slow[ph], stag = pass === 1;
+  /** 設備 1 つを、時間 dt だけ進める。stag：まとめた時間で進めている（採取機と反応装置は、その間のぶんを取りこぼさないように動く） */
   // eslint-disable-next-line @typescript-eslint/no-shadow
-  const dt = stag ? dtS : dt0, kU = stag ? kUS : kU0;
-  for (let li = 0; li < list.length; li++) {
-    const e = list[li];
+  const run = (e: Ent, dt: number, kU: number, stag: boolean): void => {
     // この 1 歩の途中で設備が消えたとき（納品所が広がったときなど）：消えた設備は動かさない
-    if (erev !== undefined && (w.ents as EntMap).rev !== erev && at(w, e.x, e.y) !== e) continue;
+    if (erev !== undefined && (w.ents as EntMap).rev !== erev && at(w, e.x, e.y) !== e) return;
     // 一時停止している装置は、反応も採取も出すことも止める（途中の反応・ためた物はそのまま残る）。
     // 途中の反応は busy から offProg へ預ける（止めている間は「動いている」ことにしない）。稼働率は下がっていき、詰まり・受け取れない物質の印は外す
     if (e.off) {
@@ -1911,7 +2070,8 @@ export function step(w: World, dt: number) {
       if (isMachine(e.kind) || e.kind === 'extractor') e.u = (e.u ?? 0) * (1 - kU);
       if (e.stuck) e.stuck = 0;
       if (e.bad) e.bad = undefined;
-      continue;
+      if (e.zt !== undefined) e.zt = e.zw = undefined;   // 止めていた間の時間を、あとでまとめて進めない
+      return;
     }
     // 動かしたら、預けた反応の続きから
     if (e.offProg !== undefined) { e.busy = true; e.prog = e.offProg; e.offProg = undefined; }
@@ -2137,12 +2297,34 @@ export function step(w: World, dt: number) {
           break;
         }
         // 積む駅：列車を走らせる。編成は 3 つまで増やせる。降ろす駅がいくつもあれば、順番に配る（分岐）
+        // 居眠り：次に何かが起きる時刻まで、何もしない（列車の位置は、時刻から求められる。trainP）
+        const now = w.playMs;
+        if (e.zw !== undefined && now < e.zw && e.zv === sver && e.zr === w.railRev) break;
+        // 前に進めてからの時間（毎歩回っている間は dt と同じ）
+        const el = e.zt !== undefined ? Math.min(NAP_MAX * 2, (now - e.zt) / 1000) : dt;
         e.tr ??= { p: 0, back: false, cargo: [], wait: 0 };
         const xtr = (e.xtr ??= []), want = Math.min(maxCars(w), e.cars || 1);
         while (xtr.length + 1 < want) xtr.push({ p: 0, back: false, cargo: [], wait: 0 });
         // 減らしたときは、駅に戻っている空の編成から外す
         while (xtr.length > Math.max(0, want - 1)) { const k = xtr.findIndex((t2) => t2.p <= 0 && !t2.back && !t2.cargo.length); if (k < 0) break; xtr.splice(k, 1); }
-        for (let ti = -1; ti < xtr.length; ti++) runTrain(w, e, ti < 0 ? e.tr : xtr[ti], buf, dt, sver);
+        // 次に起きる時刻：いちばん早く着く列車の着く時刻。駅に荷を待つ列車がいて荷があるとき・荷を持って待つ列車がいるとき・敷いた線路を走るとき（前の列車を待つ）は、毎歩
+        let wake = now + NAP_MAX * 1000, home = false;
+        for (let ti = -1; ti < xtr.length; ti++) {
+          const tr = ti < 0 ? e.tr : xtr[ti];
+          runTrain(w, e, tr, buf, el, sver);
+          if (tr.p <= 0 && !tr.back) {
+            // 駅にいる。満載か、待ちきった列車は、行き先が空きしだい出る（毎歩確かめる）。まだ積める列車は、荷が入るか、待つ時間が切れるまで寝てよい
+            if (tr.cargo.length >= tcap || (tr.cargo.length && tr.wait > 2.5)) wake = now;
+            else { home = true; if (tr.cargo.length) { const at2 = now + (2.5 - tr.wait) * 1000 + 1; if (at2 < wake) wake = at2; } }
+          }
+          else {
+            const rt = tr.rt;
+            if (!rt || rt.custom || (!tr.back && tr.p >= 1)) wake = now;
+            else { const at2 = now + ((tr.back ? tr.p : 1 - tr.p) * rt.len / tspeed) * 1000; if (at2 < wake) wake = at2; }
+          }
+        }
+        if (home && buf.length) wake = now;
+        e.zt = now; e.zw = wake; e.zh = home; e.zv = sver; e.zr = w.railRev;
         break;
       }
       case 'vent':
@@ -2160,14 +2342,17 @@ export function step(w: World, dt: number) {
         // まとめた時間が反応 1 回の半分より長いときは、細かく分けて進める（まとめて進めても、反応の回数が減らないように）
         const reps = stag ? Math.max(1, Math.ceil((dt * rate * mul) / r.time / 0.5)) : 1, dtm = dt / reps;
         for (let rp = 0; rp < reps; rp++) {
-        if (!e.busy) {
-          // 出口にためておける量を超えた生成物があるうちは、次の反応を始めない（副生成物を放置すると、ここで詰まる）
-          if (!planBlocked(pl, ob, hb) && planFed(r, ib)) {
-            for (let q = 0; q < r.inputs.length; q++) { ib[r.inputs[q][0]] -= r.inputs[q][1]; tally(w, r.inputs[q][0], 1, r.inputs[q][1]); }
-            e.busy = true;
-            e.prog = 0;
-          }
-        } else {
+        let go = e.busy;
+        // 出口にためておける量を超えた生成物があるうちは、次の反応を始めない（副生成物を放置すると、ここで詰まる）
+        if (!go && !planBlocked(pl, ob, hb) && planFed(r, ib)) {
+          for (let q = 0; q < r.inputs.length; q++) { ib[r.inputs[q][0]] -= r.inputs[q][1]; tally(w, r.inputs[q][0], 1, r.inputs[q][1]); }
+          e.busy = true;
+          e.prog = 0;
+          // まとめた時間で進めているときは、始めたその刻みのうちに進める（刻みが長いので、始めるだけで 1 刻み使うと、原料待ちの装置が遅くなる）。
+          // 毎歩進めているときは、これまでどおり、始めた歩は進めない
+          go = stag;
+        }
+        if (go) {
           e.prog = (e.prog || 0) + (dtm * rate * mul) / r.time;
           if (e.pw) e.pw = Math.max(0, e.pw - dtm);
           if (e.prog >= 1) {
@@ -2201,8 +2386,57 @@ export function step(w: World, dt: number) {
         e.u = (e.u || 0) + ((st === 0 ? 1 : 0) - (e.u || 0)) * kU;
       }
     }
+  };
+  // 毎歩動かすもの。居眠りしているもの（空のベルト・タンク・分配器、列車がみな出ている駅）は、設備を読まずに飛ばす
+  {
+    // 空の設備の居眠りは、設備の多い工場だけ（小さな工場では、これまでどおり毎歩すべてを回る。荷をじかに書き込んでも、次の 1 歩で動く）
+    const list = sl.fast, wk = sl.wake, now = w.playMs, nap = list.length > NAP_MIN;
+    for (let li = 0; li < list.length; li++) {
+      if (wk[li] > now) continue;
+      const e = list[li];
+      run(e, dt0, kU0, false);
+      switch (e.kind) {
+        case 'station': if (e.role === 'in' && e.zw !== undefined) wk[li] = e.zw; break;
+        case 'belt': case 'splitter': case 'analyzer': case 'gate': if (nap && !e.item && !e.off) wk[li] = now + IDLE_NAP * 1000; break;
+        case 'tank': if (nap && !((e.cnt || 0) + (e.rcn || 0)) && !e.off) wk[li] = now + IDLE_NAP * 1000; break;
+        default: break;
+      }
+    }
   }
+  if (!huge) return;
+  // 大きな工場：次に、この歩の番の組の採取機と反応装置（まとめた時間 dtS で）
+  {
+    const list = sl.slow[ph], nowS = w.playMs / 1000;
+    for (let li = 0; li < list.length; li++) {
+      const e = list[li];
+      if (e.ct === undefined) { run(e, dtS, kUS, true); continue; }
+      // まとまりから外れた設備（置く・消すのあと、組み直すまでの間）：最後にまとまりで進めた時刻からの時間を、ここで進める
+      const d = Math.min(CELL_EVERY * 4, nowS - e.ct);
+      e.ct = undefined;
+      if (d > 0) run(e, d, 1 - Math.exp(-d / UTIL_TAU), true);
+    }
   }
+  // 最後に「まとまり」（採取機 → 装置 → 廃棄口・駅）。CELL_EVERY 秒でひと回りする速さで、順に回る（計算の歩数によらない）。
+  // 設備を読みに行く回数が減る：何万台も並ぶ工場では、ここが 1 歩の時間の大半。採取機は、前に回ってからの時間のぶんを一度に入れ、
+  // 装置は、その時間を、反応 3 回ぶんごとに刻んで進める（原料は反応 4 回ぶんまでためられるので、刻みの間に切れない）
+  const nc = sl.ends.length;
+  if (!nc) return;
+  const nowS = w.playMs / 1000, cg = sl.cells, ce = sl.ends;
+  let todo = Math.min(nc, Math.ceil((nc * dt0) / CELL_EVERY)), ci = sl.cur;
+  if (ci >= nc) ci = 0;
+  for (; todo > 0; todo--) {
+    const a0 = ci ? ce[ci - 1] : 0, b0 = ce[ci], m = cg[b0 - 1];
+    // 前に回ってからの時間。はじめて回る装置（読み込んだ直後・まとまりに入った直後）は、この 1 歩ぶんだけ
+    const el = m.ct === undefined ? dt0 : Math.min(CELL_EVERY * 4, nowS - m.ct);
+    ci = ci + 1 < nc ? ci + 1 : 0;
+    for (let i = a0; i < b0; i++) cg[i].ct = nowS;
+    if (!(el > 0)) continue;
+    const rt = m.pl ? m.pl.r.time : 0;
+    const subs = rt > 0 ? Math.min(8, Math.max(1, Math.ceil((el * rate * ((m.pw || 0) > 0 ? 2 : 1)) / rt / 3))) : 1;
+    const d = el / subs, k = 1 - Math.exp(-d / UTIL_TAU);
+    for (let sub = 0; sub < subs; sub++) for (let i = a0; i < b0; i++) run(cg[i], d, k, true);
+  }
+  sl.cur = ci;
 }
 
 // ---- 保存 ----
@@ -2237,7 +2471,7 @@ function rle(a: unknown[]): unknown[] {
 /** rle の逆。数は、直前の物質の個数。古いセーブ（1 個ずつ）もそのまま読める。全部で LIST_MAX 個まで */
 const LIST_MAX = 20000;
 /** セーブに書かない欄（1 歩や描画のための覚え書き） */
-const DROP_KEYS = new Set(['res', 'resAt', 'nb', 'nbRev', 'pl', 'own', 'rt', 'rtRev', 'rtVer']);
+const DROP_KEYS = new Set(['res', 'resAt', 'nb', 'nbRev', 'pl', 'own', 'rt', 'rtRev', 'rtVer', 'zt', 'zw', 'zh', 'zv', 'zr', 'si', 'ct', 'cx']);
 /**
  * セーブに書く形に写す：null・false・undefined と覚え書きの欄は落とし、整数でない数は小数 3 桁に、荷の並びはまとめる。
  * （文字にするときに欄ごとに関数を呼ぶより、先に小さな写しを作るほうが速い。設備は、すべての欄を持つ形にそろえてあるので、欄が多い）
@@ -2353,6 +2587,7 @@ export function plainSave(json: string): any {
   return d;
 }
 export function serialize(w: World): string {
+  settleTrains(w);   // 居眠りしている駅の列車を、いまの位置で書く
   const ents = entsJson([...w.ents.values()].filter((e) => e.kind !== 'part'));
   return JSON.stringify({
     v: SAVE_VERSION, ents: 0, chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
