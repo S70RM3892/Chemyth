@@ -451,6 +451,8 @@ function haloText(ctx: CanvasRenderingContext2D, P: Palette, text: string, x: nu
 }
 
 /** 1 マスが cam.z ピクセルの引いた視野を描く */
+/** 前に引いた絵を描いたときの、走っている列車の数（多ければ、間引いて描く） */
+let trSeen = 0;
 export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: World, cam: Camera, t: number, view: View, P: Palette) {
   const z = cam.z, light = P.name === 'light', ink = edgeOf(P), rail = railOf(P);
   // 装置の縁取りは主線の色（近くの絵の、引いたときの装置と同じ）。色覚の補助と、稼働率の色分け（統計の切り替え）
@@ -734,7 +736,8 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
   }
 
   // ---- 線路の網：敷いた線路、積む駅から降ろす駅までの道筋（番線の色）、列車 ----
-  const trains: number[] = [];
+  const trains: number[] = [], trStride = trSeen > 6000 ? Math.ceil(trSeen / 6000) : 1;
+  let trNo = 0;
   if (!off) {
     if (w.rails.size) {
       // まっすぐ続く区間ごとに 1 本（1 万マスでも、区間の数だけ）
@@ -797,11 +800,14 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
       // 列車：道のりに沿った位置に、番線の色の点
       for (let k = -1, xt = e.xtr, n = xt ? xt.length : 0; k < n; k++) {
         const tr = k < 0 ? e.tr : xt![k];
-        if (!tr) continue;
+        if (!tr || (tr.p <= 0 && !tr.back)) continue;     // 駅で待つ列車は、駅の印に重なる
+        // 列車が何万本もある工場では、間引いて描く（重なって見分けがつかないので、6,000 本ほどで足りる）
+        if (trStride > 1 && (trNo++ % trStride)) continue;
         trainAt(w, e, tr);
         trains.push(TRAIN.x, TRAIN.y, e.ch || 1, tr.held ? 1 : 0);
       }
     }
+    trSeen = trStride > 1 ? trNo : trains.length / 4;
     // 列車の点は、番線の色ごと・縁の色ごとにまとめて塗る（千本あっても、塗るのは数回）
     {
       const r = Math.max(2.6, z * 0.42), byCh = new Map<number, number[]>();
@@ -814,7 +820,17 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
       }
       const dots = (l: number[], held: number) => { ctx.beginPath(); for (let i = 0; i < l.length; i += 3) if (held < 0 || l[i + 2] === held) { ctx.moveTo(l[i] + r, l[i + 1]); ctx.arc(l[i], l[i + 1], r, 0, Math.PI * 2); } };
       ctx.lineWidth = 1.5;
-      for (const [c, l] of byCh) {
+      let shown = 0;
+      for (const l of byCh.values()) shown += l.length / 3;
+      if (shown > 1500) {
+        // 見えている列車がとても多いとき：丸と縁取りではなく、小さな四角を、番線の色ごとに 1 回で塗る（丸を何万個も縁取ると、1 枚描くのに何秒もかかる）
+        const q = Math.max(2, Math.min(r * 1.4, 4));
+        for (const [c, l] of byCh) {
+          ctx.beginPath();
+          for (let i = 0; i < l.length; i += 3) ctx.rect(Math.round(l[i] - q / 2), Math.round(l[i + 1] - q / 2), q, q);
+          ctx.fillStyle = lineColor(c); ctx.fill();
+        }
+      } else for (const [c, l] of byCh) {
         dots(l, -1); ctx.fillStyle = lineColor(c); ctx.fill();
         dots(l, 0); ctx.strokeStyle = rail.ink; ctx.stroke();
         dots(l, 1); ctx.strokeStyle = P.red; ctx.stroke();

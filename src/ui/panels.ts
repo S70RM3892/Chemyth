@@ -9,7 +9,7 @@ import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
 import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
-import { TANK_CAP, RESEARCH, credit, RAIL_BOOST, pipeFlow, setPipe, pipeLine, unpipeLine, maxCars, stationCap, stationDests, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, setStationRole, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { TANK_CAP, RESEARCH, credit, RAIL_BOOST, pipeFlow, setPipe, pipeLine, unpipeLine, touchStations, maxCars, stationCap, stationDests, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, setStationRole, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { applyTestOut, canTestOut, paceOf, testOutPass, testOutQuiz } from '../engine/pace';
 import { quizFor } from '../engine/quiz';
 import { calibLine, solveList } from './review';
@@ -558,6 +558,7 @@ export function showSignal(c: PanelCtx, e: Ent, extra: HTMLElement) {
 
 
 export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
+  touchStations();   // この窓で役割・番線を変えたあとは、行き先を選び直す
   const again = () => showStation(c, e, extra);
   const pipe = !!e.pipe, canPipe = has(c.w, 'pipeline');
   const role = (id: 'in' | 'out', text: string) => h('button', { class: 'ghost' + (e.role === id ? ' picked on' : ''), type: 'button', id: `st-role-${id}`, onclick: () => { setStationRole(e, id); sfx.ok(); again(); } }, text);

@@ -142,11 +142,14 @@ export const TRAIN = { x: 0, y: 0, dx: 1, dy: 0 };
  */
 export function trainAt(w: World, e: Ent, tr: Train): void {
   // 駅で積んでいる列車は、駅にいる（道筋を見るまでもない）
-  if (tr.p <= 0 && !tr.back && !tr.to) { TRAIN.x = e.x + 1; TRAIN.y = e.y + 1; TRAIN.dx = 1; TRAIN.dy = 0; return; }
+  // （行き先を覚えていても、道筋をまだ求めていない列車は、求めずに駅に描く：読み込んだ直後、駅で待つ列車が何万本もあるときに、描くたびに道筋を求めない）
+  if (tr.p <= 0 && !tr.back && (!tr.to || (tr.rt === undefined && stationsOf(w).length > 500))) { TRAIN.x = e.x + 1; TRAIN.y = e.y + 1; TRAIN.dx = 1; TRAIN.dy = 0; return; }
   let r = tr.rt;
   if (r === undefined || tr.rtRev !== w.railRev) {
     const d = tr.to ? w.ents.get(tr.to) : undefined;
     r = d && d.kind === 'station' && d.role === 'out' && d.ch === e.ch ? railOf(w, e, d) : null;
+    // 求めた道筋は、列車に覚えさせる（工場を進める所と同じ覚え書き。描くたびに求め直さない）
+    tr.rt = r; tr.rtRev = w.railRev; tr.rtVer = stationVer(w);
   }
   // 駅が居眠りしている間の位置は、時刻から求める（工場を進める所は、着くときまで列車を触らない）
   const p0 = trainP(w, e, tr), T = TRAIN, p = p0 < 0 ? 0 : p0 > 1 ? 1 : p0;

@@ -55,7 +55,7 @@ import { SHELF_MAX, cleanShelf, makeBackup, mergeShelf, parseBackup, restorePlan
 import { summarize } from './engine/world';
 import { initBuild2 } from './ui/build2';
 import { moveSpec, relocate, type MoveSpec } from './engine/shape';
-import { multiOf, RUSH_MS } from './engine/world';
+import { multiOf, RUSH_MS, touchStations, setLead, saveJob } from './engine/world';
 
 type Placeable = Exclude<Kind, 'hub' | 'part'>;
 type Tool = 'pan' | 'erase' | 'area' | 'rail' | 'route' | Placeable;
@@ -154,9 +154,14 @@ function boot(data: HotData) {
   let savedAt = 0, saveFailTold = 0;
   /** 保存領域を空けるために手放したもの（freeSpace の返り値ごとの呼び名） */
   const FREED = { backup: '読み込む前の控え', daily: '前日の控え', album: 'アルバムの古い写真' } as const;
-  const save = () => {
+  /** 少しずつ作っている途中の自動保存（とても大きな工場）。手で保存したとき・閉じるときは、捨てて、いっぺんに書く */
+  let saving: ReturnType<typeof saveJob> | null = null, jobMs = 0, jobNow = 0;
+  /** 設備がこの数を超える工場の自動保存は、コマの合間に少しずつ作る（いっぺんに作ると、その間、画面が止まる） */
+  const BIG_SAVE = 30000;
+  const save = (ready?: string) => {
     if (!slot) return;
-    const json = serialize(home());
+    if (ready === undefined) saving = null;
+    const json = ready ?? serialize(home());
     if (store.write(slot, json)) { savedAt = Date.now(); return; }
     // 入りきらなければ、読み込む前の控え・前日の控え・アルバムの古い写真の順に手放して、もう一度（セーブを先に残す）
     const freed = new Set<string>();
@@ -435,7 +440,7 @@ function boot(data: HotData) {
         for (const [k, m] of op.snap) setRailMask(world, k, m);
       } else if (op.t === 'ch') {
         const e = at(world, op.x, op.y);
-        if (e) { inv.push({ t: 'ch', x: op.x, y: op.y, ch: e.ch ?? 1 }); e.ch = op.ch; }
+        if (e) { inv.push({ t: 'ch', x: op.x, y: op.y, ch: e.ch ?? 1 }); e.ch = op.ch; touchStations(); }
       } else {
         const e = at(world, op.x, op.y);
         if (e) { inv.push({ t: 'dir', x: op.x, y: op.y, dir: e.dir }); e.dir = op.dir; }
@@ -1865,6 +1870,7 @@ function boot(data: HotData) {
         h('div', { class: 'row' }, h('button', { class: 'primary', type: 'button', id: 'num-ok', onclick: () => {
           group = null;
           es.forEach((e, i) => { if ((e.ch || 1) === nums[i]) return; record({ t: 'ch', x: e.x, y: e.y, ch: e.ch ?? 1 }); e.ch = nums[i]; });
+          touchStations();
           group = null;
           sfx.ok(); closeModal(); toast(`${es.length} 個に番号を振った。`, 2200); save();
         } }, `${es.length} 個に振る`)));
@@ -2295,7 +2301,11 @@ function boot(data: HotData) {
   let began = performance.now(), warned = false, prev = performance.now(), acc = 0, sinceSave = 0, lastSeen = -1, lastRes = 0, musicAt = 0, chapterBefore = 0, slowFrames = 0;
   /** 工場を進める 1 歩。軽量スキンは 1/30 秒（結果は 1/60 秒と同じ：ベルトは 1 歩に 1 マスまでで、いちばん速いベルトでも 1 秒に 6 マスほど。手間は半分） */
   let STEP = 1 / 60, saveMs = 0, stepMs = 0, stepHz = 60;
-  const STEP_HZ = [60, 30, 20, 15];
+  // 1 秒に 10 歩でも、ベルトの運ぶ量は 20 歩と同じ（どちらも 1 マスに 0.2 秒）。列車・採取機・装置は、歩幅によらず「過ぎた時間」で進む。
+  // 絵は、歩の合間を先読みして描くので、10 歩でもなめらかに見える
+  const STEP_HZ = [60, 30, 20, 15, 10];
+  /** 絵を描くのにかかる時間（ならした値、ミリ秒）。工場の裏方の仕事（順番に回る設備）に 1 コマで使ってよい時間を決めるのに使う */
+  let drawAvg = 0;
   /** 1 コマのうち、工場を進め、出来事を知らせ、ときどき保存する所 */
   const simFrame = (now: number, dt: number) => {
     if (slot) {
@@ -2318,7 +2328,10 @@ function boot(data: HotData) {
         // 空いた時間のぶんの歩数を進める。こうしないと、1 コマに 1 歩しか進まず、コマが遅い場面（納品所のまわりなど）で工場の時間まで遅くなり、列車も装置も止まったように見える。
         // それでも追いつかない端末では、追いつこうとして固まるのではなく、工場の時間をゆっくり進める
         const budget = Math.max(lite() ? 6 : 10, Math.min(110, dt * 450));
-        while (acc >= STEP && guard++ < 24) { const s1 = performance.now(); step(world, STEP); const now1 = performance.now(); stepMs += (now1 - s1 - stepMs) * 0.1; acc -= STEP; if (now1 - s0 > budget) break; }
+        // とても大きな工場の、順番に回る設備と駅に、この 1 コマで使ってよい時間：1 コマを 34 ms ほどに収める分（3〜14 ms）。
+        // 回りきれなかった設備は、次のコマに続きから回り、その間の時間もまとめて進める（作る数は減らず、コマが止まらない）。1 コマに 2 歩目からは、少しだけ
+        let bg = Math.max(3, Math.min(14, 30 - drawAvg));
+        while (acc >= STEP && guard++ < 24) { const s1 = performance.now(); step(world, STEP, bg); bg = 1; const now1 = performance.now(); stepMs += (now1 - s1 - stepMs) * 0.1; acc -= STEP; if (now1 - s0 > budget) break; }
         if (PERF) PERF.step.push(performance.now() - s0);
         if (acc > STEP * 4) acc = STEP * 4;
       }
@@ -2369,11 +2382,24 @@ function boot(data: HotData) {
         if (ev === 'wrong-sample' && now - lastWrong > 2500) { lastWrong = now; toast('違う物質が納品所に入った。2 個減点。検査を見直せ。', 3200); sfx.bad(); }
         if (ev === 'all-done') { toast('すべての指令を終えた。', 6000); sfx.goal(); }
       }
-      if (evSave) save();
+      // とても大きな工場では、コマの合間に少しずつ作る（下の自動保存）。ほかは、すぐ書く
+      if (evSave) { if (!sandbox && world.ents.size > BIG_SAVE) { if (!saving) { saving = saveJob(home()); jobNow = 0; } } else save(); }
       if (!sandbox) statsTick(world); // 指令の見込みの記録と、実績（半秒に 1 回）
       sinceSave += dt;
       // 自動保存は 5 秒ごと。大きな工場で 1 回の保存に時間がかかるときは、間をあける（保存 1 回の時間の 400 倍、最長 30 秒。閉じるときと出来事のあとは、これまでどおりすぐ保存する）
-      if (sinceSave > Math.min(30, Math.max(5, saveMs * 0.4))) { sinceSave = 0; const t0 = performance.now(); save(); saveMs = performance.now() - t0; saveCam(); paintSync(); }
+      // 自動保存の間隔：ふつうは 5〜30 秒。少しずつ作る大きな工場では、作るのにかかった時間の 20 倍（30 秒〜5 分）：保存の手間を、全体の 5 % までにする
+      const big = !sandbox && world.ents.size > BIG_SAVE;
+      if (sinceSave > (big ? Math.min(300, Math.max(30, jobMs * 0.02)) : Math.min(30, Math.max(5, saveMs * 0.4)))) {
+        sinceSave = 0;
+        if (big) { if (!saving) { saving = saveJob(home()); jobNow = 0; } }
+        else { const t0 = performance.now(); save(); saveMs = performance.now() - t0; saveCam(); paintSync(); }
+      }
+      // 少しずつ作っている自動保存：1 コマに 3 ms ずつ進め、できあがったら書く
+      if (saving) {
+        const j0 = performance.now(), done = saving.step(3);
+        jobNow += performance.now() - j0;
+        if (done) { const json = saving.text(); saving = null; jobMs = jobNow; save(json); saveCam(); paintSync(); }
+      }
       if (!warned && pf.breakMin && now - began > pf.breakMin * 60000) { warned = true; breakReminder(pf.breakMin); }
     }
   };
@@ -2532,15 +2558,24 @@ function boot(data: HotData) {
     }
   };
   /** 選んだものの操作の帯と、背景音楽 */
+  let musicOf: World | null = null, musicRev = -1, musicIt: IterableIterator<Ent> | null = null, musicBusy = 0, musicAll = 0, musicMix = 0;
   const actFrame = (now: number, drawn: boolean) => {
     if (drawn || modal.hidden || shotPending) placeAct();
     if (!drawn) return;
     // 背景音楽：工場の画面でだけ鳴らす。動いている装置が多いほど、音が増える
     if (now - musicAt > 250) {
       musicAt = now;
-      let busy = 0, all = 0;
-      if (slot) for (const e of world.ents.values()) if (e.recipe) { all++; if (e.busy) busy++; }
-      musicTick(slot !== 0 && !document.hidden, all ? Math.min(1, (busy / all) * 0.6 + Math.min(1, all / 30) * 0.4) : 0);
+      // 動いている装置の割合。設備の多い工場では、1 回に 3,000 個ずつ見ていき、ひと回りしたら割合を替える
+      // （0.25 秒ごとに何十万もの設備をなめると、そのたびにコマが止まる）
+      if (slot) {
+        if (musicOf !== world || musicRev !== world.ents.size || !musicIt) { musicOf = world; musicRev = world.ents.size; musicIt = world.ents.values(); musicBusy = musicAll = 0; }
+        for (let k = 0; k < 3000; k++) {
+          const q = musicIt.next();
+          if (q.done) { musicMix = musicAll ? Math.min(1, (musicBusy / musicAll) * 0.6 + Math.min(1, musicAll / 30) * 0.4) : 0; musicIt = world.ents.values(); musicBusy = musicAll = 0; break; }
+          if (q.value.recipe) { musicAll++; if (q.value.busy) musicBusy++; }
+        }
+      }
+      musicTick(slot !== 0 && !document.hidden, slot ? musicMix : 0);
     }
   };
   /**
@@ -2560,7 +2595,11 @@ function boot(data: HotData) {
     // 軽量スキンは、描くのを 2 コマに 1 回にする（工場と視点は毎コマ進める。飛ばしたコマの時間は、次に描くコマへ足す）
     if (lite() && !shotPending && (liteFlip = !liteFlip)) { liteCarry += dt; return; }
     const dd = dt + liteCarry; liteCarry = 0;
+    // 絵は、最後に工場を進めてから過ぎた時間のぶん、先の位置を描く（歩の合間も、荷と列車がなめらかに動く）
+    setLead(world, slot && modal.hidden && speed ? acc : 0);
+    const dr0 = performance.now();
     try { drawn = drawFrame(now, dd); } catch (err) { frameFault(err, now); unwindDraw(); }
+    if (drawn) { const c = performance.now() - dr0; drawAvg += (c - drawAvg) * 0.1; }
     try { hudFrame(dd, drawn); } catch (err) { frameFault(err, now); }
     try { actFrame(now, drawn); } catch (err) { frameFault(err, now); }
   };
@@ -2597,10 +2636,18 @@ function boot(data: HotData) {
   window.addEventListener('unhandledrejection', onCrash);
   window.addEventListener('pagehide', () => { save(); saveCam(); });
   // 更新のお知らせ：新しい版で、はじめて工場を開いたときに 1 度だけ
-  const NEWS = '2026-11-unjam';
+  const NEWS = '2026-11-smooth';
   const showNews = () => {
     store.setMeta({ news: NEWS });
     showSheet(h('header', {}, h('h2', {}, '更新のお知らせ'), closeBtn()),
+      h('p', {}, h('b', {}, 'とても大きな工場を、止まらずに動くようにした。'), '設備が何十万もある工場のための作り直し。作る数・運ぶ数は変えていない。'),
+      h('ul', {},
+        h('li', {}, '工場の計算に、1 コマで使ってよい時間を決めた。採取機・装置・駅は「順番に回り、前に回ってからの時間のぶんを進める」作りにそろえたので、時間で打ち切っても、回る間隔が延びるだけで、作る数は減らず、工場の時計も遅れない。'),
+        h('li', {}, '採取機 → 装置 → 廃棄口・駅のまとまりは、反応を 1 回ずつ回さず、終わる回数を計算で求める。'),
+        h('li', {}, '絵は、歩の合間を先読みして描く：ベルトの荷・列車・装置の進み具合が、計算が 1 秒に 10 歩でも、コマごとになめらかに動く。'),
+        h('li', {}, '自動保存は、コマの合間に少しずつ作る（設備 3 万を超える工場。これまでは、30 秒ごとに 1〜数秒、画面が止まっていた）。手で保存するとき・閉じるときは、これまでどおり、いっぺんに書く。'),
+        h('li', {}, '列車が何万本もある工場で、描くたびに列車 1 本ずつの道筋を求めていた・0.25 秒ごとに全設備をなめていた・駅ごとに全駅を見比べていた、などの引っかかりを直した。降ろす駅のまわりに集まる列車は、まとめて塗る。'),
+        h('li', {}, '設備 26 万の工場（ヘッドレスのブラウザー、CPU を 4 分の 1 に絞って）：工場の進みが実時間の 0.21 倍 → 0.98 倍（納品所の近く）。コマの間は 283 ms → 111 ms、パイプラインに切り替えたあとは 50 ms、引いた全体図は 16 ms。')),
       h('p', {}, h('b', {}, '降ろす駅とパイプラインの受け口の詰まりを、根から直した。'), '降ろす駅・受け口は、出口の先が受け取るかぎり、いくらでも出す（これまでは 1 歩に 16 荷まで。細切れの荷がたまると、そこで頭打ちになり、列車も管も手前で止まっていた）。列車が着いて降ろせないとき・管で送れないときは、その場で、たまっている分を出口へ出す：降ろせる量が、駅にためられる数で決まらない。積む駅 1.8 万・降ろす駅 12 の工場で、納品が毎分 490 万個から 1,550 万個になった。'),
       h('p', {}, h('b', {}, '番線ごと、パイプラインに切り替えられる。'), '列車は、遠いほど運べる量が減る（2,000 マス先の駅は、5 編成でも毎秒 17 個ほど）。貨物駅の設定に「この番線の、気体と液体だけの積む駅を、まとめてパイプラインにする」を足した（研究「パイプライン」と、同じ番号の受け口が要る）。固体を扱う駅は、列車のまま。パイプラインの設定から、まとめて戻せる。'),
       h('p', {}, h('b', {}, 'とても大きな工場を、さらに軽く・小さく。'), 'じかに駅へ入れている採取機は、数が多いほどゆっくり回る（最大 6.4 秒に 1 回、その間のぶんをまとめて入れる）。在庫のない搬出口は眠る。駅が 2,000 を超える工場のセーブには列車の位置を書かず（読み込むと、積んでいた荷ごと駅から出直す）、設備が 5 万を超える工場では、採取機と装置の「これまでの回数」を書かない。設備 26 万の工場で、同期で送る大きさが 128 万字から 24 万字になった（上限 150 万字）。'),

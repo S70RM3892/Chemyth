@@ -353,3 +353,84 @@ describe('とても大きな工場のセーブ', () => {
     expect(few[0].n).toBeGreaterThanOrEqual(1000);
   });
 });
+
+describe('なめらかに動かすための作り（時間で打ち切る・計算で求める・少しずつ保存する）', () => {
+  /** 採取機 2 台 → 蒸留塔（液体空気の分留）→ 廃棄口 2 つ、の組を n 組。速さの強化つき */
+  const units = async (n: number, machineUp = 0, extractUp = 0) => {
+    const { configure, outPort, remove } = await import('../src/engine/world');
+    const { recipeById } = await import('../src/content/recipes');
+    const { resourceAt } = await import('../src/content/map');
+    const w = newWorld(), r = recipeById('air-distillation')!;
+    w.up.machine = machineUp; w.up.extract = extractUp;
+    let made = 0;
+    for (let i = 0; made < n && i < 60000; i++) {
+      const x = 400 + (i % 60) * 4, y = 400 + Math.floor(i / 60) * 3;
+      if (at(w, x, y) || at(w, x, y + 1) || at(w, x + 1, y) || at(w, x + 2, y + 1) || at(w, x + 3, y) || at(w, x + 2, y + 2)) continue;
+      if (resourceAt(x, y) !== 'air' || resourceAt(x, y + 1) !== 'air') continue;
+      if (place(w, 'extractor', x, y, 0) !== null) continue;
+      if (place(w, 'extractor', x, y + 1, 0) !== null || place(w, 'separator', x + 1, y, 0) !== null) { remove(w, x, y); remove(w, x, y + 1); continue; }
+      const m = at(w, x + 1, y)!;
+      configure(m, r, r.outputs.map((o) => o[0]));
+      m.inBuf = {}; m.outBuf = r.outputs.map(() => 0);
+      for (let q = 0; q < r.outputs.length; q++) { const pt = outPort(m, q); place(w, 'vent', pt.tx, pt.ty, 0); }
+      made++;
+    }
+    expect(made).toBe(n);
+    return w;
+  };
+  const madeOf = (w: World) => (w.made.N2 || 0) + (w.made.O2 || 0);
+
+  it('速い装置のまとまり：反応の回数を計算で求めても、1 回ずつ回した小さな工場と、1 組あたりの生産が同じ', async () => {
+    // 装置の速さ 3 倍・採取 3.5 倍：1.6 秒のあいだに反応が 2 回を超える（計算で求める道を通る）
+    const small = await units(12, 5, 5), big = await units(1020, 5, 5);
+    run(small, 120); run(big, 120);
+    const a = madeOf(small) / 12, b = madeOf(big) / 1020;
+    expect(a).toBeGreaterThan(600);
+    expect(Math.abs(b - a) / a).toBeLessThan(0.03);
+    // 原料は、ため込みすぎない（反応 4 回ぶん ＋ 次に回ってくるまでの分）
+    const m = [...big.ents.values()].find((e) => e.kind === 'separator')!;
+    expect(m.inBuf!.air).toBeLessThan(5 * 40);
+  });
+  it('1 歩に使ってよい時間を、ごく短く決めても（回る間隔が延びても）、作る数は減らない', async () => {
+    const free = await units(1020, 5, 5), tight = await units(1020, 5, 5);
+    for (let i = 0; i < 20 * 120; i++) { step(free, 1 / 20); step(tight, 1 / 20, 0.02); free.fx.length = 0; tight.fx.length = 0; }
+    const a = madeOf(free), b = madeOf(tight);
+    expect(a).toBeGreaterThan(1020 * 600);
+    // 時間で打ち切るので、ぴったり同じにはならない。回ってくるまでの遅れの分（数秒ぶん）だけ少ない
+    expect(b).toBeGreaterThan(a * 0.9);
+    expect(b).toBeLessThan(a * 1.02);
+  });
+  it('少しずつ作ったセーブは、いっぺんに作ったセーブと同じ工場になる', async () => {
+    const { saveJob } = await import('../src/engine/world');
+    const w = await units(300);
+    const a = station(w, 300, 300, 'in', 12); station(w, 320, 300, 'out', 12);
+    a.buf = ['N2', 'N2', 'O2'];
+    run(w, 5);
+    const job = saveJob(w);
+    let calls = 0;
+    while (!job.step(0)) { calls++; expect(calls).toBeLessThan(100000); }
+    expect(calls).toBeGreaterThan(3);             // 何回かに分かれる
+    const w1 = deserialize(job.text())!, w2 = deserialize(serialize(w))!;
+    expect(w1.ents.size).toBe(w2.ents.size);
+    expect(w1.ents.size).toBe(w.ents.size);
+    for (const e of w2.ents.values()) {
+      const f = w1.ents.get(`${e.x},${e.y}`)!;
+      expect(f.kind).toBe(e.kind);
+      expect(f.recipe).toBe(e.recipe);
+      if (e.kind === 'station') expect(f.buf).toEqual(e.buf);
+    }
+    expect(w1.playMs).toBe(w2.playMs);
+  });
+  it('絵の先読み：ベルトの荷は、歩の合間のぶんだけ先に描く（止まっている荷は動かさない。工場の中身は変えない）', async () => {
+    const { setLead, itemP, beltSpeed } = await import('../src/engine/world');
+    const w = newWorld();
+    setLead(w, 0);
+    expect(itemP({ p: 0.3 })).toBe(0.3);
+    setLead(w, 0.05);
+    expect(itemP({ p: 0.3 })).toBeCloseTo(0.3 + 0.05 * beltSpeed(w), 6);
+    expect(itemP({ p: 1 })).toBe(1);
+    expect(itemP({ p: 0.99 })).toBe(1);
+    expect(itemP({ p: 0.3 }, 5)).toBeCloseTo(0.3 + (0.05 * beltSpeed(w)) / 5, 6);
+    setLead(w, 0);
+  });
+});

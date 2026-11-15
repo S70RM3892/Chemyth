@@ -3,7 +3,7 @@ import { ELEMENTS } from '../content/elements';
 import { lineColor, MACHINES } from '../content/machines';
 import { label, sub } from '../content/substances';
 import { heightOf, TOP_H } from './three';
-import { progOf, flowTrace, JAM_SEC, markEpoch, MOVERS, stationsOf, type FlowTrace } from '../engine/world';
+import { progOf, itemP, flowTrace, JAM_SEC, markEpoch, MOVERS, stationsOf, type FlowTrace } from '../engine/world';
 import { at, floorOf, FLOOR_DY, PLATING, TANK_CAP, chaptersDone, litZones, platingOf, poleOf, beltSpeed, currentGoal, DX, DY, fedTier, goalCount, goalRate, STATION_CAP, inDoors, inflow, isMachine, machineState, outPort, railOf, stationDests, stationVer, tunnelPair, portDir, requiredOf, sizeOf, slotPort, type Dir, type Ent, type Train, type World } from '../engine/world';
 import { BRASS, BRASS_DARK, mix, onThemeChange, palette, type Palette } from './theme';
 import { drawElement, sprite } from './token';
@@ -567,6 +567,9 @@ function onCurve(c: ReturnType<typeof beltCurve>, p: number): [number, number] {
   return [q * q * c.ax + p * p * c.bx, q * q * c.ay + p * p * c.by];
 }
 
+/** 駅がこの数を超える工場では、見えている列車の一覧を、コマをまたいで持つ（drawNear） */
+const TRAIN_SCAN = 400;
+let trOf: World | null = null, trRev = -1, trList: { e: Ent; tr: Train }[] = [], trId = 1, trScan = 0;
 /** いまの信号の状態（検知器と弁の絵に使う） */
 let SIG: number[] = [];
 /** 区画の集計は 1 秒半に 1 回でよい */
@@ -1023,7 +1026,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     const it = e.item;
     if (it) {
       const dist = pair ? Math.abs(pair.x - e.x) + Math.abs(pair.y - e.y) : 1;
-      const off = pair ? -0.5 + it.p * dist : it.p - 0.5;
+      const off = pair ? -0.5 + itemP(it, dist) * dist : itemP(it) - 0.5;
       if (pair ? off < -0.05 : off > 0.05) token(ctx, P, cx + dxv * off * z, cy + dyv * off * z, z, it.s);
     }
     // 坑口：黒い口と、もぐる・出る向きの矢じり
@@ -1080,7 +1083,7 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
   };
   for (const b of belts) {
     if (!b.e.item) continue;
-    const [ox, oy] = onCurve(b.c, b.e.item.p);
+    const [ox, oy] = onCurve(b.c, itemP(b.e.item));
     if (veryFar) {
       // ごく引いた視野：物質は、その色の小さな点で示す
       ctx.fillStyle = b.e.item.s === 'e' ? P.hi : sub(b.e.item.s).color;
@@ -1092,7 +1095,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
     e.items.forEach((it, a) => {
       if (!it) return;
       const d = it.d ?? a;
-      load(sx(e.x + 0.5 + DX[d] * (it.p - 0.5)), sy(e.y + 0.5 + DY[d] * (it.p - 0.5)), it.s, it.n);
+      const ip = itemP(it);
+      load(sx(e.x + 0.5 + DX[d] * (ip - 0.5)), sy(e.y + 0.5 + DY[d] * (ip - 0.5)), it.s, it.n);
     });
   }
 
@@ -1461,7 +1465,8 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
         ctx.strokeStyle = lineColor(L.ch); ctx.lineWidth = Math.max(1, z * 0.07); ctx.stroke();
       }
     }
-    for (const e of stationsOf(w)) {
+    const sts = stationsOf(w), manySt = sts.length > TRAIN_SCAN && autoMany;
+    if (!manySt) for (const e of sts) {
       if (e.role !== 'in') continue;
       const ds = stationDests(w, e, sver);
       if (!ds.list.length) continue;
@@ -1501,8 +1506,64 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
         seenTr.push({ tr, x: tx, y: ty, dx: TRAIN.dx, dy: TRAIN.dy, col });
       }
     }
+    // 駅がとても多い工場：見えている列車の一覧を、コマをまたいで持つ。1 コマに駅の 4 分の 1 ずつ見て、見える範囲（と、そのまわり）に入った列車を足し、
+    // 描くときに、一覧の列車だけ場所を出して、離れたものを外す（毎コマ、何万本もの列車の場所を出さない）
+    if (manySt && z >= 10) {
+      if (trOf !== w || trRev !== sver) { trOf = w; trRev = sver; trList = []; trId++; trScan = 0; }
+      const n = sts.length, pad = 240;
+      for (let left = Math.ceil(n / 4); left > 0; left--) {
+        const e = sts[trScan];
+        trScan = trScan + 1 < n ? trScan + 1 : 0;
+        if (e.role !== 'in' || e.pipe) continue;
+        for (let k = -1, xt = e.xtr, m = xt ? xt.length : 0; k < m; k++) {
+          const tr = k < 0 ? e.tr : xt![k];
+          if (!tr || tr.vl === trId || (tr.p <= 0 && !tr.back)) continue;
+          trainAt(w, e, tr);
+          const tx = sx(TRAIN.x), ty = sy(TRAIN.y);
+          if (tx < -pad || tx > cw + pad || ty < -pad || ty > ch + pad) continue;
+          tr.vl = trId; trList.push({ e, tr });
+        }
+      }
+      let keep = 0;
+      for (let i = 0; i < trList.length; i++) {
+        const q = trList[i];
+        trainAt(w, q.e, q.tr);
+        const tx = sx(TRAIN.x), ty = sy(TRAIN.y);
+        if (tx < -pad * 1.5 || tx > cw + pad * 1.5 || ty < -pad * 1.5 || ty > ch + pad * 1.5 || (q.tr.p <= 0 && !q.tr.back)) { q.tr.vl = undefined; continue; }
+        trList[keep++] = q;
+        if (tx < -60 || tx > cw + 60 || ty < -60 || ty > ch + 60) continue;
+        seenTr.push({ tr: q.tr, x: tx, y: ty, dx: TRAIN.dx, dy: TRAIN.dy, col: lineColor(q.e.ch || 1) });
+      }
+      trList.length = keep;
+    }
     const L = z * 0.95, Wd = z * 0.46, tNow = t;
-    if (lite || seenTr.length > 60) {
+    if (seenTr.length > 600) {
+      // 列車が何百・何千本も見えるとき（降ろす駅のまわりに集まる）：1 本ずつ塗らず、縁の色でまとめて 1 回、番線の色ごとにまとめて 1 回、積んでいる印をまとめて 1 回。
+      // 重なって見分けのつかない列車に、1 本あたり 4 回の塗りをかけない
+      const b = Math.max(1, lw(0.05));
+      const byCol = new Map<string, typeof seenTr>();
+      ctx.beginPath();
+      for (const t of seenTr) {
+        const hz = Math.abs(t.dx) >= Math.abs(t.dy), a = hz ? L : Wd, c = hz ? Wd : L;
+        ctx.rect(t.x - a / 2 - b, t.y - c / 2 - b, a + b * 2, c + b * 2);
+        let l = byCol.get(t.col);
+        if (!l) byCol.set(t.col, (l = []));
+        l.push(t);
+      }
+      ctx.fillStyle = ink; ctx.fill();
+      for (const [col, l] of byCol) {
+        ctx.beginPath();
+        for (const t of l) { const hz = Math.abs(t.dx) >= Math.abs(t.dy), a = hz ? L : Wd, c = hz ? Wd : L; ctx.rect(t.x - a / 2, t.y - c / 2, a, c); }
+        ctx.fillStyle = col; ctx.fill();
+      }
+      ctx.beginPath();
+      for (const t of seenTr) {
+        if (!t.tr.cargo.length) continue;
+        const hz = Math.abs(t.dx) >= Math.abs(t.dy), a = hz ? L : Wd, c = hz ? Wd : L;
+        ctx.rect(t.x - a * 0.3, t.y - c * 0.3, a * 0.6, c * 0.6);
+      }
+      ctx.fillStyle = '#f3f1e8'; ctx.fill();
+    } else if (lite || seenTr.length > 60) {
       // 軽量スキンと、列車がたくさん見えるとき：向きに合わせた四角だけ（回さない・影なし・灯りなし）。止まって待つ列車は、先頭が赤
       const b = Math.max(1, lw(0.05));
       for (const t of seenTr) {
