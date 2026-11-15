@@ -9,7 +9,7 @@ import { PASSAGES, checkBlank, type Passage } from '../content/passages';
 import { REAGENTS, SETS, TESTS, testById } from '../content/samples';
 import { SYLLABUS, coverageOf, type Unit } from '../content/syllabus';
 import { pretty } from '../chem/formula';
-import { TANK_CAP, RESEARCH, credit, RAIL_BOOST, pipeFlow, setPipe, maxCars, stationCap, stationDests, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, setStationRole, type Ent, type UpgradeKey, type World } from '../engine/world';
+import { TANK_CAP, RESEARCH, credit, RAIL_BOOST, pipeFlow, setPipe, pipeLine, unpipeLine, maxCars, stationCap, stationDests, trainCap, LINE_MAX, freeLine, lineNo, signalOn, doResearch, has, researchBlock, tierNeed, STATION_CAP, TRAIN_CAP, UPGRADE_COST, railOf, stationTargets, beltSpeed, discover, dueIds, stationTarget, trainSpeed, extractInterval, machineRate, schedule, setChapter, setStationRole, type Ent, type UpgradeKey, type World } from '../engine/world';
 import { applyTestOut, canTestOut, paceOf, testOutPass, testOutQuiz } from '../engine/pace';
 import { quizFor } from '../engine/quiz';
 import { calibLine, solveList } from './review';
@@ -582,6 +582,7 @@ export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
           ? `受け口：${dests.length} か所（いちばん遠い所で ${far} マス先）。距離に関係なく、その場で届く。この送り口から、1 秒に ${pipeFlow(c.w)} 個まで（1 分に ${pipeFlow(c.w) * 60} 個）。${e.bad ? `いま ${label(e.bad)} が入口で止まっている：固体は管を流れない。固体は列車で運べ。` : ''}`
           : `${e.ch} 番の「受け口」がまだない。届け先に貨物駅を置き、パイプラインにして、同じ番号の「受け口」にしろ。`)
         : `${e.ch} 番の送り口：${senders} か所。届いたものは、正面の 2 つの口から出る。${full ? `満杯。先頭の ${label((e.buf![0] ?? '').replace(/^!/, ''))} を、出口の先が受け取っていない。満杯のあいだ、送り口はこの受け口を飛ばす。` : ''}`),
+      e.role === 'in' && unpipeLine(c.w, e.ch || 1, true) > 1 ? h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'st-unpipe-all', onclick: () => { const k = unpipeLine(c.w, e.ch || 1); sfx.ok(); c.toast(`${e.ch} 番の送り口 ${k} か所を、列車の積む駅に戻した。`, 4000); again(); } }, `${e.ch} 番の送り口 ${unpipeLine(c.w, e.ch || 1, true)} か所を、まとめて列車の駅に戻す`)) : null,
       h('p', { class: 'muted' }, '管を流れるのは、常温で気体か液体のもの（水溶液も液体）。固体（鉱石・金属・塩の結晶など）は流れない。入試でも、物質が常温で気体・液体・固体のどれかは、性質の基本として問われる。'),
       h('p', { class: 'muted' }, `ここにあるもの：${pbuf.length} / ${stationCap(c.w)} 個${e.role === 'in' ? `　これまでに送った数：${e.n || 0}` : ''}`),
       pkinds.length ? h('div', { class: 'chips' }, ...pkinds.map((s) => { const b2 = chip(s); b2.disabled = true; b2.append(h('span', { class: 'muted' }, `×${pbuf.filter((x) => x === s).length}`)); return b2; })) : null,
@@ -605,6 +606,17 @@ export function showStation(c: PanelCtx, e: Ent, extra: HTMLElement) {
     h('p', { class: 'status' }, e.role === 'in'
       ? (to && route ? `行き先：線路 ${Math.round(route.len)} マス先の降ろす駅（${route.custom ? '敷いた線路' : '自動の仮線路'}）。片道 約 ${(route.len / speedOn(route.custom)).toFixed(1)} 秒、1 編成 ${trainCap(c.w)} 個で、1 分あたり およそ ${Math.round(((e.cars || 1) * trainCap(c.w) * 60) / ((2 * route.len) / speedOn(route.custom) + 1))} 個まで運べる。${held ? `いま ${held} 編成が、前の列車を待って止まっている。幹線が混んでいる。` : ''}` : `${e.ch} 番線の「降ろす駅」がまだない。届け先に貨物駅を置き、同じ番線の「降ろす駅」にしろ。`)
       : `${e.ch} 番線の積む駅：${feeders} か所。届いたものは、正面の 2 つの口から出る。${(e.buf?.length ?? 0) >= stationCap(c.w) ? `満杯。先頭の ${label((e.buf![0] ?? '').replace(/^!/, ''))} を、出口の先が受け取っていない（タンクは 1 種類しか入らない。ベルトは詰まっていないか）。満杯のあいだ、列車はこの駅を飛ばして、ほかの降ろす駅へ行く。` : ''}`),
+    ...(() => {
+      // 同じ番線の、気体と液体だけを扱う積む駅を、まとめてパイプラインにする（遠い駅は、列車では運びきれない：距離に比例して遅い）
+      if (e.role !== 'in' || !canPipe) return [];
+      const k = pipeLine(c.w, e.ch || 1, true);
+      if (!k) return [];
+      const recv = [...c.w.ents.values()].filter((n) => n.kind === 'station' && n.pipe && n.role === 'out' && n.ch === e.ch).length;
+      return [
+        h('div', { class: 'row' }, h('button', { class: 'ghost', type: 'button', id: 'st-pipe-all', disabled: !recv, onclick: () => { const done = pipeLine(c.w, e.ch || 1); sfx.ok(); c.toast(`${e.ch} 番線の積む駅 ${done} か所を、パイプラインにした（気体と液体だけを扱う駅）。固体を扱う駅は、列車のまま。`, 5000); again(); } }, `${e.ch} 番線の、気体と液体だけの積む駅 ${k} か所を、まとめてパイプラインにする`)),
+        h('p', { class: 'muted' }, recv ? `パイプラインの ${e.ch} 番の受け口（${recv} か所）へ、距離に関係なく届くようになる。列車は、遠いほど運べる量が減る。` : `先に、届け先に貨物駅を置いてパイプラインにし、${e.ch} 番の「受け口」にしろ（受け口がないと、送れない）。`),
+      ];
+    })(),
     e.role === 'in' ? h('h3', {}, '③ 編成の数') : null,
     e.role === 'in' ? h('div', { class: 'row' }, ...Array.from({ length: maxCars(c.w) }, (_, i) => i + 1).map((n) => h('button', { class: 'ghost' + ((e.cars || 1) === n ? ' picked on' : ''), type: 'button', id: `st-cars-${n}`, onclick: () => { e.cars = n; sfx.tap(); again(); } }, `${n} 編成`)), h('span', { class: 'muted' }, '増やすと、そのぶん多く運べる。')) : null,
     e.role === 'in' && routes.length > 1 ? h('p', { class: 'muted' }, `行き先は ${routes.length} か所。列車は順番に配る（分岐）。`) : null,

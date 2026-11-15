@@ -272,10 +272,11 @@ describe('とても大きな工場：計算をまとめる', () => {
   const vented = (w: World) => Object.values(w.vented).reduce((a, b) => a + b, 0);
   it('採取機が 3000 台を超えると 4 歩に 1 回まとめて進めるが、採れる数は 1 台あたり同じ', () => {
     const small = farm(40), big = farm(3200);
-    for (let i = 0; i < 30 * 40; i++) { step(small, 1 / 30); step(big, 1 / 30); small.fx.length = 0; big.fx.length = 0; }
+    // 大きな工場では、採取機は 1.6 秒に 1 回、その間のぶんをまとめて出す。数えた時点でまだ出していない分（1 台あたり 2 個まで）だけ、遅れて見える
+    for (let i = 0; i < 30 * 120; i++) { step(small, 1 / 30); step(big, 1 / 30); small.fx.length = 0; big.fx.length = 0; }
     const a = vented(small) / 40, b = vented(big) / 3200;
-    expect(a).toBeGreaterThan(20);
-    expect(Math.abs(b - a) / a).toBeLessThan(0.03);
+    expect(a).toBeGreaterThan(60);
+    expect(Math.abs(b - a)).toBeLessThan(2);
     // 稼働率も同じように上がっている
     expect(at(big, 400, 400)!.u).toBeGreaterThan(0.9);
   });

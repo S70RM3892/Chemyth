@@ -530,7 +530,9 @@ export function drawFar(ctx: CanvasRenderingContext2D, cw: number, ch: number, w
   // 稼働率の色分けのあいだは、装置ごとに色が違うので、これまでどおり 1 台ずつ
   const strips = !heat && w.ents.size > CROWD_ENTS ? machineStrips(w, fl, P) : null;
   const badS = strips ? new Strips() : null, busyS = strips ? new Strips() : null;
-  for (const e of w.ents.values()) {
+  // うんと引いた視野（1 マスが 1.2 px より小さい）で、装置を帯にまとめて塗っているとき：設備を 1 つずつなめない。
+  // 止まっている印も、運んでいる荷の点も、1 px より小さくて見えない。設備が何十万もある工場では、ここが引いた絵 1 枚の時間の大半
+  if (!(ultra && strips)) for (const e of w.ents.values()) {
     const k = e.kind;
     if (k === 'part' || k === 'hub') continue;
     const f = floorOf(e.y);

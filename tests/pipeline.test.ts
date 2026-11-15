@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { at, deserialize, newWorld, place, plainSave, serialize, setPipe, stationCap, stationDests, step, trainTroubles, pipeFlow, flows, RUSH_GAP, RUSH_MS, RUSH_N, rushCandidates, rushReward, type Ent, type World } from '../src/engine/world';
+import { at, deserialize, newWorld, place, plainSave, serialize, setPipe, pipeLine, unpipeLine, pipeable, STATION_SLIM, ENT_SLIM, STATION_CAP, TRAIN_CAP, stationCap, stationDests, step, trainTroubles, pipeFlow, flows, RUSH_GAP, RUSH_MS, RUSH_N, rushCandidates, rushReward, type Ent, type World } from '../src/engine/world';
 import { decodeBlueprint, encodeBlueprint } from '../src/engine/blueprint';
 import { ACHIEVEMENTS } from '../src/engine/achieve';
 
@@ -226,5 +226,130 @@ describe('急ぎの注文（くり返し出る、時間つきの注文）', () =
     expect(w3.rush).toBe(null);
     expect(w3.rushStreak).toBe(0);
     expect(w3.piped).toBe(0);
+  });
+});
+
+describe('降ろす駅・受け口は、出口が受け取るかぎり、いくらでも出す', () => {
+  /** 納品所の西に、じかに降ろす駅を置いた工場 */
+  const hubWorld = (...ids: string[]) => {
+    const w = newWorld(); w.research.push(...ids);
+    const hub = [...w.ents.values()].find((e) => e.kind === 'hub' && !at(w, e.x - 1, e.y) && !at(w, e.x - 2, e.y) && !at(w, e.x - 1, e.y + 1) && !at(w, e.x - 2, e.y + 1))!;
+    return { w, hx: hub.x, hy: hub.y };
+  };
+  it('細切れの荷（物質が 1 個ずつ入れ替わる）でも、1 歩ですべて出る（荷の数に上限がない）', () => {
+    const { w, hx, hy } = hubWorld();
+    const o = station(w, hx - 2, hy, 'out', 8);
+    o.buf = Array.from({ length: 1200 }, (_, i) => (i % 2 ? 'N2' : 'O2'));
+    step(w, 1 / 20);
+    expect(o.buf.length).toBe(0);
+    expect((w.delivered.N2 || 0) + (w.delivered.O2 || 0)).toBe(1200);
+  });
+  it('列車が次々に着いても、降ろす駅のためられる数で頭打ちにならない（着いたその場で、たまった分を出す）', () => {
+    const { w, hx, hy } = hubWorld();
+    station(w, hx - 2, hy, 'out', 8);
+    // 積む駅 30 か所：どの列車も、同じ 1 歩に着く
+    const ins = Array.from({ length: 30 }, (_, i) => station(w, 300 + (i % 6) * 4, 300 + Math.floor(i / 6) * 4, 'in', 8));
+    for (const a of ins) a.tr = { p: 0.999, back: false, cargo: Array(TRAIN_CAP).fill('N2'), wait: 0, to: `${hx - 2},${hy}` };
+    for (let i = 0; i < 20; i++) step(w, 1 / 20);
+    // 30 本 × 240 個 ＝ 7200 個。駅にためられるのは 600 個だが、すべて降りて、納まっている
+    expect(w.delivered.N2).toBe(30 * TRAIN_CAP);
+    expect(ins.every((a) => a.tr!.cargo.length === 0)).toBe(true);
+    expect(30 * TRAIN_CAP).toBeGreaterThan(STATION_CAP * 5);
+  });
+  it('パイプライン：送り口が多くて受け口が 1 つでも、受け口のためられる数で頭打ちにならない', () => {
+    const { w, hx, hy } = hubWorld('pipeline');
+    station(w, hx - 2, hy, 'out', 8, true);
+    const ins = Array.from({ length: 40 }, (_, i) => station(w, 300 + (i % 8) * 4, 300 + Math.floor(i / 8) * 4, 'in', 8, true));
+    for (let i = 0; i < 20 * 3; i++) { for (const a of ins) if (a.buf!.length < 400) a.buf!.push(...Array(200).fill(i % 2 ? 'N2' : 'O2')); step(w, 1 / 20); }
+    const got = (w.delivered.N2 || 0) + (w.delivered.O2 || 0);
+    // 40 か所 × 毎秒 300 個 × 3 秒 ＝ 36,000 個に近い（受け口 1 つにためられるのは 600 個）
+    expect(got).toBeGreaterThan(40 * 300 * 3 * 0.9);
+  });
+  it('出口の先が受け取らない物質は残り、受け取る物質だけが出る。何も出せない歩は、くり返し試さない', () => {
+    const w = newWorld();
+    const o = station(w, 300, 300, 'out', 8);
+    place(w, 'tank', 302, 300, 0);
+    const tank = at(w, 302, 300)!;
+    tank.sub = 'O2'; tank.cnt = 5;        // O₂ の入ったタンク：ほかの物質は受け取らない
+    o.buf = ['N2', 'O2', 'N2', 'O2', 'O2', 'CO2', 'N2'];
+    step(w, 1 / 20);
+    expect(o.buf).toEqual(['N2', 'N2', 'CO2', 'N2']);     // 並びは変わらない
+    expect(tank.cnt).toBe(8);
+    step(w, 1 / 20);
+    expect(o.buf.length).toBe(4);
+  });
+});
+
+describe('番線ごと、パイプラインに切り替える', () => {
+  it('気体と液体だけを扱う積む駅だけが替わる。固体を扱う駅・何を扱うか分からない駅は、列車のまま。戻せる', () => {
+    const w = newWorld();
+    const gas = station(w, 300, 300, 'in', 5), solid = station(w, 310, 300, 'in', 5), mixed = station(w, 320, 300, 'in', 5), empty = station(w, 330, 300, 'in', 5), other = station(w, 340, 300, 'in', 6);
+    gas.buf = ['N2', 'N2']; gas.tr = { p: 0.4, back: false, cargo: ['O2', 'O2', 'O2'], wait: 0, to: '0,0' };
+    solid.buf = ['NaCl'];
+    mixed.buf = ['N2']; mixed.tr = { p: 0, back: false, cargo: ['Fe2O3'], wait: 0 };
+    other.buf = ['N2'];
+    // 採取機がじかに入れている駅：採れる物で決まる（空気の採れる所）
+    const fed = station(w, 401, 400, 'in', 5);
+    expect(place(w, 'extractor', 400, 400, 0)).toBe(null);
+    expect(pipeable(w, gas)).toBe(true);
+    expect(pipeable(w, solid)).toBe(false);
+    expect(pipeable(w, mixed)).toBe(false);
+    expect(pipeable(w, empty)).toBe(false);
+    expect(pipeable(w, fed)).toBe(true);
+    expect(pipeLine(w, 5)).toBe(0);                  // 研究がまだ
+    w.research.push('pipeline');
+    expect(pipeLine(w, 5, true)).toBe(2);
+    expect(gas.pipe).toBeUndefined();                // 数えただけ
+    expect(pipeLine(w, 5)).toBe(2);
+    expect([gas.pipe, fed.pipe, solid.pipe, mixed.pipe, empty.pipe, other.pipe]).toEqual([true, true, undefined, undefined, undefined, undefined]);
+    expect(gas.buf).toEqual(['N2', 'N2', 'O2', 'O2', 'O2']);   // 列車の荷は、駅に戻る
+    expect(unpipeLine(w, 5, true)).toBe(2);
+    expect(unpipeLine(w, 5)).toBe(2);
+    expect(gas.pipe).toBeUndefined();
+  });
+});
+
+describe('とても大きな工場のセーブ', () => {
+  it('駅が 2,000 を超えると、列車の位置は書かず、積んでいた荷を駅に戻した形で書く。読み込むと、列車は駅から出直す', () => {
+    const w = newWorld();
+    const n = STATION_SLIM + 10;
+    for (let i = 0; i < n; i++) station(w, 300 + (i % 100) * 3, 300 + Math.floor(i / 100) * 3, 'in', 9);
+    const a = at(w, 300, 300)!;
+    a.buf = ['N2', 'N2'];
+    a.tr = { p: 0.5, back: false, cargo: ['O2', 'O2', 'O2'], wait: 0, to: '1,1' };
+    a.xtr = [{ p: 0.2, back: true, cargo: ['N2'], wait: 0 }];
+    a.cars = 2;
+    const st = plainSave(serialize(w)).ents.find((e: Ent) => e.kind === 'station' && e.x === 300 && e.y === 300);
+    expect(st.tr).toBeUndefined();
+    expect(st.xtr).toBeUndefined();
+    expect(st.cars).toBe(2);
+    const w2 = deserialize(serialize(w))!;
+    const b = at(w2, 300, 300)!;
+    expect(b.buf!.slice().sort()).toEqual(['N2', 'N2', 'N2', 'O2', 'O2', 'O2']);
+    expect(a.tr.cargo.length).toBe(3);               // 動いている工場は変えない
+    // 駅が少ない工場では、これまでどおり列車の位置も残る
+    const small = newWorld();
+    const s1 = station(small, 300, 300, 'in', 9);
+    s1.tr = { p: 0.5, back: false, cargo: ['O2'], wait: 0, to: '1,1' };
+    expect(at(deserialize(serialize(small))!, 300, 300)!.tr!.p).toBeCloseTo(0.5, 3);
+  });
+  it('設備が 5 万を超えると、採取機と装置の「これまでの回数」は書かない（読み込むと 0 から）。ためてある原料は残る', async () => {
+    const { packEnts, unpackEnts, shaped } = await import('../src/engine/world');
+    const list: Ent[] = [];
+    for (let i = 0; i < ENT_SLIM + 5; i++) list.push(shaped({ kind: 'extractor', x: i % 500, y: 1000 + Math.floor(i / 500), dir: 0, n: 1000 + i } as Ent));
+    list.push(shaped({ kind: 'separator', x: 5000, y: 5000, dir: 0, big: true, recipe: 'air-distillation', outOrder: ['N2', 'O2'], n: 77, prog: 0.4, busy: true, ts: [10, 2, 1], inBuf: { air: 12 }, outBuf: [3, 1] } as Ent));
+    list.push(shaped({ kind: 'belt', x: 6000, y: 6000, dir: 0, item: { s: 'N2', p: 0.5, m: 0, n: 4 } } as Ent));
+    const back = unpackEnts(packEnts(list)) as Ent[];
+    expect(back.length).toBe(list.length);
+    expect(back.filter((e) => e.kind === 'extractor').every((e) => e.n === undefined)).toBe(true);
+    const m = back.find((e) => e.kind === 'separator')!;
+    expect([m.n, m.prog, m.ts]).toEqual([undefined, undefined, undefined]);
+    expect(m.inBuf).toEqual({ air: 12 });
+    expect(m.outBuf).toEqual([3, 1]);
+    expect(m.busy).toBe(true);
+    expect(back.find((e) => e.kind === 'belt')!.item).toMatchObject({ s: 'N2', n: 4 });
+    // 5 万以下なら、回数も残る
+    const few = unpackEnts(packEnts(list.slice(0, 100))) as Ent[];
+    expect(few[0].n).toBeGreaterThanOrEqual(1000);
   });
 });

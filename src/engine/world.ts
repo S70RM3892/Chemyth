@@ -77,6 +77,8 @@ export interface Ent {
    * zt：列車を最後に進めた時刻。zh：空の列車が駅で荷を待っている（荷が入ったら起こす）。zv・zr：そのときの駅の顔ぶれと線路の番号（変わったら起こす）
    */
   zt?: number; zw?: number; zh?: boolean; zv?: number; zr?: number;
+  /** 降ろす駅：出口の先が何も受け取らなかった歩の番号（その歩のあいだ、出し直しを試さない。セーブには書かない） */
+  ff?: number;
   /** 貨物駅を、パイプライン（気体と液体だけを、同じ番号の受け口へ一瞬で送る）として使う。列車は走らない */
   pipe?: boolean;
   /** 毎歩回る設備の一覧（stepLists の fast）での番号。荷を受け取ったときに、居眠りから起こすのに使う（セーブには書かない） */
@@ -843,7 +845,7 @@ export function shaped(o: Ent): Ent {
   const e: Ent = {
     kind: o.kind, x: o.x, y: o.y, dir: o.dir, off: o.off, offProg: o.offProg, big: o.big, ref: o.ref, own: o.own,
     timer: o.timer, u: o.u, n: o.n, res: o.res, resAt: o.resAt, nb: o.nb, nbRev: o.nbRev,
-    zt: undefined, zw: undefined, zh: undefined, zv: undefined, zr: undefined, si: undefined, ct: undefined, cx: undefined,
+    zt: undefined, zw: undefined, zh: undefined, zv: undefined, zr: undefined, si: undefined, ct: undefined, cx: undefined, ff: undefined,
     recipe: o.recipe, pl: o.pl, inBuf: o.inBuf, outBuf: o.outBuf, outOrder: o.outOrder, outSlot: o.outSlot,
     busy: o.busy, prog: o.prog, stuck: o.stuck, bad: o.bad, badT: o.badT, hb: o.hb, pw: o.pw, ts: o.ts,
     item: o.item, items: o.items, rr: o.rr, sub: o.sub, test: o.test, st: o.st, ins: o.ins, li: o.li, pri: o.pri,
@@ -1699,6 +1701,49 @@ export function setPipe(w: World, e: Ent, on: boolean): boolean {
   if (e.si !== undefined && w === wakeW) wakeArr[e.si] = 0;
   return true;
 }
+/**
+ * 列車の ch 番線の積む駅のうち、気体と液体だけを扱っている駅（pipeable）を、まとめてパイプラインの送り口にする（番号はそのまま）。
+ * 扱っている物：いま駅と列車にある物と、じかに入れている採取機の資源。どちらもない駅（何を扱うか分からない）と、固体が混じる駅は、そのまま。
+ * dry なら、数えるだけ。変えた（変えられる）駅の数を返す
+ */
+export function pipeLine(w: World, ch: number, dry = false): number {
+  if (!has(w, 'pipeline')) return 0;
+  let n = 0;
+  for (const e of stationsOf(w)) {
+    if (e.pipe || e.role !== 'in' || (e.ch ?? 1) !== ch || !pipeable(w, e)) continue;
+    n++;
+    if (!dry) setPipe(w, e, true);
+  }
+  return n;
+}
+/** パイプラインの ch 番の送り口を、まとめて列車の積む駅に戻す。戻した（戻せる）数を返す */
+export function unpipeLine(w: World, ch: number, dry = false): number {
+  let n = 0;
+  for (const e of stationsOf(w)) {
+    if (!e.pipe || e.role !== 'in' || (e.ch ?? 1) !== ch) continue;
+    n++;
+    if (!dry) setPipe(w, e, false);
+  }
+  return n;
+}
+/** 積む駅 e が扱っているのは、気体と液体だけか（何も分からなければ false） */
+export function pipeable(w: World, e: Ent): boolean {
+  let known = false;
+  if (e.buf) for (let i = 0; i < e.buf.length; i++) { if (i && e.buf[i] === e.buf[i - 1]) continue; known = true; if (!flows(e.buf[i])) return false; }
+  for (const t of [e.tr, ...(e.xtr ?? [])]) if (t) for (let i = 0; i < t.cargo.length; i++) { if (i && t.cargo[i] === t.cargo[i - 1]) continue; known = true; if (!flows(t.cargo[i])) return false; }
+  // まわりの 8 マスから、この駅へじかに入れている採取機
+  const sz = sizeOf(e);
+  for (let dx = -1; dx <= sz; dx++) for (let dy = -1; dy <= sz; dy++) {
+    if (dx >= 0 && dx < sz && dy >= 0 && dy < sz) continue;
+    const n = w.ents.get(key(e.x + dx, e.y + dy));
+    if (!n || n.kind !== 'extractor') continue;
+    const tx = n.x + DX[n.dir] - e.x, ty = n.y + DY[n.dir] - e.y;
+    if (tx < 0 || tx >= sz || ty < 0 || ty >= sz) continue;
+    known = true;
+    if (!flows(resourceAt(n.x, n.y))) return false;
+  }
+  return known;
+}
 function pushInto(w: World, t: Ent | undefined, x: number, y: number, d: Dir, s: string, rc?: boolean, n = 1, dry = false): boolean {
   const N = n > 1 ? n : undefined;
   if (!t) return false;
@@ -1860,12 +1905,16 @@ interface StepLists {
   rev: number; fast: Ent[]; wake: Float64Array; slow: Ent[][]; slowAll: Ent[]; nSlow: number;
   /** まとまり：cells に「採取機…, 装置」を続けて並べ、ends[i] が i 番目のまとまりの終わり。cur は次に回るまとまり（最後に進めた時刻は、設備の ct） */
   cells: Ent[]; ends: number[]; cur: number;
+  /** 採取機 1 台だけのまとまり（じかに駅・廃棄口・納品所へ入れている採取機）。数が多いほど、ゆっくり回る。curS は次に回る番号 */
+  solo: Ent[]; curS: number;
   /** まとまりを組む時刻（工場の時計 playMs。-1 ＝ 組んである・組まない）。置く・消すが続いている間は組まず、手が止まってから組む */
   cellsDue: number;
 }
 const stepCache = new WeakMap<World, StepLists>();
 /** まとまりを回る間隔（秒）と、置く・消すのあと、まとまりを組み直すまでの時間（ミリ秒） */
 const CELL_EVERY = 1.6, CELL_WAIT = 1500;
+/** 採取機 1 台だけのまとまりを回る間隔の上限（秒）と、1 秒に回る台数の目安 */
+const SOLO_MAX = 6.4, SOLO_RATE = 15000;
 function stepLists(w: World, erev: number | undefined): StepLists {
   const c = stepCache.get(w);
   if (c && erev !== undefined && c.rev === erev) {
@@ -1878,12 +1927,12 @@ function stepLists(w: World, erev: number | undefined): StepLists {
   const huge = nSlow > STAG_MIN;
   for (const e of w.ents.values()) {
     if (e.kind === 'part' || e.kind === 'vent' || e.kind === 'hub') continue;
-    // 大きな工場では、採取機・反応装置・搬出口（時計を進めて出すだけのもの）を、4 歩に 1 回の組へ。ほかは毎歩
-    if (huge && (e.kind === 'extractor' || isMachine(e.kind) || e.kind === 'depot')) { slowAll.push(e); slow[(e.x * 7 + e.y * 13) & 3].push(e); }
+    // 大きな工場では、採取機と反応装置を、4 歩に 1 回の組へ。ほかは毎歩（空の設備・在庫のない搬出口は、居眠りする）
+    if (huge && (e.kind === 'extractor' || isMachine(e.kind))) { slowAll.push(e); slow[(e.x * 7 + e.y * 13) & 3].push(e); }
     else { e.si = fast.length; fast.push(e); }
   }
   // 置く・消すのたびに、まとまりまで組み直すと、手を入れるたびに引っかかる。まず組なしで回し（動きは同じ）、手が止まってから組む。読み込んだ直後は、すぐ組む
-  const out: StepLists = { rev: erev ?? -1, fast, wake: new Float64Array(fast.length), slow, slowAll, nSlow, cells: [], ends: [], cur: 0, cellsDue: !huge || erev === undefined ? -1 : c ? w.playMs + CELL_WAIT : 0 };
+  const out: StepLists = { rev: erev ?? -1, fast, wake: new Float64Array(fast.length), slow, slowAll, nSlow, cells: [], ends: [], cur: 0, solo: [], curS: 0, cellsDue: !huge || erev === undefined ? -1 : c ? w.playMs + CELL_WAIT : 0 };
   if (erev !== undefined) stepCache.set(w, out);
   if (out.cellsDue === 0) buildCells(w, out);
   return out;
@@ -1898,7 +1947,7 @@ function buildCells(w: World, c: StepLists) {
   for (let i = 0; i < all.length; i++) {
     const m = all[i];
     m.cx = -1;
-    if (m.kind === 'extractor' || m.kind === 'depot' || !m.recipe || !m.inBuf || !m.outBuf || !m.outOrder) continue;
+    if (m.kind === 'extractor' || !m.recipe || !m.inBuf || !m.outBuf || !m.outOrder) continue;
     const pl = planOf(m);
     if (!pl) continue;
     let ok = true;
@@ -1909,11 +1958,16 @@ function buildCells(w: World, c: StepLists) {
     if (ok) { m.cx = groups.length; groups.push([]); heads.push(m); }
   }
   let n = 0;
+  // 採取機がじかに、積む駅・廃棄口・納品所へ入れているもの：採取機 1 台だけのまとまり（駅は、満杯でないかぎり、まとまった荷をそのまま受け取る）。
+  // 遠くの資源地に採取機を何万台も並べて駅へ入れる工場では、これが 1 歩の時間の半分を占めていた
+  const solo: Ent[] = [];
   for (let i = 0; i < all.length; i++) {
     const e = all[i];
     if (e.kind !== 'extractor') continue;
     const t = at(w, e.x + DX[e.dir], e.y + DY[e.dir]);
-    if (t && t !== e && t.cx !== undefined && t.cx >= 0 && heads[t.cx] === t) { groups[t.cx].push(e); n++; }
+    if (!t || t === e) continue;
+    if (t.cx !== undefined && t.cx >= 0 && heads[t.cx] === t) { groups[t.cx].push(e); n++; }
+    else if (t.kind === 'vent' || t.kind === 'hub' || (t.kind === 'station' && t.role === 'in')) { solo.push(e); n++; }
   }
   if (!n) return;
   // まとまりに入る設備が、最後に進められた時刻：組（4 歩に 1 回）でまだ進めていない時間のぶんだけ前
@@ -1928,9 +1982,14 @@ function buildCells(w: World, c: StepLists) {
     cells.push(m);
     ends.push(cells.length);
   }
+  for (let i = 0; i < solo.length; i++) {
+    const e = solo[i];
+    e.cx = groups.length + i;
+    if (e.ct === undefined) e.ct = nowS - (acc ? acc[(e.x * 7 + e.y * 13) & 3] : 0);
+  }
   const slow: Ent[][] = [[], [], [], []];
   for (let i = 0; i < all.length; i++) { const e = all[i]; if (e.cx === undefined || e.cx < 0) slow[(e.x * 7 + e.y * 13) & 3].push(e); }
-  c.slow = slow; c.cells = cells; c.ends = ends; c.cur = 0;
+  c.slow = slow; c.cells = cells; c.ends = ends; c.cur = 0; c.solo = solo; c.curS = 0;
 }
 /**
  * とても大きな工場（採取機と反応装置が STAG_MIN 台を超える）では、採取機と反応装置を 4 歩に 1 回、4 歩ぶんの時間をまとめて進める
@@ -1980,11 +2039,49 @@ function planFlush(w: World, e: Ent, pl: MachinePlan, ob: number[], erev: number
   }
 }
 /** 降ろす駅が 1 歩に出せる荷の数（1 荷は STACK_MAX 個まで）と、先頭から飛ばせる物質の種類の数 */
-const OUT_PUSHES = 16, OUT_SKIP = 4;
+const OUT_SKIP = 4;
 /** 降ろす駅が満杯で降ろせない列車が、荷を積んだまま引き返すまでの時間（秒） */
 export const TRAIN_GIVE_UP = 4;
 const occRev = new WeakMap<World, number>();
 /** 積む駅 e の列車 1 本を、1 歩進める（毎歩・列車ごとに呼ぶので、ここでは配列も関数も作らない） */
+/**
+ * 降ろす駅（パイプラインの受け口も）にたまった物を、正面の 2 つの口から出す。出口の先が受け取るかぎり、いくらでも出す。
+ * 続く同じ物質は、荷にまとめる。出口の先が受け取らない物質は飛ばして、うしろの別の物質を出す
+ * （いろいろな物質が届く駅で、1 つの物質のために全部が止まらないように。受け取られない物質が OUT_SKIP 種類を超えたら、そこでやめる）。
+ * 1 歩に 1 回ではなく、列車が着いて降ろせないとき・管で送れないときにも、その場で呼ぶ：
+ * 降ろせる量が、駅にためられる数 × 計算の歩数で頭打ちにならない（納品所へじかに降ろす駅は、着いた分をすべて納める）。
+ * 何も出せなかったら、その歩のあいだは、もう試さない（ff に歩の番号を残す）
+ */
+function flushOut(w: World, e: Ent): boolean {
+  const buf = e.buf;
+  if (!buf || !buf.length || e.off || e.ff === w.tick) return false;
+  const n = buf.length;
+  let i = 0, wi = 0, r0 = '', r1 = '', r2 = '', r3 = '', r4 = '', nr = 0, sent = 0;
+  while (i < n) {
+    const s0 = buf[i];
+    let q = 1;
+    while (q < STACK_MAX && i + q < n && buf[i + q] === s0) q++;
+    let ok = false;
+    if (s0 !== r0 && s0 !== r1 && s0 !== r2 && s0 !== r3 && s0 !== r4) {
+      const rc = s0.charCodeAt(0) === 33, s1 = rc ? s0.slice(1) : s0;
+      for (let k = 0; k < 2; k++) {
+        const pi = ((e.rr || 0) + k) % 2, p = slotPort(e, pi);
+        if (push(w, p.tx, p.ty, p.d, s1, rc, q)) { e.rr = (pi + 1) % 2; ok = true; break; }
+      }
+      if (!ok) {
+        // 受け取られなかった物質は、この回はもう試さない
+        if (nr === 0) r0 = s0; else if (nr === 1) r1 = s0; else if (nr === 2) r2 = s0; else if (nr === 3) r3 = s0; else r4 = s0;
+        if (++nr > OUT_SKIP) { for (; i < n; i++) buf[wi++] = buf[i]; break; }
+      }
+    }
+    if (ok) sent += q; else for (let j = 0; j < q; j++) buf[wi++] = buf[i + j];
+    i += q;
+  }
+  buf.length = wi;
+  if (sent) { e.n = (e.n || 0) + sent; return true; }
+  e.ff = w.tick;
+  return false;
+}
 /** いま進めている工場の時計（秒）と、装置の速さ。絵を描く所が、まとめて進めている装置の進み具合を、時刻から求めるのに使う（progOf） */
 let clockS = 0, clockRate = 1;
 /**
@@ -2036,7 +2133,7 @@ function runTrain(w: World, e: Ent, tr: Train, buf: string[], dt: number, sver: 
       const ds = stationDests(w, e, sver).list, capS = stationCap(w);
       for (let q = 1; q <= ds.length; q++) {
         const i = ((e.rr || 0) + q) % ds.length, to = ds[i];
-        if ((to.buf ? to.buf.length : 0) >= capS) continue;
+        if ((to.buf ? to.buf.length : 0) >= capS && !flushOut(w, to)) continue;
         e.rr = i; tr.to = key(to.x, to.y); tr.p = 1e-6; tr.wait = 0; tr.rt = undefined;
         break;
       }
@@ -2070,7 +2167,10 @@ function runTrain(w: World, e: Ent, tr: Train, buf: string[], dt: number, sver: 
   if (!tr.back) {
     if (!held) tr.p = Math.min(1, tr.p + v);
     if (tr.p >= 1) {
-      const db = (dest!.buf ??= []), room = stationCap(w) - db.length;
+      const db = (dest!.buf ??= []);
+      // 降ろしきれないときは、まず降ろす駅にたまっている分を出口へ出す（出口の先が受け取るかぎり、列車は待たない）
+      if (tr.cargo.length > stationCap(w) - db.length) flushOut(w, dest!);
+      const room = stationCap(w) - db.length;
       if (tr.cargo.length && room > 0) {
         const got = tr.cargo.splice(0, room);
         for (let i = 0; i < got.length; i++) db.push(got[i]);
@@ -2348,31 +2448,10 @@ export function step(w: World, dt: number) {
       case 'station': {
         const buf = (e.buf ??= []);
         if (e.role === 'out') {
-          // 降ろす駅：ためたものを、正面の 2 つの口から交互に出す
-          if (!buf.length) break;
-          // 続く同じ物質を荷にまとめて出す。出口の先が受け取るかぎり、1 歩のうちに何荷でも出す
-          // （1 歩に 1 荷までだと、出せる量が計算の歩数で決まってしまい、納品所へじかに降ろしても列車が待つ）。
-          // 先頭の物質を出口の先が受け取らないときは、その物質を飛ばして、うしろの別の物質を出す
-          // （いろいろな物質が届く駅で、1 つの物質のために全部が止まらないように。飛ばすのは OUT_SKIP 種類まで）
-          let start = 0, skipped = 0;
-          for (let tries = 0; tries < OUT_PUSHES && start < buf.length; tries++) {
-            const s0 = buf[start], rc = s0.startsWith('!');
-            let q = 1;
-            while (q < STACK_MAX && start + q < buf.length && buf[start + q] === s0) q++;
-            let ok = false;
-            for (let k = 0; k < 2; k++) {
-              const i = ((e.rr || 0) + k) % 2, p = slotPort(e, i);
-              if (push(w, p.tx, p.ty, p.d, rc ? s0.slice(1) : s0, rc, q)) { buf.splice(start, q); e.rr = (i + 1) % 2; e.n = (e.n || 0) + q; ok = true; break; }
-            }
-            if (ok) continue;
-            if (++skipped > OUT_SKIP) break;
-            let j = start + q;
-            while (j < buf.length && buf[j] === s0) j++;
-            start = j;
-          }
+          // 降ろす駅：ためたものを、正面の 2 つの口から交互に出す（flushOut）
+          if (buf.length) flushOut(w, e);
           break;
         }
-        // 積む駅：列車を走らせる。編成は 3 つまで増やせる。降ろす駅がいくつもあれば、順番に配る（分岐）
         if (e.bad && w.tick - (e.badT || 0) > 45) e.bad = undefined;
         if (e.pipe) {
           // パイプライン：ためた物を、同じ番号の受け口へ、距離に関係なくその場で送る。1 秒に送れる数（pipeFlow）までで、受け口は順番に。空のあいだは眠り、荷が入ると起きる
@@ -2385,6 +2464,8 @@ export function step(w: World, dt: number) {
             let sent = 0, last: Ent | null = null, s0 = '';
             for (let q = 0; q < ds.length && buf.length && room >= 1; q++) {
               const to = ds[((e.rr || 0) + q) % ds.length], tb = (to.buf ??= []);
+              // 受け口に入りきらないときは、まず受け口にたまっている分を出口へ出す
+              if (Math.min(buf.length, Math.floor(room)) > capS - tb.length) flushOut(w, to);
               const k = Math.min(buf.length, Math.floor(room), capS - tb.length);
               if (k <= 0) continue;
               s0 = buf[0];
@@ -2498,6 +2579,16 @@ export function step(w: World, dt: number) {
     for (let li = 0; li < list.length; li++) {
       if (wk[li] > now) continue;
       const e = list[li];
+      if (nap && e.kind === 'depot') {
+        // 搬出口：在庫がなければ 1 秒眠る。あれば、次の 1 個が出せる時刻まで眠る（出口がふさがっているときは、次の歩にまた試す）。
+        // 眠っていた間の時間は、起きたときにまとめて進める
+        const nowS2 = now / 1000, el = e.ct === undefined ? dt0 : Math.min(4, nowS2 - e.ct);
+        e.ct = nowS2;
+        if (el > 0) run(e, el, kU0, false);
+        if (e.off) continue;
+        wk[li] = !e.sub || !(w.stock[e.sub] > 0) ? now + 1000 : (e.timer || 0) >= every ? 0 : now + (every - (e.timer || 0)) * 1000;
+        continue;
+      }
       run(e, dt0, kU0, false);
       switch (e.kind) {
         case 'station': if (e.role === 'in' && e.zw !== undefined) wk[li] = e.zw; break;
@@ -2523,24 +2614,41 @@ export function step(w: World, dt: number) {
   // 最後に「まとまり」（採取機 → 装置 → 廃棄口・駅）。CELL_EVERY 秒でひと回りする速さで、順に回る（計算の歩数によらない）。
   // 設備を読みに行く回数が減る：何万台も並ぶ工場では、ここが 1 歩の時間の大半。採取機は、前に回ってからの時間のぶんを一度に入れ、
   // 装置は、その時間を、反応 3 回ぶんごとに刻んで進める（原料は反応 4 回ぶんまでためられるので、刻みの間に切れない）
-  const nc = sl.ends.length;
-  if (!nc) return;
-  const nowS = w.playMs / 1000, cg = sl.cells, ce = sl.ends;
-  let todo = Math.min(nc, Math.ceil((nc * dt0) / CELL_EVERY)), ci = sl.cur;
-  if (ci >= nc) ci = 0;
-  for (; todo > 0; todo--) {
-    const a0 = ci ? ce[ci - 1] : 0, b0 = ce[ci], m = cg[b0 - 1];
-    // 前に回ってからの時間。はじめて回る装置（読み込んだ直後・まとまりに入った直後）は、この 1 歩ぶんだけ
-    const el = m.ct === undefined ? dt0 : Math.min(CELL_EVERY * 4, nowS - m.ct);
-    ci = ci + 1 < nc ? ci + 1 : 0;
-    for (let i = a0; i < b0; i++) cg[i].ct = nowS;
-    if (!(el > 0)) continue;
-    const rt = m.pl ? m.pl.r.time : 0;
-    const subs = rt > 0 ? Math.min(8, Math.max(1, Math.ceil((el * rate * ((m.pw || 0) > 0 ? 2 : 1)) / rt / 3))) : 1;
-    const d = el / subs, k = 1 - Math.exp(-d / UTIL_TAU);
-    for (let sub = 0; sub < subs; sub++) for (let i = a0; i < b0; i++) run(cg[i], d, k, true);
+  const nc = sl.ends.length, nowS = w.playMs / 1000;
+  if (nc) {
+    const cg = sl.cells, ce = sl.ends;
+    let todo = Math.min(nc, Math.ceil((nc * dt0) / CELL_EVERY)), ci = sl.cur;
+    if (ci >= nc) ci = 0;
+    for (; todo > 0; todo--) {
+      const a0 = ci ? ce[ci - 1] : 0, b0 = ce[ci], m = cg[b0 - 1];
+      // 前に回ってからの時間。はじめて回る装置（読み込んだ直後・まとまりに入った直後）は、この 1 歩ぶんだけ
+      const el = m.ct === undefined ? dt0 : Math.min(CELL_EVERY * 4, nowS - m.ct);
+      ci = ci + 1 < nc ? ci + 1 : 0;
+      for (let i = a0; i < b0; i++) cg[i].ct = nowS;
+      if (!(el > 0)) continue;
+      const rt = m.pl ? m.pl.r.time : 0;
+      const subs = rt > 0 ? Math.min(8, Math.max(1, Math.ceil((el * rate * ((m.pw || 0) > 0 ? 2 : 1)) / rt / 3))) : 1;
+      const d = el / subs, k = 1 - Math.exp(-d / UTIL_TAU);
+      for (let sub = 0; sub < subs; sub++) for (let i = a0; i < b0; i++) run(cg[i], d, k, true);
+    }
+    sl.cur = ci;
   }
-  sl.cur = ci;
+  // じかに駅・廃棄口・納品所へ入れている採取機：1 台ずつ、順に。数が多いほど間隔を空ける（1.6〜6.4 秒。1 秒に回るのは 1.5 万台ほどまで）。
+  // 駅は、満杯でないかぎり、まとまった荷をそのまま受け取るので、採れる数は変わらない
+  const ns = sl.solo.length;
+  if (ns) {
+    const per = Math.min(SOLO_MAX, Math.max(CELL_EVERY, ns / SOLO_RATE)), list = sl.solo;
+    let todo = Math.min(ns, Math.ceil((ns * dt0) / per)), si = sl.curS;
+    if (si >= ns) si = 0;
+    for (; todo > 0; todo--) {
+      const e = list[si];
+      si = si + 1 < ns ? si + 1 : 0;
+      const el = e.ct === undefined ? dt0 : Math.min(per * 4, nowS - e.ct);
+      e.ct = nowS;
+      if (el > 0) run(e, el, 1 - Math.exp(-el / UTIL_TAU), true);
+    }
+    sl.curS = si;
+  }
 }
 
 // ---- 保存 ----
@@ -2575,7 +2683,7 @@ function rle(a: unknown[]): unknown[] {
 /** rle の逆。数は、直前の物質の個数。古いセーブ（1 個ずつ）もそのまま読める。全部で LIST_MAX 個まで */
 const LIST_MAX = 20000;
 /** セーブに書かない欄（1 歩や描画のための覚え書き） */
-const DROP_KEYS = new Set(['res', 'resAt', 'nb', 'nbRev', 'pl', 'own', 'rt', 'rtRev', 'rtVer', 'zt', 'zw', 'zh', 'zv', 'zr', 'si', 'ct', 'cx']);
+const DROP_KEYS = new Set(['res', 'resAt', 'nb', 'nbRev', 'pl', 'own', 'rt', 'rtRev', 'rtVer', 'zt', 'zw', 'zh', 'zv', 'zr', 'si', 'ct', 'cx', 'ff']);
 /**
  * セーブに書く形に写す：null・false・undefined と覚え書きの欄は落とし、整数でない数は小数 3 桁に、荷の並びはまとめる。
  * （文字にするときに欄ごとに関数を呼ぶより、先に小さな写しを作るほうが速い。設備は、すべての欄を持つ形にそろえてあるので、欄が多い）
@@ -2599,6 +2707,10 @@ function pack(v: unknown): unknown {
  *  - 時間の合計は秒まで、進み具合は 2 桁まで
  * 前の形（設備を 1 つずつ欄の名前つきで書いたもの）も、そのまま読める
  */
+/** 駅がこの数を超える工場では、セーブに列車の位置を書かない */
+export const STATION_SLIM = 2000;
+/** 設備がこの数を超える工場では、採取機と装置の「回数」などを書かない */
+export const ENT_SLIM = 50000;
 const SAVE_DROP = new Set(['u', 'hb', 'bad', 'badT', 'stuck', 'timer']);
 /** 設備ごとに違う値の欄（この順で並べる） */
 const ROW_KEYS = ['n', 'prog', 'ts', 'inBuf', 'outBuf', 'item', 'items', 'buf', 'buf2', 'buf3', 'tr', 'xtr', 'rr', 'cnt', 'rcn', 'pw', 'offProg', 'left', 'memo'];
@@ -2625,10 +2737,25 @@ const fatTrain = (t: unknown): unknown => (Array.isArray(t) ? { p: t[0], to: typ
  */
 export function packEnts(list: Ent[]): { c: EntTpl[]; g: unknown[][] } {
   const c: EntTpl[] = [], index = new Map<string, number>(), rows: { x: number; y: number; v: unknown[] }[][] = [];
-  for (const e of list) {
+  // 駅がとても多い工場（STATION_SLIM を超える）では、列車 1 本ずつの位置を書かない：積んでいた荷を駅に戻した形で書く
+  // （読み込むと、列車は駅から出直す。駅 1.8 万・列車 9 万本の工場で、セーブの 6 割が列車だった）
+  let stations = 0;
+  for (const e of list) if (e.kind === 'station') stations++;
+  const slimSt = stations > STATION_SLIM, slimAll = list.length > ENT_SLIM;
+  for (const e0 of list) {
+    let e = e0;
+    if (slimSt && e.kind === 'station' && (e.tr || e.xtr)) {
+      const buf = e.buf ? e.buf.slice() : [];
+      if (e.tr) for (const s of e.tr.cargo) buf.push(s);
+      if (e.xtr) for (const t of e.xtr) for (const s of t.cargo) buf.push(s);
+      e = { ...e, buf, tr: undefined, xtr: undefined };
+    }
     const p = pack(e) as Record<string, unknown>, o: Record<string, unknown> = {}, k: string[] = [];
     for (const key in p) if (key !== 'x' && key !== 'y' && !ROW_SET.has(key) && !SAVE_DROP.has(key)) o[key] = p[key];
-    for (const key of ROW_KEYS) if (p[key] !== undefined) k.push(key);
+    // 設備がとても多い工場では、見せるためだけの数（採取機と装置の「これまでの回数」、装置の時間の内訳と反応の途中の進み具合）を書かない。
+    // 読み込むと 0 から数え直す（反応は、はじめからやり直す）。設備ごとにばらばらな数なので、縮めても小さくならず、同期の大きさの半分を占めていた
+    const lean = slimAll && (e.kind === 'extractor' || isMachine(e.kind));
+    for (const key of ROW_KEYS) if (p[key] !== undefined && !(lean && (key === 'n' || key === 'ts' || key === 'prog'))) k.push(key);
     const ik = p.inBuf && typeof p.inBuf === 'object' ? Object.keys(p.inBuf as object) : undefined;
     const tk = JSON.stringify(o) + '|' + k.join(',') + '|' + (ik ? ik.join(',') : '');
     let ti = index.get(tk);
