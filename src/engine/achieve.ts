@@ -49,6 +49,8 @@ export const ACHIEVEMENTS: Achievement[] = [
   A('floor-2', '工場', '2 階建て', '研究「2 階」を終えて、2 階に設備を置く', (w) => [countEnts(w, (e) => floorOf(e.y) === 1) ? 1 : 0, 1]),
   A('research-1', '工場', 'はじめての研究', '研究を 1 つ終える', (w) => [w.research.length, 1]),
   A('research-t3', '工場', '第 3 段の研究', '第 3 段の研究を 1 つ終える', (w) => [w.research.some((id) => researchById(id)?.tier === 3) ? 1 : 0, 1]),
+  A('pipe-1', '工場', 'はじめての圧送', 'パイプラインで、物質を 1 個送る', (w) => [w.piped, 1]),
+  A('pipe-100k', '工場', '大動脈', 'パイプラインで、あわせて 10 万個送る', (w) => [w.piped, 100000]),
   A('upgrade-max', '工場', '強化 最大', '強化のどれか 1 つを最大まで上げる', (w) => [Math.max(w.up.extract, w.up.belt, w.up.machine), UPGRADE_COST.length]),
   // ---- 納品 ----
   A('deliver-1', '納品', 'はじめての納品', '物質を 1 個、納品所へ運ぶ', (w) => [total(w.delivered), 1]),
@@ -58,6 +60,8 @@ export const ACHIEVEMENTS: Achievement[] = [
   A('rate-30', '納品', '毎分 30 個', '納品の速さを、直近 1 分で毎分 30 個以上にする', (w) => [Math.floor(rate(w)), 30]),
   A('rate-100', '納品', '毎分 100 個', '納品の速さを、直近 1 分で毎分 100 個以上にする', (w) => [Math.floor(rate(w)), 100]),
   A('elements-10', '納品', '10 元素', '納品所に、10 種類の元素を飲み込ませる', (w) => [fedN(w), 10]),
+  A('rush-1', '納品', '急ぎの注文', '急ぎの注文に、1 回間に合わせる', (w) => [Math.min(1, w.rushStreak), 1]),
+  A('rush-5', '納品', '5 回続けて', '急ぎの注文に、続けて 5 回間に合わせる', (w) => [w.rushStreak, 5]),
   A('elements-all', '納品', '全元素', `納品所に、${ELEMENTS.length} 種類すべての元素を飲み込ませる`, (w) => [fedN(w), ELEMENTS.length]),
   // ---- 指令 ----
   A('goal-1', '指令', 'はじめての指令', '指令を 1 つ達成する', (w) => [doneCount(w), 1]),

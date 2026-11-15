@@ -77,6 +77,8 @@ export interface Ent {
    * zt：列車を最後に進めた時刻。zh：空の列車が駅で荷を待っている（荷が入ったら起こす）。zv・zr：そのときの駅の顔ぶれと線路の番号（変わったら起こす）
    */
   zt?: number; zw?: number; zh?: boolean; zv?: number; zr?: number;
+  /** 貨物駅を、パイプライン（気体と液体だけを、同じ番号の受け口へ一瞬で送る）として使う。列車は走らない */
+  pipe?: boolean;
   /** 毎歩回る設備の一覧（stepLists の fast）での番号。荷を受け取ったときに、居眠りから起こすのに使う（セーブには書かない） */
   si?: number;
   /** 「まとまり」で回る装置を、最後に進めた時刻（工場の時計、秒。セーブには書かない） */
@@ -251,6 +253,19 @@ export interface World {
   bonusDay: string;
   /** 答えるまでの時間・まちがえた理由・今夜と今朝の 10 問の記録・学習時間の目標など（src/engine/study.ts） */
   study: Study;
+  /** パイプラインで送った数（実績と統計のため） */
+  piped: number;
+  /**
+   * 急ぎの注文：これまでに正しく設定した反応の生成物を、決まった時間のうちに納める（指令とは別。くり返し出る）。
+   * until は締め切り（工場の時計 playMs）。続けて間に合わせるほど、数も研究点も増える
+   */
+  rush: { s: string; n: number; got: number; until: number; reward: number } | null;
+  /** 次の急ぎの注文を出す時刻（playMs）、続けて間に合った回数、これまでに出した回数 */
+  rushAt: number; rushStreak: number; rushNo: number;
+  /** 急ぎの注文を出さない（課題の工場。保存しない） */
+  noRush?: boolean;
+  /** 最後に終わった急ぎの注文（知らせるため。保存しない） */
+  lastRush?: { s: string; n: number; got: number; reward: number; ok: boolean };
   /** 最後に終えた混ぜ注文（知らせるため。保存しない） */
   lastSide?: { s: string; n: number; got: number; ch: number; reward: number };
   /** リード文課題で正解した空欄 */
@@ -625,7 +640,8 @@ export function stationDests(w: World, e: Ent, ver = stationVer(w)): { list: Ent
   if (hit) return hit;
   const ts = stationTargets(w, e);
   let out = { list: ts, laid: false };
-  if (ts.length && w.rails.size) {
+  // パイプラインは、線路とは関わりなく、同じ番号の受け口すべてへ送る
+  if (ts.length && w.rails.size && !e.pipe) {
     const net = railNet(w), cc = c;
     // 駅が触れている網の番号
     const netsOf = (n: Ent) => { let v = cc.nets.get(n); if (!v) { v = [...new Set(touchIdx(net, n).map((t) => net.comp[t]))]; cc.nets.set(n, v); } return v; };
@@ -643,7 +659,7 @@ export function stationRoutes(w: World, e: Ent): Route[] {
 
 
 /** 列車が動けない理由。nodest：積む駅に荷があるのに、同じ番線の降ろす駅がない。allfull：降ろす駅がすべて満杯。outfull：満杯の降ろす駅（出口の先が受け取っていない） */
-export interface TrainTrouble { type: 'nodest' | 'allfull' | 'outfull'; ch: number; at: Ent; s: string; stations: number; trains: number }
+export interface TrainTrouble { type: 'nodest' | 'allfull' | 'outfull'; ch: number; at: Ent; s: string; stations: number; trains: number; /** パイプライン */ pipe?: boolean }
 /**
  * 止まっている列車と、その理由の一覧（番線ごとにまとめる。重いものから）。
  * 列車は、行き先がなければ荷を積んだまま駅で待ち、積む駅が満杯になり、その手前の装置まで止まる。画面のどこで起きているかを、探さずに分かるようにする
@@ -654,7 +670,7 @@ export function trainTroubles(w: World): TrainTrouble[] {
   for (const e of stationsOf(w)) {
     const ch = e.ch ?? 1, len = e.buf ? e.buf.length : 0;
     if (e.role === 'out') {
-      if (len >= cap) out.push({ type: 'outfull', ch, at: e, s: e.buf![0].replace(/^!/, ''), stations: 1, trains: 0 });
+      if (len >= cap) out.push({ type: 'outfull', ch, at: e, s: e.buf![0].replace(/^!/, ''), stations: 1, trains: 0, pipe: e.pipe });
       continue;
     }
     const tr = loaded(e);
@@ -662,10 +678,10 @@ export function trainTroubles(w: World): TrainTrouble[] {
     const ds = stationDests(w, e).list;
     const type = !ds.length ? 'nodest' : ds.every((d) => (d.buf ? d.buf.length : 0) >= cap) ? 'allfull' : null;
     if (!type) continue;
-    const k = `${type}:${ch}`, t = by.get(k);
+    const k = `${type}:${ch}:${e.pipe ? 1 : 0}`, t = by.get(k);
     const s = (e.buf && e.buf[0] ? e.buf[0] : e.tr && e.tr.cargo[0] ? e.tr.cargo[0] : '').replace(/^!/, '');
     if (t) { t.stations++; t.trains += tr; if (len > (t.at.buf ? t.at.buf.length : 0)) { t.at = e; if (s) t.s = s; } }
-    else by.set(k, { type, ch, at: e, s, stations: 1, trains: tr });
+    else by.set(k, { type, ch, at: e, s, stations: 1, trains: tr, pipe: e.pipe });
   }
   return [...[...by.values()].sort((a, b) => b.trains - a.trains || b.stations - a.stations), ...out];
 }
@@ -780,7 +796,7 @@ export const toolUnlocked = (w: World, need: { done?: number; chapter?: number; 
 export function newWorld(): World {
   const w: World = {
     study: newStudy(),
-    ents: new EntMap(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, exams: [...EXAMS_DEFAULT], calib: { sure: [0, 0], maybe: [0, 0], guess: [0, 0] }, relearn: [], hcLog: [], side: null, night: null, dayMs: {}, tested: [], today: { day: '', wrong: [] }, revDays: {}, ret: RETENTION, bonusDay: '', cleared: [], delivered: {}, stock: {},
+    ents: new EntMap(), chapter: 0, progress: CHAPTERS.map(() => 0), counts: CHAPTERS.map(() => 0), seen: 0, hubSize: 2, goalMs: {}, srs: {}, exams: [...EXAMS_DEFAULT], calib: { sure: [0, 0], maybe: [0, 0], guess: [0, 0] }, relearn: [], hcLog: [], side: null, night: null, dayMs: {}, tested: [], today: { day: '', wrong: [] }, revDays: {}, ret: RETENTION, bonusDay: '', piped: 0, rush: null, rushAt: 0, rushStreak: 0, rushNo: 0, cleared: [], delivered: {}, stock: {},
     discovered: ['air', 'seawater'], learned: [], mistakes: [], points: 0,
     up: { extract: 0, belt: 0, machine: 0 }, research: [], agents: [], cases: [], solved: [], practice: {}, made: {}, vented: {}, spilled: {}, emitted: {}, grades: {}, fed: {}, multi: {}, rateWin: [], hold: 0, sig: [], rails: new Map(), railRev: 0, occ: new Map(), buckets: [], hour: [], ach: {}, eta: {}, playMs: 0, tick: 0, events: [], fx: [],
     pins: [],
@@ -832,7 +848,7 @@ export function shaped(o: Ent): Ent {
     busy: o.busy, prog: o.prog, stuck: o.stuck, bad: o.bad, badT: o.badT, hb: o.hb, pw: o.pw, ts: o.ts,
     item: o.item, items: o.items, rr: o.rr, sub: o.sub, test: o.test, st: o.st, ins: o.ins, li: o.li, pri: o.pri,
     ch: o.ch, role: o.role, buf: o.buf, buf2: o.buf2, buf3: o.buf3, tr: o.tr, xtr: o.xtr, cars: o.cars, rail: o.rail, railTo: o.railTo,
-    left: o.left, sealed: o.sealed, cnt: o.cnt, rcn: o.rcn, memo: o.memo,
+    left: o.left, sealed: o.sealed, cnt: o.cnt, rcn: o.rcn, memo: o.memo, pipe: o.pipe,
   };
   // 知らない欄（これより新しい版が書いたものなど）も、落とさずに持っておく
   for (const k in o) if (!(k in e)) (e as unknown as Record<string, unknown>)[k] = (o as unknown as Record<string, unknown>)[k];
@@ -1266,28 +1282,32 @@ const stationCache = new WeakMap<World, { epoch: number; size: number; erev: num
 let stationVerNo = 0;
 /** 駅の顔ぶれ（場所・向き・番線）が変わるたびに変わる番号 */
 export const stationVer = (w: World) => { stationsOf(w); return stationCache.get(w)!.ver; };
+/** 駅の役割（列車の駅とパイプラインは、同じ番号でも別の路線。切り替えたら、行き先を選び直す） */
+const roleKey = (n: Ent) => (n.pipe ? `p${n.role}` : n.role);
+/** 行き先を引く鍵：列車の番線は番号そのまま、パイプラインは負の数 */
+const lineKey = (n: Ent) => (n.pipe ? -2 - (n.ch ?? 0) : n.ch ?? -1);
 export function stationsOf(w: World): Ent[] {
   const c = stationCache.get(w), erev = (w.ents as EntMap).rev;
   // 設備を置いても消してもいない（erev が同じ）なら、駅の向きと番線だけ確かめる。erev のない入れ物（古い形）では、回ごとに選び直す
   if (c && c.size === w.ents.size && (erev !== undefined ? c.erev === erev : c.epoch === stationEpoch)) {
     const l = c.list;
     let ok = true;
-    for (let i = 0; i < l.length; i++) { const n = l[i]; if (n.role !== c.roles[i] || n.ch !== c.chs[i] || (erev === undefined && at(w, n.x, n.y) !== n)) { ok = false; break; } }
+    for (let i = 0; i < l.length; i++) { const n = l[i]; if (roleKey(n) !== c.roles[i] || n.ch !== c.chs[i] || (erev === undefined && at(w, n.x, n.y) !== n)) { ok = false; break; } }
     if (ok) return l;
   }
   const list: Ent[] = [];
   for (const n of w.ents.values()) if (n.kind === 'station') list.push(n);
-  const roles = list.map((n) => n.role), chs = list.map((n) => n.ch), pos = list.map((n) => rk(n.x, n.y));
+  const roles = list.map(roleKey), chs = list.map((n) => n.ch), pos = list.map((n) => rk(n.x, n.y));
   // 顔ぶれが前と同じなら、番号は変えない（道筋の覚え書きをそのまま使える）
   const same = !!c && c.list.length === list.length && list.every((n, i) => c.list[i] === n && c.roles[i] === roles[i] && c.chs[i] === chs[i] && c.pos[i] === pos[i]);
   const outs = same ? c!.outs : new Map<number, Ent[]>();
-  if (!same) for (const n of list) if (n.role === 'out') { const k = n.ch ?? -1; let l = outs.get(k); if (!l) outs.set(k, (l = [])); l.push(n); }
+  if (!same) for (const n of list) if (n.role === 'out') { const k = lineKey(n); let l = outs.get(k); if (!l) outs.set(k, (l = [])); l.push(n); }
   stationCache.set(w, { epoch: stationEpoch, size: w.ents.size, erev: erev ?? -1, list, roles, chs, pos, ver: same ? c!.ver : ++stationVerNo, outs });
   return list;
 }
 export function stationTargets(w: World, e: Ent): Ent[] {
   stationsOf(w);
-  const out = (stationCache.get(w)!.outs.get(e.ch ?? -1) ?? []).slice();
+  const out = (stationCache.get(w)!.outs.get(lineKey(e)) ?? []).slice();
   const d = (n: Ent) => Math.abs(n.x - e.x) + Math.abs(n.y - e.y);
   return out.sort((a, b) => d(a) - d(b) || a.x - b.x || a.y - b.y);
 }
@@ -1418,12 +1438,41 @@ export function autoDir(w: World, kind: Kind, x: number, y: number): Dir {
   return (Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 0 : 2) : dy >= 0 ? 1 : 3) as Dir;
 }
 
+/** 急ぎの注文：締め切りまでの時間、終わってから次が出るまでの時間（どちらも工場を動かしている時間）、続けて間に合った回数ごとの数 */
+export const RUSH_MS = 8 * 60000, RUSH_GAP = 3 * 60000, RUSH_N = [10, 20, 40, 80, 150, 300, 500, 800];
+export const rushReward = (streak: number) => 40 + 20 * Math.min(8, streak);
+/** 急ぎの注文に出せる物質：正しく設定したことのある反応の生成物。いまの指令・混ぜ注文の物質は除く。納めた数の少ないものから */
+export function rushCandidates(w: World): string[] {
+  const g = currentGoal(w), skip = new Set<string>(g ? [g.s, ...(g.also ?? [])] : []);
+  if (w.side) skip.add(w.side.s);
+  const out = new Set<string>();
+  for (const id of w.learned) { const r = recipeById(id); if (r) for (const [s2] of r.outputs) if (s2 !== 'e' && !s2.includes(':') && hasSub(s2) && !skip.has(s2)) out.add(s2); }
+  return [...out].sort((a, b) => (w.delivered[a] || 0) - (w.delivered[b] || 0) || (a < b ? -1 : 1));
+}
+/** 急ぎの注文を、出す・締め切る（1 歩ごとに呼ぶ）。反応を 3 つ覚えるまでは出さない。課題の工場（noRush）では出さない */
+function stepRush(w: World) {
+  const r = w.rush;
+  if (r) {
+    if (w.playMs >= r.until) { w.lastRush = { s: r.s, n: r.n, got: r.got, reward: r.reward, ok: false }; w.rush = null; w.rushStreak = 0; w.rushAt = w.playMs + RUSH_GAP; w.events.push('rush-fail'); }
+    return;
+  }
+  if (w.noRush || w.learned.length < 3) return;
+  if (!w.rushAt) { w.rushAt = w.playMs + RUSH_GAP; return; }
+  if (w.playMs < w.rushAt) return;
+  const c = rushCandidates(w);
+  if (!c.length) { w.rushAt = w.playMs + RUSH_GAP; return; }
+  // 納めた数の少ない 4 つの中から、順に（同じ物質ばかりにならない）
+  const s = c[w.rushNo % Math.min(4, c.length)];
+  w.rushNo++;
+  w.rush = { s, n: RUSH_N[Math.min(RUSH_N.length - 1, w.rushStreak)], got: 0, until: w.playMs + RUSH_MS, reward: rushReward(w.rushStreak) };
+  w.events.push('rush-new');
+}
 /**
  * ひと山（n 個）を納める。指令にも混ぜ注文にも関わらず、元素の段も変わらない山は、数をまとめて足す（1 個ずつ納めたときと同じ結果）。
  * それ以外は、1 個ずつ（指令が途中で終わる・段が上がる、などの順番を変えない）。大きな工場では、毎秒 1 万個を超えて納める
  */
 function deliverMany(w: World, s: string, x: number, y: number, rc: boolean | undefined, n: number) {
-  if (n > 1 && !rc && !(w.side && w.side.s === s)) {
+  if (n > 1 && !rc && !(w.side && w.side.s === s) && !(w.rush && w.rush.s === s)) {
     const g = currentGoal(w);
     const plain = !g || (g.rate ? g.s !== s : g.also ? g.s !== s && !g.also.includes(s) : g.s !== s && !(g.strict && setById(g.strict)?.members.includes(s)));
     if (plain && feedMany(w, s, n)) {
@@ -1449,6 +1498,11 @@ function deliver(w: World, s: string, x: number, y: number, rc?: boolean, quiet 
   feed(w, s);
   // 混ぜ注文
   if (w.side && w.side.s === s) { w.side.got++; if (w.side.got >= w.side.n) { w.points += w.side.reward; w.events.push('side-done'); w.lastSide = w.side; w.side = null; } }
+  // 急ぎの注文
+  if (w.rush && w.rush.s === s) {
+    w.rush.got++;
+    if (w.rush.got >= w.rush.n) { w.points += w.rush.reward; w.rushStreak++; w.lastRush = { s, n: w.rush.n, got: w.rush.got, reward: w.rush.reward, ok: true }; w.rush = null; w.rushAt = w.playMs + RUSH_GAP; w.events.push('rush-done'); }
+  }
   const g = currentGoal(w), ch = w.chapter;
   if (!g) return;
   if (g.rate) {
@@ -1626,6 +1680,25 @@ function ahead(w: World, e: Ent, erev: number | undefined): Ent | undefined {
   return e.nb ?? undefined;
 }
 /** push と同じ。受け取る側 t がわかっているとき */
+/** 管を流れる物質か（常温で気体か液体。溶液も液体）。電池の e⁻ は流れない */
+export const flows = (s: string) => s !== 'e' && sub(s.startsWith('!') ? s.slice(1) : s).state !== 'solid';
+/** パイプラインの送り口 1 つが、1 秒に送れる数 */
+export const pipeFlow = (w: World) => (has(w, 'bigpipe') ? 1200 : 300);
+/**
+ * 貨物駅を、パイプラインと列車の駅のあいだで切り替える。列車に積んであった荷は、駅に戻す。
+ * 研究「パイプライン」を終えていなければ、切り替えない
+ */
+export function setPipe(w: World, e: Ent, on: boolean): boolean {
+  if (e.kind !== 'station' || (on && !has(w, 'pipeline'))) return false;
+  if (on) {
+    const buf = (e.buf ??= []);
+    for (const t of [e.tr, ...(e.xtr ?? [])]) if (t && t.cargo.length) buf.push(...t.cargo);
+    e.tr = undefined; e.xtr = undefined; e.pipe = true;
+  } else e.pipe = undefined;
+  e.zt = e.zw = undefined; e.zh = undefined; e.bad = undefined; e.timer = undefined;
+  if (e.si !== undefined && w === wakeW) wakeArr[e.si] = 0;
+  return true;
+}
 function pushInto(w: World, t: Ent | undefined, x: number, y: number, d: Dir, s: string, rc?: boolean, n = 1, dry = false): boolean {
   const N = n > 1 ? n : undefined;
   if (!t) return false;
@@ -1701,6 +1774,8 @@ function pushInto(w: World, t: Ent | undefined, x: number, y: number, d: Dir, s:
       return true;
     case 'station':
       if (t.role !== 'in' || (t.buf ??= []).length >= stationCap(w)) return false;
+      // パイプラインは、気体と液体だけ（固体は管を流れない）。ベルトはそこで止まるので、理由がわかるように印をつける
+      if (t.pipe && !flows(s)) { if (!dry) { t.bad = s; t.badT = w.tick; } return false; }
       if (dry) return true;
       for (let i = 0; i < n; i++) t.buf.push(rc ? '!' + s : s);
       if (t.zh) { t.zw = 0; if (t.si !== undefined && w === wakeW) wakeArr[t.si] = 0; }   // 空の列車が待っている：起こす
@@ -1941,7 +2016,7 @@ export function trainP(w: World, e: Ent, tr: Train): number {
 export function settleTrains(w: World) {
   const sver = stationVer(w);
   for (const e of stationsOf(w)) {
-    if (e.role !== 'in' || e.off || e.zt === undefined || e.zv !== sver || e.zr !== w.railRev) continue;
+    if (e.role !== 'in' || e.pipe || e.off || e.zt === undefined || e.zv !== sver || e.zr !== w.railRev) continue;
     const el = (w.playMs - e.zt) / 1000;
     if (!(el > 0)) continue;
     const buf = (e.buf ??= []);
@@ -2034,6 +2109,7 @@ export function step(w: World, dt: number) {
     if (w.hold >= rg.n) finishGoal(w, rg, w.chapter);
   }
   if (currentGoal(w)) { const gk = `${w.chapter}:${w.progress[w.chapter]}`; w.goalMs[gk] = (w.goalMs[gk] || 0) + dt * 1000; }
+  stepRush(w);
   // 使っている番号だけを回る（番号はいくらでも増やせるので、端から数えない）
   for (const k in w.sig) { if (w.sig[k] > 0) w.sig[k] = Math.max(0, w.sig[k] - dt); else delete w.sig[k]; }
   // 列車の位置の覚え書きは、古いものをときどき捨てる
@@ -2297,6 +2373,34 @@ export function step(w: World, dt: number) {
           break;
         }
         // 積む駅：列車を走らせる。編成は 3 つまで増やせる。降ろす駅がいくつもあれば、順番に配る（分岐）
+        if (e.bad && w.tick - (e.badT || 0) > 45) e.bad = undefined;
+        if (e.pipe) {
+          // パイプライン：ためた物を、同じ番号の受け口へ、距離に関係なくその場で送る。1 秒に送れる数（pipeFlow）までで、受け口は順番に。空のあいだは眠り、荷が入ると起きる
+          const now = w.playMs;
+          if (e.zw !== undefined && now < e.zw && e.zv === sver) break;
+          const el = e.zt !== undefined ? Math.min(NAP_MAX * 2, (now - e.zt) / 1000) : dt, flow = pipeFlow(w);
+          let room = Math.min(flow, (e.timer || 0) + el * flow);
+          if (buf.length && room >= 1) {
+            const ds = stationDests(w, e, sver).list, capS = stationCap(w);
+            let sent = 0, last: Ent | null = null, s0 = '';
+            for (let q = 0; q < ds.length && buf.length && room >= 1; q++) {
+              const to = ds[((e.rr || 0) + q) % ds.length], tb = (to.buf ??= []);
+              const k = Math.min(buf.length, Math.floor(room), capS - tb.length);
+              if (k <= 0) continue;
+              s0 = buf[0];
+              const got = buf.splice(0, k);
+              for (let i = 0; i < k; i++) tb.push(got[i]);
+              room -= k; sent += k; last = to;
+            }
+            if (sent) {
+              e.rr = ((e.rr || 0) + 1) % ds.length; e.n = (e.n || 0) + sent; w.piped += sent;
+              if (last && fxRoom > 0) { fxRoom--; w.fx.push({ x: last.x + 1, y: last.y + 1, type: 'train', s: s0.replace(/^!/, ''), n: sent }); }
+            }
+          }
+          e.timer = room;
+          e.zt = now; e.zv = sver; e.zr = w.railRev; e.zh = !buf.length; e.zw = buf.length ? now : now + NAP_MAX * 1000;
+          break;
+        }
         // 居眠り：次に何かが起きる時刻まで、何もしない（列車の位置は、時刻から求められる。trainP）
         const now = w.playMs;
         if (e.zw !== undefined && now < e.zw && e.zv === sver && e.zr === w.railRev) break;
@@ -2591,7 +2695,7 @@ export function serialize(w: World): string {
   const ents = entsJson([...w.ents.values()].filter((e) => e.kind !== 'part'));
   return JSON.stringify({
     v: SAVE_VERSION, ents: 0, chapter: w.chapter, progress: w.progress, counts: w.counts, seen: w.seen,
-    rails: [...w.rails], hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, exams: w.exams, calib: w.calib, relearn: w.relearn, hcLog: w.hcLog, side: w.side, night: w.night, dayMs: w.dayMs, tested: w.tested, today: w.today, revDays: w.revDays, ret: w.ret, bonusDay: w.bonusDay, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
+    rails: [...w.rails], hubSize: w.hubSize, goalMs: w.goalMs, srs: w.srs, exams: w.exams, calib: w.calib, relearn: w.relearn, hcLog: w.hcLog, side: w.side, night: w.night, dayMs: w.dayMs, tested: w.tested, today: w.today, revDays: w.revDays, ret: w.ret, bonusDay: w.bonusDay, piped: w.piped, rush: w.rush, rushAt: w.rushAt, rushStreak: w.rushStreak, rushNo: w.rushNo, cleared: w.cleared, done: doneCount(w), delivered: w.delivered, stock: w.stock,
     discovered: w.discovered, learned: w.learned, mistakes: w.mistakes.slice(-400), points: w.points, up: w.up, solved: w.solved, research: w.research, agents: w.agents, cases: w.cases, practice: w.practice, made: w.made, vented: w.vented, spilled: w.spilled, emitted: w.emitted, grades: w.grades, fed: w.fed, multi: w.multi,
     // 1 時間の流れは、1 分ごとの合計だけを [分, 納品, 指令, 廃棄口, あふれ, 作った] の数の並びで残す（60 行）
     hist: minutes(w).map((m) => [m.t, m.deliver, m.goal, m.vent, m.spill, m.made]), ach: w.ach, eta: w.eta,
@@ -2670,6 +2774,7 @@ function readEnt(o: unknown): Ent | null {
   if (e.test !== undefined && !testOk(e.kind, e.test)) delete e.test;
   if (e.ch !== undefined) e.ch = lineNo(Number(e.ch));
   if (e.role !== undefined && e.role !== 'in' && e.role !== 'out') delete e.role;
+  if (e.pipe !== undefined && !(e.pipe === true && e.kind === 'station')) delete e.pipe;
   for (const k of NUM_KEYS) if (e[k] !== undefined && !fin(e[k])) delete e[k];
   // rr は、順に回す口・行き先・試料の、次の番号。0 以上の整数でなければ 0 から回し直す（0.5 や -1 では口や行き先が引けず、動かすたびに止まる）
   if (e.rr !== undefined && !(Number.isSafeInteger(e.rr) && e.rr >= 0)) e.rr = 0;
@@ -2776,6 +2881,11 @@ export function deserialize(json: string): World | null {
     if (d.revDays && typeof d.revDays === 'object') for (const [k, v] of Object.entries(d.revDays as Record<string, unknown>)) if (Array.isArray(v) && v.length === 2) w.revDays[k] = [Number(v[0]) | 0, Number(v[1]) | 0];
     w.ret = RETENTIONS.includes(d.ret) ? d.ret : RETENTION;
     w.bonusDay = typeof d.bonusDay === 'string' ? d.bonusDay : '';
+    w.piped = fin(d.piped) && d.piped > 0 ? Math.floor(d.piped) : 0;
+    w.rushAt = fin(d.rushAt) && d.rushAt >= 0 ? d.rushAt : 0;
+    w.rushStreak = Number.isSafeInteger(d.rushStreak) && d.rushStreak > 0 ? d.rushStreak : 0;
+    w.rushNo = Number.isSafeInteger(d.rushNo) && d.rushNo > 0 ? d.rushNo : 0;
+    { const r = d.rush; w.rush = r && typeof r === 'object' && typeof r.s === 'string' && hasSub(r.s) && Number.isSafeInteger(r.n) && r.n > 0 && Number.isSafeInteger(r.got) && r.got >= 0 && fin(r.until) && fin(r.reward) ? { s: r.s, n: r.n, got: Math.min(r.got, r.n), until: r.until, reward: Math.max(0, Math.floor(r.reward)) } : null; }
     w.study = readStudy(d.study);
     w.today = d.today && typeof d.today.day === 'string' && Array.isArray(d.today.wrong) ? { day: d.today.day, wrong: d.today.wrong.filter((x: unknown) => typeof x === 'string') } : { day: '', wrong: [] };
     w.delivered = tallies(d.delivered);

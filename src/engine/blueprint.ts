@@ -3,7 +3,7 @@ import { isPlaceable, LINE_MAX, subOk, testOk } from './world';
 import type { Dir, Kind } from './world';
 
 /** 設計図の 1 個ぶん：左上からの位置、向き、設定。cars は積む駅の編成の数 */
-export interface Stamp { kind: Exclude<Kind, 'hub' | 'part'>; dx: number; dy: number; dir: Dir; recipe?: string; outOrder?: string[]; outSlot?: number[]; test?: string; sub?: string; ch?: number; role?: 'in' | 'out'; cars?: number }
+export interface Stamp { kind: Exclude<Kind, 'hub' | 'part'>; dx: number; dy: number; dir: Dir; recipe?: string; outOrder?: string[]; outSlot?: number[]; test?: string; sub?: string; ch?: number; role?: 'in' | 'out'; cars?: number; /** 貨物駅：パイプラインとして使う */ pipe?: boolean }
 
 const HEAD = 'CHEMYTH-BP1:';
 /** 1 枚の設計図に入れられる数と、広さ（マス） */
@@ -23,6 +23,7 @@ export function encodeBlueprint(name: string, stamps: Stamp[]): string {
   // 短くするため、1 個を配列で書く。設定のないものは後ろを省く
   const rows = stamps.map((b) => {
     const row: unknown[] = [b.kind, b.dx, b.dy, b.dir, b.recipe ?? 0, b.outOrder ?? 0, b.outSlot ?? 0, b.test ?? 0, b.sub ?? 0, b.ch ?? 0, b.role ?? 0, b.cars ?? 0];
+    if (b.pipe) row.push(1);   // 13 番目：パイプライン（ないときは書かない。前の版の設計図と同じ形）
     while (row.length > 4 && row[row.length - 1] === 0) row.pop();
     return row;
   });
@@ -37,7 +38,7 @@ const int = (v: unknown, lo: number, hi: number): v is number => typeof v === 'n
  */
 export function cleanStamp(o: Partial<Record<keyof Stamp, unknown>> | null | undefined, span = Infinity): Stamp | null {
   if (!o || typeof o !== 'object') return null;
-  const { kind, dx, dy, dir, recipe, outOrder, outSlot, test, sub, ch, role, cars } = o;
+  const { kind, dx, dy, dir, recipe, outOrder, outSlot, test, sub, ch, role, cars, pipe } = o;
   if (!isPlaceable(kind) || !int(dx, 0, span) || !int(dy, 0, span) || !int(dir, 0, 3)) return null;
   const b: Stamp = { kind, dx, dy, dir: dir as Dir };
   // 反応は、その装置の反応で、出口の物質がその生成物のときだけ写す
@@ -51,6 +52,7 @@ export function cleanStamp(o: Partial<Record<keyof Stamp, unknown>> | null | und
   if (int(ch, 1, LINE_MAX)) b.ch = ch;
   if (role === 'in' || role === 'out') b.role = role;
   if (int(cars, 1, 5)) b.cars = cars;
+  if (kind === 'station' && (pipe === true || pipe === 1)) b.pipe = true;
   return b;
 }
 
@@ -64,8 +66,8 @@ export function decodeBlueprint(text: string): { name: string; stamps: Stamp[] }
     const stamps: Stamp[] = [];
     for (const row of d.s) {
       if (!Array.isArray(row)) return null;
-      const [kind, dx, dy, dir, recipe, outOrder, outSlot, test, sub, ch, role, cars] = row;
-      const b = cleanStamp({ kind, dx, dy, dir, recipe, outOrder, outSlot, test, sub, ch, role, cars }, BP_SPAN);
+      const [kind, dx, dy, dir, recipe, outOrder, outSlot, test, sub, ch, role, cars, pipe] = row;
+      const b = cleanStamp({ kind, dx, dy, dir, recipe, outOrder, outSlot, test, sub, ch, role, cars, pipe }, BP_SPAN);
       if (!b) return null;
       stamps.push(b);
     }

@@ -206,8 +206,14 @@ function typeTable(w: World): HTMLElement {
 /** 列車の点検：動けない列車と理由を、番線ごとに 1 行。押すとその駅へ移る */
 function trainRows(c: StatsCtx): HTMLElement[] {
   const all = trainTroubles(c.w), cap = stationCap(c.w);
-  if (!all.length) return [h('p', { class: 'muted', id: 'st-train-ok' }, '止まっている列車はない（荷を積んだまま行き先のない列車も、満杯の降ろす駅もない）。')];
-  const text = (t: TrainTrouble): [string, string] => t.type === 'nodest'
+  if (!all.length) return [h('p', { class: 'muted', id: 'st-train-ok' }, '止まっている列車・パイプラインはない（行き先のない荷も、満杯の降ろす駅・受け口もない）。')];
+  const text = (t: TrainTrouble): [string, string] => t.pipe
+    ? (t.type === 'nodest'
+      ? [`パイプライン ${t.ch} 番：受け口がない`, `${t.s ? `${label(t.s)} が` : '荷が'}送り口にたまったまま、送れずにいる${t.stations > 1 ? `（送り口 ${t.stations} か所）` : ''}。届け先に貨物駅を置いてパイプラインにし、${t.ch} 番の「受け口」にしろ。`]
+      : t.type === 'allfull'
+        ? [`パイプライン ${t.ch} 番：受け口がすべて満杯`, `送り口 ${t.stations} か所が、空くのを待っている。受け口の出口の先（ベルト・タンク・装置）が受け取っていない。`]
+        : [`パイプライン ${t.ch} 番：受け口が満杯（${cap} 個）`, `先頭の ${label(t.s)} を、出口の先が受け取っていない。出口のベルトの先をたどれ。`])
+    : t.type === 'nodest'
     ? [`${t.ch} 番線：降ろす駅がない`, `${t.s ? `${label(t.s)} を積んだ` : '荷を積んだ'}列車 ${t.trains} 編成が、出発できずに待っている${t.stations > 1 ? `（積む駅 ${t.stations} か所）` : ''}。届け先に貨物駅を置いて ${t.ch} 番線の「降ろす駅」にするか、この駅の番線を、届け先の番線に合わせろ。積む駅が満杯になると、手前の装置も止まる。`]
     : t.type === 'allfull'
       ? [`${t.ch} 番線：降ろす駅がすべて満杯`, `積む駅 ${t.stations} か所の列車 ${t.trains} 編成が、空くのを待っている。降ろす駅の出口の先（ベルト・タンク・装置）が受け取っていない。`]
@@ -307,7 +313,7 @@ export function showStats(c: StatsCtx) {
         h('span', { class: 'state warn' }, h('i', {}, '▲'), `原料待ちで止まりがち ${f.starved} 台`),
         h('span', { class: 'state' }, h('i', {}, '？'), `未設定 ${f.unset} 台`))),
     fold('neck', '詰まりの元（押すとその場所へ）', true, ...necks(c)),
-    fold('train', '列車の点検（動けない列車と理由）', true, ...trainRows(c)),
+    fold('train', '列車とパイプラインの点検（動けない理由）', true, ...trainRows(c)),
     h('div', { class: 'row' }, toggle, heat),
     heatOn() ? h('p', { class: 'muted' }, cvdOn() ? '色分け：青はよく動いている、黄は半分ほど、橙に斜線は止まりがち。近づくと割合も出る。' : '色分け：緑はよく動いている、黄は半分ほど、赤は止まりがち。近づくと割合も出る。') : null,
     c.overlay() ? h('p', { class: 'muted' }, '重ね表示：装置の上に稼働率、詰まっているマスに色、ベルトに毎分の数（引いた視点では、流れの多いベルトほど太い線）。') : null,

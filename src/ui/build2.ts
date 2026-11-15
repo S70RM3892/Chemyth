@@ -238,7 +238,7 @@ export function initBuild2(c: B2Ctx) {
     if (r && s.outOrder) { configure(d, r, s.outOrder.filter((x) => x !== 'e')); d.outOrder = [...s.outOrder]; d.outBuf = s.outOrder.map(() => 0); if (s.outSlot) d.outSlot = [...s.outSlot]; }
     d.test = s.test;
     if (s.kind !== 'tank') d.sub = s.sub;   // タンクの物質は中身なので写さない
-    if (s.kind === 'station') { d.ch = s.ch ?? 1; d.role = s.role ?? 'in'; d.cars = s.cars; }
+    if (s.kind === 'station') { d.ch = s.ch ?? 1; d.role = s.role ?? 'in'; d.cars = s.cars; if (s.pipe) d.pipe = true; }
     if (s.kind === 'sensor' || s.kind === 'gate') d.ch = s.ch;
     // 昇降機は、置いた側が入口になる。写したのが出口なら、相方と入れ替える
     if (s.kind === 'lift' && s.role === 'out') { const p = liftPartner(c.world(), d); if (p) { d.role = 'out'; p.role = 'in'; } }

@@ -23,6 +23,8 @@ export const RESEARCH: Research[] = [
   { id: 'yard', tier: 3, cost: 160, name: '操車場', text: '駅にためられる数が 600 個から 1200 個に、1 駅の編成が 3 つから 5 つに増える。' },
   { id: 'overclock', tier: 3, cost: 200, group: 'plant', name: '増速運転', text: '装置（蒸留塔・反応器・電解槽・電池・捕集器）が 1.25 倍の速さで動く。' },
   { id: 'intake', tier: 3, cost: 200, group: 'plant', name: '大口採取', text: '採取機が 1.5 倍の速さで採る。' },
+  { id: 'pipeline', tier: 3, cost: 220, name: 'パイプライン', text: '貨物駅を「パイプライン」に切り替えられる。気体と液体だけを、同じ番号の受け口へ、距離に関係なく一瞬で送る（1 つの送り口から毎秒 300 個まで）。固体は通らない：遠くの鉱石は、これまでどおり列車で運べ。' },
+  { id: 'bigpipe', tier: 3, cost: 300, needs: ['pipeline'], name: '大口径の管', text: 'パイプラインの送り口 1 つが、毎秒 300 個から 1200 個まで送れる。' },
 ];
 
 export const researchById = (id: string) => RESEARCH.find((r) => r.id === id);

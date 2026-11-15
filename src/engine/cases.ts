@@ -34,6 +34,7 @@ const [HX, HY] = HUB_TILES[0];
 function base(): World {
   const w = newWorld();
   w.noSpill = true;
+  w.noRush = true;
   // 道具はすべて使える。本編の指令は出さない（納品所は、届いた数を数えるだけ）
   w.seen = CHAPTERS.length - 1;
   w.progress = CHAPTERS.map((c) => c.goals.length);

@@ -1478,6 +1478,14 @@ function drawNear(ctx: CanvasRenderingContext2D, cw: number, ch: number, w: Worl
           const xs = r.pts.map((q) => sx(q[0])), ys = r.pts.map((q) => sy(q[1]));
           const path = (ox: number, oy: number) => { ctx.beginPath(); xs.forEach((x, k2) => (k2 ? ctx.lineTo(x + ox, ys[k2] + oy) : ctx.moveTo(x + ox, ys[k2] + oy))); };
           if (!lite) { ctx.strokeStyle = punk ? 'rgba(0,0,0,0.35)' : P.shadow; ctx.lineWidth = z * 0.2; path(lift2 * 0.5, lift2); ctx.stroke(); }
+          if (e.pipe) {
+            // パイプライン：枕木のない、太い管。番号の色の管に、白い照り返し。流れているあいだは、点が走る
+            ctx.strokeStyle = ink; ctx.lineWidth = z * 0.24; path(0, 0); ctx.stroke();
+            ctx.strokeStyle = col; ctx.lineWidth = z * 0.16; path(0, 0); ctx.stroke();
+            ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.lineWidth = z * 0.04; path(-z * 0.03, -z * 0.03); ctx.stroke();
+            if (!lite && !e.zh) { ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = z * 0.06; ctx.setLineDash([z * 0.12, z * 0.9]); ctx.lineDashOffset = -t * z * 6; path(0, 0); ctx.stroke(); ctx.setLineDash([]); ctx.lineDashOffset = 0; }
+            continue;
+          }
           ctx.strokeStyle = ink; ctx.lineWidth = z * 0.26; ctx.setLineDash([z * 0.07, z * 0.2]); path(0, 0); ctx.stroke(); ctx.setLineDash([]);
           ctx.lineWidth = z * 0.13; path(0, 0); ctx.stroke();
           ctx.strokeStyle = col; ctx.lineWidth = z * 0.07; path(0, 0); ctx.stroke();
@@ -2570,10 +2578,18 @@ function glyph(ctx: CanvasRenderingContext2D, P: Palette, e: Ent, cx: number, cy
     case 'station': {
       // 駅舎：路線色の屋根に番線の数字。積む駅は上向き、降ろす駅は下向きの矢じり
       const col = lineColor(e.ch || 1), out = e.role === 'out';
+      if (e.pipe) {
+        // パイプライン：管の継ぎ手（フランジ）。番号の色の輪に、ボルトの点
+        disc(cx, cy, u * 0.3); inked(col);
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2 + Math.PI / 8; ctx.beginPath(); ctx.arc(cx + Math.cos(a) * u * 0.235, cy + Math.sin(a) * u * 0.235, u * 0.022, 0, Math.PI * 2); ctx.fill(); }
+        disc(cx, cy, u * 0.17); inked('#f3f1e8');
+      } else {
       rr(ctx, cx - u * 0.3, cy - u * 0.22, u * 0.6, u * 0.44, u * 0.05); inked(col);
       ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = line * 0.6;
       for (const k of [-0.1, 0.1]) { ctx.beginPath(); ctx.moveTo(cx - u * 0.3, cy + u * k); ctx.lineTo(cx + u * 0.3, cy + u * k); ctx.stroke(); }
       disc(cx, cy, u * 0.14); inked('#f3f1e8');
+      }
       // 桁が増えたら、丸に収まるように字を小さくする
       const no = String(e.ch || 1);
       ctx.fillStyle = '#14181d'; ctx.font = `700 ${u * [0.18, 0.18, 0.15, 0.11, 0.088][no.length]}px ${FONT_MONO}`; ctx.textAlign = 'center';

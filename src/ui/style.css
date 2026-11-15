@@ -137,7 +137,7 @@ b { font-weight: 700; }
 .rv-conf button { min-width: 72px; }
 .rv-hc { color: var(--red); }
 .rv-hclist { border: 2px solid var(--red); border-radius: 4px; padding: 8px 10px; margin: 8px 0; font-size: 14px; }
-#goal-side { margin: 4px 52px 0 0; padding: 2px 8px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); background: var(--card); border: 1px dashed var(--soft); border-radius: 4px; }
+#goal-side { margin: 4px 52px 0 0; padding: 2px 8px; font-size: 12px; white-space: pre; overflow: hidden; text-overflow: ellipsis; color: var(--ink); background: var(--card); border: 1px dashed var(--soft); border-radius: 4px; }
 .chapter-row { display: flex; gap: 6px; align-items: stretch; }
 .chapter-row .chapter { flex: 1; }
 .chapter-row .testout { white-space: nowrap; }

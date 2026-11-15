@@ -55,7 +55,7 @@ import { SHELF_MAX, cleanShelf, makeBackup, mergeShelf, parseBackup, restorePlan
 import { summarize } from './engine/world';
 import { initBuild2 } from './ui/build2';
 import { moveSpec, relocate, type MoveSpec } from './engine/shape';
-import { multiOf } from './engine/world';
+import { multiOf, RUSH_MS } from './engine/world';
 
 type Placeable = Exclude<Kind, 'hub' | 'part'>;
 type Tool = 'pan' | 'erase' | 'area' | 'rail' | 'route' | Placeable;
@@ -1478,6 +1478,7 @@ function boot(data: HotData) {
     }
     if (MOVERS.has(e.kind)) { const t = its([e.item, ...(e.items ?? [])]); return t ? `運んでいる：${t}` : '空'; }
     if (e.kind === 'tank') return e.sub ? `${label(e.sub)} ${e.cnt ?? 0} / ${TANK_CAP}${e.test === 'hold' ? '　出口を閉じている' : ''}` : '空のタンク';
+    if (e.kind === 'station' && e.pipe) return `パイプラインの${e.role === 'out' ? '受け口' : '送り口'}　${e.ch ?? 1} 番　ここにある荷 ${e.buf?.length ?? 0} / ${stationCap(world)}${e.role !== 'out' ? `　送った数 ${e.n || 0}` : ''}`;
     if (e.kind === 'station') { const cars = [e.tr, ...(e.xtr ?? [])].filter((t): t is NonNullable<typeof t> => !!t); return `${e.role === 'out' ? '降ろす駅' : '積む駅'}　路線 ${e.ch ?? 1}　ためている荷 ${e.buf?.length ?? 0} / ${stationCap(world)}${e.role !== 'out' && cars.length ? `　走っている列車 ${cars.filter((t) => t.p > 0 || t.back).length} / ${cars.length}` : ''}`; }
     if (e.kind === 'extractor') { const z = zoneAt(e.x, groundY(e.y)); return `採っている：${z ? ZONES[z].name : '陸地'}の ${label(resourceAt(e.x, groundY(e.y)))}`; }
     if (e.kind === 'sensor' || e.kind === 'gate') return `信号 ${e.ch ?? 1}　${signalOn(world, e.ch ?? 1) ? 'オン' : 'オフ'}`;
@@ -1891,7 +1892,7 @@ function boot(data: HotData) {
   };
   $('area-left').onclick = () => nudgeArea(-1, 0); $('area-right').onclick = () => nudgeArea(1, 0);
   $('area-up').onclick = () => nudgeArea(0, -1); $('area-down').onclick = () => nudgeArea(0, 1);
-  const toStamps = (r: [number, number, number, number], es: Ent[]): Stamp[] => es.map((e) => ({ kind: e.kind as Placeable, dx: e.x - r[0], dy: e.y - r[1], dir: e.dir, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, test: e.test, sub: e.sub, ch: e.ch, role: e.role, cars: e.kind === 'station' && e.cars ? e.cars : undefined }));
+  const toStamps = (r: [number, number, number, number], es: Ent[]): Stamp[] => es.map((e) => ({ kind: e.kind as Placeable, dx: e.x - r[0], dy: e.y - r[1], dir: e.dir, recipe: e.recipe, outOrder: e.outOrder ? [...e.outOrder] : undefined, outSlot: e.outSlot ? [...e.outSlot] : undefined, test: e.test, sub: e.sub, ch: e.ch, role: e.role, cars: e.kind === 'station' && e.cars ? e.cars : undefined, pipe: e.kind === 'station' && e.pipe ? true : undefined }));
   $('area-copy').onclick = () => {
     const r = areaRect(), es = inArea();
     if (!r || !es.length) return;
@@ -1992,7 +1993,7 @@ function boot(data: HotData) {
       if (r && b.outOrder) { configure(placed, r, b.outOrder.filter((s) => s !== 'e')); placed.outOrder = [...b.outOrder]; placed.outBuf = b.outOrder.map(() => 0); if (b.outSlot) placed.outSlot = [...b.outSlot]; }
       placed.test = b.test;
       placed.sub = b.sub;
-      if (b.kind === 'station') { placed.ch = b.ch ?? 1; placed.role = b.role ?? 'in'; if (b.cars) placed.cars = b.cars; }
+      if (b.kind === 'station') { placed.ch = b.ch ?? 1; placed.role = b.role ?? 'in'; if (b.cars) placed.cars = b.cars; if (b.pipe && has(world, 'pipeline')) placed.pipe = true; }
       if (b.kind === 'sensor' || b.kind === 'gate') placed.ch = b.ch ?? 1;
       // 昇降機は、置いた側が入口になる。写したのが出口なら、相方と入れ替える
       if (b.kind === 'lift' && b.role === 'out') { const p = liftPartner(world, placed); if (p) { placed.role = 'out'; p.role = 'in'; } }
@@ -2207,8 +2208,14 @@ function boot(data: HotData) {
     } else if (!g) $('goal-rate').textContent = '';
     $('goal-bar').style.width = g ? `${Math.min(100, (goalCount(world) / requiredOf(world, g)) * 100)}%` : '100%';
     const side = world.side, sideEl = $('goal-side');
-    sideEl.hidden = !side;
-    if (side) sideEl.textContent = `混ぜ注文：${label(side.s)} を ${side.got} / ${side.n}（${CHAPTERS[side.ch].name.split(' ')[0]}の物質）　研究点 +${side.reward}`;
+    // 混ぜ注文と、急ぎの注文（締め切りは、工場を動かしている時間で数える）
+    const rush = sandbox ? null : world.rush, left = rush ? Math.max(0, rush.until - world.playMs) : 0;
+    const lines = [
+      side ? `混ぜ注文：${label(side.s)} を ${side.got} / ${side.n}（${CHAPTERS[side.ch].name.split(' ')[0]}の物質）　研究点 +${side.reward}` : '',
+      rush ? `急ぎ：${label(rush.s)} ${rush.got}/${rush.n}　あと ${Math.floor(left / 60000)}:${String(Math.floor((left % 60000) / 1000)).padStart(2, '0')}　+${rush.reward} 点` : '',
+    ].filter(Boolean);
+    sideEl.hidden = !lines.length;
+    if (lines.length) { const tx = lines.join('\n'); if (sideEl.textContent !== tx) sideEl.textContent = tx; }
   };
 
   // ---- アカウント：セーブを書くたびに、少しあとで預ける。ほかの端末が先へ進めていたら、知らせる ----
@@ -2352,6 +2359,9 @@ function boot(data: HotData) {
           fireworks(12 + fl.length * 2);
         }
         if (ev === 'all-done') fireworks(36);
+        if (ev === 'rush-new' && world.rush) { toast(`急ぎの注文：${label(world.rush.s)} を ${world.rush.n} 個、${RUSH_MS / 60000} 分のうちに納めろ（時計は、工場を動かしている間だけ進む）。研究点 +${world.rush.reward}。続けて間に合わせるほど、数も研究点も増える。`, 7000); sfx.tap(); }
+        if (ev === 'rush-done' && world.lastRush) { toast(`急ぎの注文に間に合った（${label(world.lastRush.s)} ${world.lastRush.n} 個）。研究点 +${world.lastRush.reward}。続けて ${world.rushStreak} 回。`, 5000); sfx.goal(); }
+        if (ev === 'rush-fail' && world.lastRush) toast(`急ぎの注文は、時間切れ（${label(world.lastRush.s)} ${world.lastRush.got} / ${world.lastRush.n}）。次は、はじめの数から。`, 5000);
         if (ev === 'side-new' && world.side) toast(`混ぜ注文：${CHAPTERS[world.side.ch].name}の ${label(world.side.s)} を ${world.side.n} 個。指令とは別に納めると研究点 +${world.side.reward}。`, 6000);
         if (ev === 'side-done' && world.lastSide) { toast(`混ぜ注文を終えた（${label(world.lastSide.s)}）。研究点 +${world.lastSide.reward}。`, 4500); sfx.goal(); }
         if (ev === 'goal-done' || ev === 'chapter-done') lastCardAt = -1e9;
@@ -2587,10 +2597,12 @@ function boot(data: HotData) {
   window.addEventListener('unhandledrejection', onCrash);
   window.addEventListener('pagehide', () => { save(); saveCam(); });
   // 更新のお知らせ：新しい版で、はじめて工場を開いたときに 1 度だけ
-  const NEWS = '2026-11-rework';
+  const NEWS = '2026-11-pipeline';
   const showNews = () => {
     store.setMeta({ news: NEWS });
     showSheet(h('header', {}, h('h2', {}, '更新のお知らせ'), closeBtn()),
+      h('p', {}, h('b', {}, '新しい運び方：パイプライン。'), '研究（第 3 段）の「パイプライン」を終えると、貨物駅の設定に「運び方」が出て、駅を管に切り替えられる。気体と液体だけを、同じ番号の受け口へ、距離に関係なく一瞬で送る（送り口 1 つから毎秒 300 個。研究「大口径の管」で 1200 個）。固体は流れない：常温で固体のもの（鉱石・金属・塩の結晶）は、これまでどおり列車で運べ。列車の番線とは、同じ番号でも別の路線。'),
+      h('p', {}, h('b', {}, '急ぎの注文。'), '反応を 3 つ覚えると、ときどき、覚えた反応の生成物を「8 分のうちに何個」と頼まれる（指令の札に出る）。間に合えば研究点。続けて間に合わせるほど、数も研究点も増える（10 個 → 20 → 40 … 800 個）。時間切れなら、はじめの数に戻る。時計は、工場を動かしている間だけ進むので、画面を閉じても損はしない。'),
       h('p', {}, h('b', {}, '大きな工場の計算と、引いた地図の描き方を、作り直した。'), '設備が何万もある工場のための作り直し。動き（作る数・運ぶ数）は変えていない。'),
       h('ul', {},
         h('li', {}, '採取機 → 装置 → 廃棄口・駅のまとまりは、1.6 秒ぶんをまとめて進める（設備を 1 台ずつ読みに行く回数が、1 歩の時間の大半だった）。装置の絵の進み具合は、時刻から求めて、なめらかに動かす。'),
